@@ -72,5 +72,4 @@ Working checklist for Phase 1 of the [implementation plan](../emberly-oxygen-imp
 
 ## Notes to carry forward
 
-- Requirements S-3 has corrupted text; its intended wording is needed before task 2.3, not before this phase.
 - The size of the long fixtures (about 100 MB each) determines disk needs for the benchmark machine; note the actual number.

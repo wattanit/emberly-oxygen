@@ -135,7 +135,7 @@ Recorded here and absorbed by the upstream owner at the next bump; the upstream 
 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
-| Before Phase 1 | Requirements S-3 | The text of S-3 is corrupted after "there" (the characters read `eit1bnn√vbΩΩ≈≤/cc er token passes`). The intended wording is not known to the implementer, so S-3's exception clause cannot be implemented from the text alone. Needed by task 2.3; the owner must supply the intended wording. It is a clarifying, minor Requirements bump. |
+| Before Phase 1 | Requirements S-3 | The text of S-3 was corrupted after "there". **Resolved:** the owner supplied the wording ("there either token passes") and corrected the Requirements file in place without a version bump, since the intended meaning was unchanged. |
 | Task 1.6 | Specification §10 honesty note | The library's hidden states replace the last layer's output with the final-norm output, so the last layer's raw output is not returned. The oracle captures every layer's output with forward hooks (checked equal to the library's own hidden states for all other layers) and stores the final-norm output under its own name, `final_norm_output`. This is stricter than the note: all layer outputs are raw, and the harness compares `final_norm_output` against the engine's normalized output. |
 | Task 1.5 | Specification §10 | Per-position top-two gaps are stored for the prompt positions as well as for the continuation, because S-3 needs the near-tie test at every position. |
 | Task 3.6 | Specification §6, §19 | To be filled with the tokenizer component types found in `tokenizer.json`, narrowing §6. |
@@ -144,6 +144,5 @@ Recorded here and absorbed by the upstream owner at the next bump; the upstream 
 
 ## 10. Open Questions
 
-- **Intended wording of Requirements S-3.** Resolver: owner. Blocks task 2.3.
 - **Which machine is the benchmark machine.** Resolver: owner. Blocks task 6.1 and everything after it.
 - **Whether the oracle fixtures generated on the development machine are also the ones used on the benchmark machine, or regenerated there.** The Specification only requires the manifest to record the generating machine (§10). Resolver: owner, at task 6.1.
