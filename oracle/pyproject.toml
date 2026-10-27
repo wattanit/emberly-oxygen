@@ -1,0 +1,15 @@
+[project]
+name = "emberly-oxygen-oracle"
+version = "0.1.0"
+description = "Reference oracle for Emberly Oxygen: generates expected outputs with Hugging Face transformers"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch",
+    "transformers",
+    "huggingface_hub",
+    "safetensors",
+    "numpy",
+]
+
+[tool.uv]
+package = false

@@ -16,10 +16,10 @@ Working checklist for Phase 1 of the [implementation plan](../emberly-oxygen-imp
 
 ## 1.2 Oracle project (HC-3, FR-4, Spec §10)
 
-- [ ] `oracle/` initialised with `uv`; Python project metadata with a stated minimum Python
-- [ ] Add `torch`, `transformers`, `huggingface_hub` (and `safetensors`, `numpy` if the generator needs them); commit `uv.lock`
-- [ ] Install `torch` as a CPU build so no GPU kernel can change the arithmetic (FR-2)
-- [ ] Check: `uv sync` from a clean checkout reproduces the environment; record library versions for the manifest
+- [x] `oracle/` initialised with `uv`; Python project metadata with a stated minimum Python
+- [x] Add `torch`, `transformers`, `huggingface_hub` (and `safetensors`, `numpy` if the generator needs them); commit `uv.lock`
+- [x] Compute on CPU only so no GPU kernel can change the arithmetic (FR-2): the macOS arm64 wheel is the only build and includes MPS, so task 1.5 must pin `device="cpu"` explicitly
+- [x] Check: `uv sync` from a clean checkout reproduces the environment; record library versions for the manifest
 
 ## 1.3 Download script (FR-11, FR-4)
 
