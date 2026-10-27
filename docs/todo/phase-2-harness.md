@@ -74,7 +74,7 @@ Pure functions with their own tests, in `tests/common/compare.rs`.
 - [x] A synthetic-divergence test proves the layer and position report is correct
 - [x] Every test names the HC, FR or S item it verifies
 - [x] `cargo test` time on the stub is recorded: about 0.3 s with a warm build (`cargo test --no-fail-fast`, 12 prompts, 669 MB of fixtures read); the correctness test itself takes about 0.2 s. Fixture loading will dominate once the real engine runs.
-- [ ] Owner reviews the table output and the comparison functions' tests before Phase 3 starts
+- [x] Owner reviews the table output and the comparison functions' tests before Phase 3 starts
 
 ## Notes to carry forward
 
