@@ -35,7 +35,7 @@ Working checklist for Phase 1 of the [implementation plan](../emberly-oxygen-imp
 - [x] `oracle/prompts.json` with `id`, `category`, `text` per prompt
 - [x] `english`: at least two prompts, including one short (about 32 tokens, the short benchmark workload)
 - [x] `thai`: at least two prompts
-- [x] `code`: at least two prompts in different languages or styles
+- [x] `code`: at least two prompts in different languages or styles (Rust, Python, Go)
 - [x] `utf8-split`: at least two prompts whose tokens split a multi-byte character; confirm by decoding token by token and seeing a partial sequence
 - [x] `long`: at least two prompts of about 512 tokens (the long benchmark workload); confirm the token count with the reference tokenizer
 - [x] Check: `oracle/validate_prompts.py` lists prompts, token counts and partial-character tokens, and fails on a broken rule
