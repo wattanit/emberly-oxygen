@@ -2,7 +2,7 @@
 
 A decoder-only LLM inference engine written from scratch in Rust, to understand every part by building it. It starts naive and improves one version at a time; the first target is SmolLM2-135M on CPU. The foundation documents in `docs/` are the source of truth: [Requirements](docs/emberly-oxygen-requirements.md), [Technical Specification](docs/emberly-oxygen-technical-specification.md), and the [roadmap](docs/high-level-roadmap.md) for direction.
 
-Status: release 0.1.0 is in progress. Phase 1 (oracle) is done; the engine itself is still a stub. See [`docs/todo/`](docs/todo/) for the current phase.
+Status: release 0.1.0 is in progress. Phase 1 (oracle) and Phase 2 (correctness harness) are done; the engine itself is still a stub, so the correctness harness fails by design. See [`docs/todo/`](docs/todo/) for the current phase.
 
 ## Setup on a new machine
 
@@ -60,6 +60,7 @@ Run them from `oracle/` with `uv run python <script>`. They find the repository 
 ```sh
 cargo build                   # debug build
 cargo test                    # correctness harness and unit tests (optimized, debug assertions on)
+cargo test --no-fail-fast     # same, but keeps running other test files after the harness fails
 cargo build --release         # optimized build; the binary is target/release/emberly-oxygen
 ```
 

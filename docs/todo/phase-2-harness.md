@@ -69,14 +69,15 @@ Pure functions with their own tests, in `tests/common/compare.rs`.
 
 ## Phase exit check
 
-- [ ] `cargo test` against the stub runs offline, prints the table with every category failing, and exits non-zero
-- [ ] Unit tests of the comparison functions all pass, including each threshold boundary and the near-tie cases
-- [ ] A synthetic-divergence test proves the layer and position report is correct
-- [ ] Every test names the HC, FR or S item it verifies
-- [ ] `cargo test` time on the stub is recorded (fixture loading dominates and sets the floor for later phases)
+- [x] `cargo test --no-fail-fast` against the stub runs offline, prints the table with every category failing, and exits non-zero
+- [x] Unit tests of the comparison functions all pass, including each threshold boundary and the near-tie cases
+- [x] A synthetic-divergence test proves the layer and position report is correct
+- [x] Every test names the HC, FR or S item it verifies
+- [x] `cargo test` time on the stub is recorded: about 0.3 s with a warm build (`cargo test --no-fail-fast`, 12 prompts, 669 MB of fixtures read); the correctness test itself takes about 0.2 s. Fixture loading will dominate once the real engine runs.
 - [ ] Owner reviews the table output and the comparison functions' tests before Phase 3 starts
 
 ## Notes to carry forward
 
 - Requirements S-3 was corrected in place by the owner (no version bump); its wording is "there either token passes".
+- Plain `cargo test` stops at the first failing test binary, so while the engine is a stub the other test files do not run; use `cargo test --no-fail-fast` until the correctness harness passes.
 - The stub is thrown away piece by piece: Phase 3 replaces encode and decode, Phase 4 replaces the forward pass, Phase 5 replaces generation.
