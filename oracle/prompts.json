@@ -1,0 +1,52 @@
+[
+  {
+    "id": "english-short",
+    "category": "english",
+    "text": "The quick brown fox jumps over the lazy dog, and then the fox sits quietly beside the old stone bridge to watch the river flow past the village."
+  },
+  {
+    "id": "english-medium",
+    "category": "english",
+    "text": "In 1969, two astronauts walked on the surface of the Moon while a third waited in orbit. The mission took four days to complete, and millions of people watched the landing on television. Years later, engineers recalled that the onboard computer had less memory than a modern pocket calculator."
+  },
+  {
+    "id": "thai-short",
+    "category": "thai",
+    "text": "กรุงเทพมหานครเป็นเมืองหลวงของประเทศไทย"
+  },
+  {
+    "id": "thai-medium",
+    "category": "thai",
+    "text": "ข้าวเหนียวมะม่วงเป็นของหวานที่ได้รับความนิยมในฤดูร้อน ทำจากข้าวเหนียวนึ่งราดด้วยกะทิหอมมัน กินคู่กับมะม่วงสุกหวานฉ่ำ และโรยด้วยถั่วเขียวกรอบ หลายคนบอกว่าต้องกินตอนที่ข้าวยังอุ่นอยู่ถึงจะอร่อยที่สุด"
+  },
+  {
+    "id": "code-rust",
+    "category": "code",
+    "text": "fn fibonacci(n: u32) -> u64 {\n    let (mut a, mut b) = (0u64, 1u64);\n    for _ in 0..n {\n        (a, b) = (b, a + b);\n    }\n    a\n}\n\nfn main() {\n    for i in 0..10 {\n        println!(\"fib({i}) = {}\", fibonacci(i));\n    }\n}\n"
+  },
+  {
+    "id": "code-python",
+    "category": "code",
+    "text": "def merge_sorted(left, right):\n    result = []\n    i = j = 0\n    while i < len(left) and j < len(right):\n        if left[i] <= right[j]:\n            result.append(left[i])\n            i += 1\n        else:\n            result.append(right[j])\n            j += 1\n    result.extend(left[i:])\n    result.extend(right[j:])\n    return result\n"
+  },
+  {
+    "id": "utf8-split-emoji",
+    "category": "utf8-split",
+    "text": "Release notes: 🦀 Rust rewrite shipped 🚀, benchmarks look 🔥, and the team celebrated 🎉🎉 with 🍜."
+  },
+  {
+    "id": "utf8-split-cjk",
+    "category": "utf8-split",
+    "text": "漢字の「鬱」や「龍」のような画数の多い文字は、トークナイザによってバイトごとに分割されることがある。"
+  },
+  {
+    "id": "long-prose",
+    "category": "long",
+    "text": "The history of the printing press is usually told as the story of one man and one invention, but the reality was far messier. Johannes Gutenberg did not invent printing; woodblock printing had existed in East Asia for centuries, and movable type had been tried in China and Korea long before it appeared in Mainz. What Gutenberg contributed was a combination of ideas: a hand mould that could cast identical metal letters quickly, an oil-based ink that stuck to metal, and a screw press adapted from the presses used to crush grapes and olives. None of these pieces was new on its own. Together they made it possible to produce books at a price that ordinary merchants, priests and students could afford.\n\nThe consequences unfolded slowly at first. Early printers copied the look of handwritten manuscripts so closely that buyers often could not tell the difference. Only later did printers realise that a printed page could be designed for its own sake, with title pages, page numbers, indexes and consistent spelling. These small conventions, which we now take for granted, changed how people searched for information and how they trusted it. A reader could now hold two copies of the same book and be sure they said the same thing, and that certainty made it possible for scholars in different cities to argue about exactly the same text.\n\nPrinting also reshaped the economy of knowledge. Before the press, a copyist might produce a few books in a year, and a library of a hundred volumes was a rare treasure. Within fifty years of Gutenberg's workshop, millions of books had been printed across Europe. Prices fell, literacy rose, and the vernacular languages gradually gained the prestige that Latin had held for a thousand years. Pamphlets spread arguments faster than any authority could suppress them, and the same technology that carried scripture into private homes also carried satire, news and rumour.\n\nHistorians still debate how much of the later upheaval can be credited to the press itself. Some argue that the Reformation, the scientific revolution and the rise of the modern state would have happened anyway, and that printing merely amplified forces that were already in motion. Others point out that none of those movements could have sustained themselves without a cheap and reliable way to copy and circulate ideas. The honest answer is probably that the press was neither a cause nor a mere bystander, but a tool whose effects depended entirely on what people chose to do with it. That is a useful thing to remember whenever a new technology is announced with a great deal of confidence about what it will change."
+  },
+  {
+    "id": "long-code",
+    "category": "long",
+    "text": "use std::collections::HashMap;\nuse std::fmt;\n\n/// A simple inventory that tracks how many units of each item are in stock.\n#[derive(Debug, Default)]\npub struct Inventory {\n    items: HashMap<String, u32>,\n}\n\n#[derive(Debug, PartialEq)]\npub enum InventoryError {\n    UnknownItem(String),\n    InsufficientStock { item: String, requested: u32, available: u32 },\n}\n\nimpl fmt::Display for InventoryError {\n    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {\n        match self {\n            InventoryError::UnknownItem(name) => write!(f, \"unknown item: {name}\"),\n            InventoryError::InsufficientStock { item, requested, available } => write!(\n                f,\n                \"cannot remove {requested} of {item}: only {available} in stock\"\n            ),\n        }\n    }\n}\n\nimpl std::error::Error for InventoryError {}\n\nimpl Inventory {\n    pub fn new() -> Self {\n        Self::default()\n    }\n\n    /// Adds `count` units of `name`, creating the entry if needed.\n    pub fn add(&mut self, name: &str, count: u32) {\n        *self.items.entry(name.to_string()).or_insert(0) += count;\n    }\n\n    /// Removes `count` units of `name`, failing if the stock is too low.\n    pub fn remove(&mut self, name: &str, count: u32) -> Result<(), InventoryError> {\n        let available = self\n            .items\n            .get_mut(name)\n            .ok_or_else(|| InventoryError::UnknownItem(name.to_string()))?;\n        if *available < count {\n            return Err(InventoryError::InsufficientStock {\n                item: name.to_string(),\n                requested: count,\n                available: *available,\n            });\n        }\n        *available -= count;\n        Ok(())\n    }\n\n    /// Returns the items sorted by name, for stable output.\n    pub fn report(&self) -> Vec<(&str, u32)> {\n"
+  }
+]
