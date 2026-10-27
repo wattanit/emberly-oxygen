@@ -5,3 +5,4 @@
 pub mod fixtures;
 pub mod compare;
 pub mod harness;
+pub mod report;

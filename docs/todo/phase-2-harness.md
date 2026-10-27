@@ -52,12 +52,12 @@ Pure functions with their own tests, in `tests/common/compare.rs`.
 
 ## 2.6 Pass/fail table (S-5, FR-5)
 
-- [ ] Print a table by prompt (rows) and check (columns), then a summary by category
-- [ ] A category passes only if every prompt in it passes every check; no averages anywhere (S-5)
-- [ ] Any failing category fails the run with a non-zero exit code
-- [ ] Each failure line gives the first diverging position and, for intermediates, the layer (FR-6)
-- [ ] Note in the module docs that the table appears on failure by default and on success with `cargo test -- --nocapture`
-- [ ] Check: with the stub, the table prints all five categories failing
+- [x] Print a table by prompt (rows) and check (columns), then a summary by category
+- [x] A category passes only if every prompt in it passes every check; no averages anywhere (S-5)
+- [x] Any failing category fails the run with a non-zero exit code
+- [x] Each failure line gives the first diverging position and, for intermediates, the layer (FR-6)
+- [x] Note in the module docs that the table appears on failure by default and on success with `cargo test -- --nocapture`
+- [x] Check: with the stub, the table prints all five categories failing
 
 ## 2.7 Missing inputs fail loudly (FR-7, HC-3, Spec §11)
 

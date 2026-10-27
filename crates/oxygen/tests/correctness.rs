@@ -2,11 +2,15 @@
 //! stored expected output. Verifies FR-5 (full comparison), FR-13 to FR-15
 //! (tokenizer, as far as the checks cover them), S-1 to S-4 and S-5 (a release
 //! passes only if every prompt category passes).
+//!
+//! A failing run shows the table in its failure message; a passing run prints
+//! it only with `cargo test -- --nocapture`.
 
 mod common;
 
 use common::fixtures::{discover, workspace_root};
 use common::harness::{check_prompt, CheckResult};
+use common::report::render;
 use emberly_oxygen::Model;
 
 #[test]
@@ -24,10 +28,23 @@ fn correctness_harness() {
         }
     }
 
-    let failures: Vec<String> = results
-        .iter()
-        .filter(|r| r.verdict.is_failure())
-        .map(|r| format!("{} / {} / {}: {:?}", r.model_id, r.prompt, r.check.name(), r.verdict))
-        .collect();
-    assert!(failures.is_empty(), "{} of {} checks failed:\n{}", failures.len(), results.len(), failures.join("\n"));
+    let report = render(&results);
+    assert!(
+        report.failed.is_empty(),
+        "{} of {} categories failed (S-5)\n\n{}",
+        report.failed.len(),
+        distinct_categories(&results),
+        report.text
+    );
+    println!("{}", report.text);
+}
+
+fn distinct_categories(results: &[CheckResult]) -> usize {
+    let mut seen: Vec<(&str, &str)> = Vec::new();
+    for r in results {
+        if !seen.contains(&(r.model_id.as_str(), r.category.as_str())) {
+            seen.push((&r.model_id, &r.category));
+        }
+    }
+    seen.len()
 }
