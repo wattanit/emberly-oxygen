@@ -25,15 +25,15 @@ Layout used throughout: the harness lives in `crates/oxygen/tests/`, with shared
 
 Pure functions with their own tests, in `tests/common/compare.rs`.
 
-- [ ] `max_abs_error(engine, reference)` for logits (S-1, threshold 1e-3), returning the worst value and its position
-- [ ] `relative_error(engine, reference)` for one intermediate tensor: largest absolute difference divided by the largest magnitude of the reference tensor (S-2, threshold 1e-4); define "tensor" as one stored intermediate for one prompt, meaning one layer's `[positions, hidden]` matrix, and record that reading in the plan's upstream-feedback table
-- [ ] Guard against an all-zero reference tensor (relative error undefined) and against NaN or infinite engine values, which must always fail
-- [ ] `top1_check(engine_logits, reference_logits, gaps)` (S-3): first position where the argmax differs and the reference gap is at least 1e-3; positions with a smaller gap pass either way
-- [ ] `greedy_check(engine_ids, reference_ids, gaps)` (S-4): first differing index; if a near-tie (gap under 1e-3) occurs at or before it, stop comparing there and report the near-tie instead of a failure
-- [ ] Every check returns first-diverging position, not just a boolean (FR-6)
-- [ ] Shape mismatches are failures with a message, never a panic (user-visible data never causes a panic, Spec §14)
-- [ ] Unit tests at each boundary: just under and just over each threshold, an exact tie, a near-tie at the end versus the start of a continuation, NaN, mismatched length
-- [ ] Check: every unit test names the S-n it verifies
+- [x] `max_abs_error(engine, reference)` for logits (S-1, threshold 1e-3), returning the worst value and its position
+- [x] `relative_error(engine, reference)` for one intermediate tensor: largest absolute difference divided by the largest magnitude of the reference tensor (S-2, threshold 1e-4); define "tensor" as one stored intermediate for one prompt, meaning one layer's `[positions, hidden]` matrix, and record that reading in the plan's upstream-feedback table
+- [x] Guard against an all-zero reference tensor (relative error undefined) and against NaN or infinite engine values, which must always fail
+- [x] `top1_check(engine_logits, reference_logits, gaps)` (S-3): first position where the argmax differs and the reference gap is at least 1e-3; positions with a smaller gap pass either way
+- [x] `greedy_check(engine_ids, reference_ids, gaps)` (S-4): first differing index; if a near-tie (gap under 1e-3) occurs at or before it, stop comparing there and report the near-tie instead of a failure
+- [x] Every check returns first-diverging position, not just a boolean (FR-6)
+- [x] Shape mismatches are failures with a message, never a panic (user-visible data never causes a panic, Spec §14)
+- [x] Unit tests at each boundary: just under and just over each threshold, an exact tie, a near-tie at the end versus the start of a continuation, NaN, mismatched length
+- [x] Check: every unit test names the S-n it verifies
 
 ## 2.4 Per-prompt tests driven by the manifest (FR-5, Spec §11)
 
