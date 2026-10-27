@@ -23,12 +23,12 @@ Working checklist for Phase 1 of the [implementation plan](../emberly-oxygen-imp
 
 ## 1.3 Download script (FR-11, FR-4)
 
-- [ ] Choose and record the pinned commit of the SmolLM2-135M repository (`HuggingFaceTB/SmolLM2-135M`); verify it is the base model, not the instruct variant
-- [ ] `oracle/download.py` fetches exactly `config.json`, `model.safetensors` and `tokenizer.json` into `models/<model-id>/`
-- [ ] Fails if the downloaded commit differs from the pin; verifies the files exist afterwards
-- [ ] Record the model ID, commit and file sizes in the script's output
-- [ ] Decide how `<model-id>` is spelled (for example, `smollm2-135m`) and use it for both `models/` and `fixtures/`
-- [ ] Check: re-running is a no-op when files are already present
+- [x] Choose and record the pinned commit of the SmolLM2-135M repository (`HuggingFaceTB/SmolLM2-135M`); verify it is the base model, not the instruct variant
+- [x] `oracle/download.py` fetches exactly `config.json`, `model.safetensors` and `tokenizer.json` into `models/<model-id>/`
+- [x] Fails if the downloaded commit differs from the pin; verifies the files exist afterwards
+- [x] Record the model ID, commit and file sizes in the script's output
+- [x] Decide how `<model-id>` is spelled (for example, `smollm2-135m`) and use it for both `models/` and `fixtures/`
+- [x] Check: re-running is a no-op when files are already present
 
 ## 1.4 Prompt set (FR-3, Spec §10)
 
