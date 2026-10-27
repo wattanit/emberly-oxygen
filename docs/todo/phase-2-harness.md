@@ -61,11 +61,11 @@ Pure functions with their own tests, in `tests/common/compare.rs`.
 
 ## 2.7 Missing inputs fail loudly (FR-7, HC-3, Spec §11)
 
-- [ ] Missing `models/<model-id>/` fails the run naming the path and the download command (`cd oracle && uv run python download.py`)
-- [ ] Missing `fixtures/` or manifest fails naming the oracle command (`cd oracle && uv run python generate.py`)
-- [ ] A manifest that names a missing tensors file fails naming that file
-- [ ] The harness never downloads, never runs Python, and never opens a network connection
-- [ ] Check: tests for each failure point at a temporary empty directory
+- [x] Missing `models/<model-id>/` fails the run naming the path and the download command (`cd oracle && uv run python download.py`)
+- [x] Missing `fixtures/` or manifest fails naming the oracle command (`cd oracle && uv run python generate.py`)
+- [x] A manifest that names a missing tensors file fails naming that file
+- [x] The harness never downloads, never runs Python, and never opens a network connection
+- [x] Check: tests for each failure point at a temporary empty directory
 
 ## Phase exit check
 

@@ -8,7 +8,7 @@
 
 mod common;
 
-use common::fixtures::{discover, workspace_root};
+use common::fixtures::{discover, require_model_dir, workspace_root};
 use common::harness::{check_prompt, CheckResult};
 use common::report::render;
 use emberly_oxygen::Model;
@@ -21,6 +21,7 @@ fn correctness_harness() {
     let mut results: Vec<CheckResult> = Vec::new();
     for fixtures in &all {
         let model_dir = root.join("models").join(&fixtures.manifest.model_id);
+        require_model_dir(&model_dir).unwrap_or_else(|e| panic!("{e}"));
         let model = Model::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
         for prompt in &fixtures.manifest.prompts {
             let reference = fixtures.load_tensors(prompt).unwrap_or_else(|e| panic!("{e}"));

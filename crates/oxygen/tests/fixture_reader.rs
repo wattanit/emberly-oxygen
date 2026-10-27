@@ -4,7 +4,11 @@
 
 mod common;
 
-use common::fixtures::{discover, parse_safetensors, workspace_root, GENERATE_COMMAND};
+use std::path::PathBuf;
+
+use common::fixtures::{
+    discover, parse_safetensors, require_model_dir, workspace_root, DOWNLOAD_COMMAND, GENERATE_COMMAND,
+};
 
 /// Builds a safetensors file in memory: (name, dtype, shape, values).
 fn build(tensors: &[(&str, &str, &[usize], &[f32])]) -> Vec<u8> {
@@ -55,16 +59,81 @@ fn fr4_rejects_other_dtypes_and_bad_files_without_panicking() {
     assert!(parse_safetensors(&wrong_count).is_err(), "shape disagrees with byte range");
 }
 
+/// A fresh empty directory for one test.
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("oxygen-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
 #[test]
 fn fr7_missing_fixtures_name_the_oracle_command() {
-    let empty = std::env::temp_dir().join(format!("oxygen-empty-{}", std::process::id()));
-    std::fs::create_dir_all(&empty).unwrap();
+    let empty = temp_dir("empty-fixtures");
     let error = discover(&empty).unwrap_err();
     assert!(error.contains(GENERATE_COMMAND), "{error}");
 
     let absent = empty.join("nope");
     assert!(discover(&absent).unwrap_err().contains(GENERATE_COMMAND));
     std::fs::remove_dir_all(&empty).unwrap();
+}
+
+#[test]
+fn fr7_a_folder_without_a_manifest_is_not_a_fixture_folder() {
+    let root = temp_dir("no-manifest");
+    std::fs::create_dir_all(root.join("some-model")).unwrap();
+    assert!(discover(&root).unwrap_err().contains(GENERATE_COMMAND));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr7_a_malformed_manifest_names_the_file() {
+    let root = temp_dir("bad-manifest");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), "{ not json").unwrap();
+    let error = discover(&root).unwrap_err();
+    assert!(error.contains("manifest.json") && error.contains("malformed"), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr7_a_manifest_naming_a_missing_tensors_file_fails_naming_it() {
+    let root = temp_dir("missing-tensors");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    let manifest = serde_json::json!({
+        "model_id": "m",
+        "dims": {"layers": 1, "hidden": 1, "vocab": 1},
+        "continuation_tokens": 1,
+        "eos_token_id": 0,
+        "prompts": [{
+            "id": "p", "category": "english", "text": "x", "token_ids": [1],
+            "prompt_top2_gaps": [1.0], "continuation_ids": [1], "continuation_text": "x",
+            "continuation_top2_gaps": [1.0], "stopped_at_eos": false,
+            "tensors_file": "p.safetensors"
+        }]
+    });
+    std::fs::write(root.join("m/manifest.json"), manifest.to_string()).unwrap();
+    let all = discover(&root).unwrap();
+    let error = all[0].load_tensors(&all[0].manifest.prompts[0]).unwrap_err();
+    assert!(error.contains("p.safetensors") && error.contains(GENERATE_COMMAND), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr7_missing_model_files_name_the_download_command() {
+    let dir = temp_dir("model");
+    let error = require_model_dir(&dir).unwrap_err();
+    assert!(error.contains("config.json") && error.contains(DOWNLOAD_COMMAND), "{error}");
+
+    std::fs::write(dir.join("config.json"), "{}").unwrap();
+    std::fs::write(dir.join("model.safetensors"), "").unwrap();
+    let error = require_model_dir(&dir).unwrap_err();
+    assert!(error.contains("tokenizer.json"), "names the file that is missing: {error}");
+
+    std::fs::write(dir.join("tokenizer.json"), "{}").unwrap();
+    require_model_dir(&dir).unwrap();
+    assert!(require_model_dir(&dir.join("absent")).is_err());
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[test]

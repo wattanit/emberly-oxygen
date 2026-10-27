@@ -9,6 +9,10 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 pub const GENERATE_COMMAND: &str = "cd oracle && uv run python generate.py";
+pub const DOWNLOAD_COMMAND: &str = "cd oracle && uv run python download.py";
+
+/// The files the engine loads from a model directory (Spec §5).
+const MODEL_FILES: [&str; 3] = ["config.json", "model.safetensors", "tokenizer.json"];
 
 #[derive(Debug, Deserialize)]
 pub struct Dims {
@@ -63,7 +67,22 @@ pub struct PromptTensors {
 }
 
 pub fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    root.canonicalize().unwrap_or(root)
+}
+
+/// Checks the model directory holds the published files; the harness never
+/// downloads (FR-7), so a missing one fails naming the command that fetches it.
+pub fn require_model_dir(dir: &Path) -> Result<(), String> {
+    for file in MODEL_FILES {
+        if !dir.join(file).is_file() {
+            return Err(format!(
+                "{} is missing; download the model with: {DOWNLOAD_COMMAND}",
+                dir.join(file).display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Finds every `<root>/*/manifest.json`, so a new model's folder needs no code
