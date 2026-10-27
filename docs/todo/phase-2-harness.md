@@ -14,12 +14,12 @@ Layout used throughout: the harness lives in `crates/oxygen/tests/`, with shared
 
 ## 2.2 Fixture reader (FR-4, FR-7, Spec §11)
 
-- [ ] `tests/common/fixtures.rs`: parse `manifest.json` into typed structs (prompts, token IDs, continuation IDs, both gap lists, dims, eos id)
-- [ ] Hand-written safetensors reader for the fixtures: 8-byte header length, JSON header, F32 slices by name; reject any other dtype with a clear error
-- [ ] Return tensors as `Vec<f32>` plus shape, loaded one prompt at a time so a run never holds all fixtures in memory (the long ones are about 135 MB each)
-- [ ] Discover fixtures by globbing `fixtures/*/manifest.json` from the workspace root, so a new model's folder is picked up with no code change (Requirements §2.2)
-- [ ] The reader never touches engine code, so the oracle's output is not read by the code under test
-- [ ] Check: unit test reads a tiny safetensors file built in the test, and one real fixture's shapes match the manifest's `dims`
+- [x] `tests/common/fixtures.rs`: parse `manifest.json` into typed structs (prompts, token IDs, continuation IDs, both gap lists, dims, eos id)
+- [x] Hand-written safetensors reader for the fixtures: 8-byte header length, JSON header, F32 slices by name; reject any other dtype with a clear error
+- [x] Return tensors as `Vec<f32>` plus shape, loaded one prompt at a time so a run never holds all fixtures in memory (the long ones are about 135 MB each)
+- [x] Discover fixtures by globbing `fixtures/*/manifest.json` from the workspace root, so a new model's folder is picked up with no code change (Requirements §2.2)
+- [x] The reader never touches engine code, so the oracle's output is not read by the code under test
+- [x] Check: unit test reads a tiny safetensors file built in the test, and one real fixture's shapes match the manifest's `dims`
 
 ## 2.3 Comparison functions (S-1 to S-4, FR-6)
 
