@@ -42,32 +42,32 @@ Working checklist for Phase 1 of the [implementation plan](../emberly-oxygen-imp
 
 ## 1.5 Fixture generator (FR-1, FR-2, S-3, S-4, Spec §10)
 
-- [ ] `oracle/generate.py` loads the model from `models/<model-id>/` in float32 on CPU, eager attention, `torch.no_grad`
-- [ ] Per prompt: tokenize with the reference tokenizer exactly as the model's files declare, and save the token IDs
-- [ ] Forward pass with hidden states returned; save logits `[positions, vocab]`, embeddings `[positions, hidden]`, layer outputs `[layers, positions, hidden]`
-- [ ] Greedy continuation of 32 tokens by the script's own argmax loop (not a library `generate` call); on exact ties take the lowest ID
-- [ ] Record the gap between the top two logits at every continuation step, and for the prompt positions too if cheap
-- [ ] One safetensors file per prompt in `fixtures/<model-id>/`
-- [ ] Check: the continuation's first step agrees with the argmax of the last prompt-position logits
+- [x] `oracle/generate.py` loads the model from `models/<model-id>/` in float32 on CPU, eager attention, `torch.no_grad`
+- [x] Per prompt: tokenize with the reference tokenizer exactly as the model's files declare, and save the token IDs
+- [x] Forward pass with hidden states returned; save logits `[positions, vocab]`, embeddings `[positions, hidden]`, layer outputs `[layers, positions, hidden]`
+- [x] Greedy continuation of 32 tokens by the script's own argmax loop (not a library `generate` call); on exact ties take the lowest ID
+- [x] Record the gap between the top two logits at every continuation step, and for the prompt positions too if cheap
+- [x] One safetensors file per prompt in `fixtures/<model-id>/`
+- [x] Check: the continuation's first step agrees with the argmax of the last prompt-position logits
 
 ## 1.6 Final-norm labelling (FR-1, Spec §10 honesty note)
 
-- [ ] Confirm in the installed `transformers` version that the last entry of the returned hidden states is taken after the final norm
-- [ ] Store that entry under a distinct name (for example, `final_norm_output`) rather than as the last layer, so the harness cannot compare it against the wrong engine tensor
-- [ ] Check: layer count in the file is the model's layer count, with the post-norm tensor stored separately
+- [x] Confirm in the installed `transformers` version that the last entry of the returned hidden states is taken after the final norm (confirmed; layer outputs are captured by hooks instead, so the last layer's raw output is also stored)
+- [x] Store that entry under a distinct name (for example, `final_norm_output`) rather than as the last layer, so the harness cannot compare it against the wrong engine tensor
+- [x] Check: layer count in the file is the model's layer count, with the post-norm tensor stored separately
 
 ## 1.7 Manifest (FR-1, FR-4, Spec §10)
 
-- [ ] `fixtures/<model-id>/manifest.json` with model ID and commit, library versions, generating machine, and a timestamp
-- [ ] Per prompt: ID, category, text, token IDs, continuation IDs and text, top-two gaps, and the name of its safetensors file
-- [ ] The manifest alone is enough for the harness to find every file (Spec §11)
+- [x] `fixtures/<model-id>/manifest.json` with model ID and commit, library versions, generating machine, and a timestamp
+- [x] Per prompt: ID, category, text, token IDs, continuation IDs and text, top-two gaps, and the name of its safetensors file
+- [x] The manifest alone is enough for the harness to find every file (Spec §11)
 
 ## Phase exit check
 
-- [ ] Generator runs end to end and produces a manifest plus one safetensors file per prompt, for all five categories
-- [ ] A second run on the same machine reproduces token IDs and continuations exactly; note the largest difference in logits between runs
-- [ ] The `long` fixtures are about 512 tokens; record the largest fixture size
-- [ ] `git status` shows no fixtures or model files; the prompt set, lockfile, pinned commit and scripts are committed
+- [x] Generator runs end to end and produces a manifest plus one safetensors file per prompt, for all five categories
+- [x] A second run on the same machine reproduces token IDs and continuations exactly; note the largest difference in logits between runs
+- [x] The `long` fixtures are about 512 tokens; record the largest fixture size
+- [x] `git status` shows no fixtures or model files; the prompt set, lockfile, pinned commit and scripts are committed
 - [ ] Owner reviews the prompt set and the manifest before Phase 2 starts
 
 ## Notes to carry forward

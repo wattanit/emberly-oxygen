@@ -136,6 +136,8 @@ Recorded here and absorbed by the upstream owner at the next bump; the upstream 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
 | Before Phase 1 | Requirements S-3 | The text of S-3 is corrupted after "there" (the characters read `eit1bnn√vbΩΩ≈≤/cc er token passes`). The intended wording is not known to the implementer, so S-3's exception clause cannot be implemented from the text alone. Needed by task 2.3; the owner must supply the intended wording. It is a clarifying, minor Requirements bump. |
+| Task 1.6 | Specification §10 honesty note | The library's hidden states replace the last layer's output with the final-norm output, so the last layer's raw output is not returned. The oracle captures every layer's output with forward hooks (checked equal to the library's own hidden states for all other layers) and stores the final-norm output under its own name, `final_norm_output`. This is stricter than the note: all layer outputs are raw, and the harness compares `final_norm_output` against the engine's normalized output. |
+| Task 1.5 | Specification §10 | Per-position top-two gaps are stored for the prompt positions as well as for the continuation, because S-3 needs the near-tie test at every position. |
 | Task 3.6 | Specification §6, §19 | To be filled with the tokenizer component types found in `tokenizer.json`, narrowing §6. |
 | Task 4.7 | Specification §17 | To be filled with how the negative-control switch is compiled in. |
 | Phase 4 exit | Requirements S-1, S-2; Specification §11 | To be filled with measured errors if they suggest changing the thresholds. |
