@@ -37,11 +37,11 @@ Pure functions with their own tests, in `tests/common/compare.rs`.
 
 ## 2.4 Per-prompt tests driven by the manifest (FR-5, Spec §11)
 
-- [ ] One integration test, `tests/correctness.rs`, loops over every manifest and every prompt and records a result per check: token IDs (encode), decode of the reference IDs, logits, top-1, intermediates, greedy continuation
-- [ ] A check the stub cannot perform yet is run anyway and fails; nothing is skipped or marked ignored, because the gate must be seen to fail
-- [ ] Run the engine over the prompt one token at a time with capture on; the harness owns the loop so it is the same path later phases use
-- [ ] Results are collected into a structure and asserted after the table is printed (task 2.6), so one failure does not hide the others
-- [ ] Check: with the stub, every check for every prompt fails, and the test itself does not panic
+- [x] One integration test, `tests/correctness.rs`, loops over every manifest and every prompt and records a result per check: token IDs (encode), decode of the reference IDs, logits, top-1, intermediates, greedy continuation
+- [x] A check the stub cannot perform yet is run anyway and fails; nothing is skipped or marked ignored, because the gate must be seen to fail
+- [x] Run the engine over the prompt one token at a time with capture on; the harness owns the loop so it is the same path later phases use
+- [x] Results are collected into a structure and asserted after the table is printed (task 2.6), so one failure does not hide the others
+- [x] Check: with the stub, every check for every prompt fails, and the test itself does not panic
 
 ## 2.5 First diverging layer (FR-6)
 
