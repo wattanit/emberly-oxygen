@@ -68,7 +68,7 @@ Working checklist for Phase 1 of the [implementation plan](../emberly-oxygen-imp
 - [x] A second run on the same machine reproduces token IDs and continuations exactly; note the largest difference in logits between runs
 - [x] The `long` fixtures are about 512 tokens; record the largest fixture size
 - [x] `git status` shows no fixtures or model files; the prompt set, lockfile, pinned commit and scripts are committed
-- [ ] Owner reviews the prompt set and the manifest before Phase 2 starts
+- [x] Owner reviews the prompt set and the manifest before Phase 2 starts
 
 ## Notes to carry forward
 
