@@ -45,10 +45,10 @@ Pure functions with their own tests, in `tests/common/compare.rs`.
 
 ## 2.5 First diverging layer (FR-6)
 
-- [ ] Compare embeddings first, then layer 0 through the last layer, then the final-norm output against the engine's normalized output
-- [ ] Report the first tensor that exceeds the S-2 threshold and, within it, the first position where the error exceeds it
-- [ ] Do not compare later layers once one has diverged in the failure message, but still record the outcome of the whole check
-- [ ] Check: unit test feeds a synthetic engine capture that diverges at a chosen layer and position and asserts the reported layer and position
+- [x] Compare embeddings first, then layer 0 through the last layer, then the final-norm output against the engine's normalized output
+- [x] Report the first tensor that exceeds the S-2 threshold and, within it, the first position where the error exceeds it
+- [x] Do not compare later layers once one has diverged in the failure message, but still record the outcome of the whole check
+- [x] Check: unit test feeds a synthetic engine capture that diverges at a chosen layer and position and asserts the reported layer and position
 
 ## 2.6 Pass/fail table (S-5, FR-5)
 
