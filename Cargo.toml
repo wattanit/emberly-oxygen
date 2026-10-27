@@ -1,0 +1,15 @@
+[workspace]
+resolver = "3"
+members = ["crates/oxygen", "crates/oxygen-cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+
+# Tests run optimized with debug assertions kept, so a full correctness run
+# takes seconds instead of minutes without losing overflow checks.
+[profile.test]
+opt-level = 3
+debug-assertions = true
+overflow-checks = true

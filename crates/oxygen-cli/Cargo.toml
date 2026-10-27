@@ -1,0 +1,11 @@
+[package]
+name = "emberly-oxygen-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "emberly-oxygen"
+path = "src/main.rs"
+
+[dependencies]

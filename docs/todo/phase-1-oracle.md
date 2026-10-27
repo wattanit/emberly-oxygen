@@ -4,15 +4,15 @@ Working checklist for Phase 1 of the [implementation plan](../emberly-oxygen-imp
 
 ## 1.1 Workspace skeleton (Spec §1, §16)
 
-- [ ] Root `Cargo.toml` as a workspace with members `crates/oxygen` and `crates/oxygen-cli`
-- [ ] Set edition 2024 and the stable toolchain; add `rust-toolchain.toml` only if the owner wants it pinned
-- [ ] Test profile: `opt-level = 3` with `debug-assertions = true` and `overflow-checks = true` (Spec §11)
-- [ ] `crates/oxygen`: package `emberly-oxygen`, empty `lib.rs`
-- [ ] `crates/oxygen-cli`: package `emberly-oxygen-cli`, binary named `emberly-oxygen`, `main.rs` that compiles and does nothing yet
-- [ ] `.gitignore`: `target/`, `fixtures/`, `models/`, `oracle/.venv/`
-- [ ] Create `results/` with a placeholder so it is tracked; `fixtures/` and `models/` are created by the oracle scripts
-- [ ] AGPL `LICENSE` file (roadmap decision)
-- [ ] Check: `cargo build` and `cargo test` pass on the empty workspace
+- [x] Root `Cargo.toml` as a workspace with members `crates/oxygen` and `crates/oxygen-cli`
+- [x] Set edition 2024 and the stable toolchain (no `rust-toolchain.toml`; owner has not asked for pinning)
+- [x] Test profile: `opt-level = 3` with `debug-assertions = true` and `overflow-checks = true` (Spec §11)
+- [x] `crates/oxygen`: package `emberly-oxygen`, empty `lib.rs`
+- [x] `crates/oxygen-cli`: package `emberly-oxygen-cli`, binary named `emberly-oxygen`, `main.rs` that compiles and does nothing yet
+- [x] `.gitignore`: `target/`, `fixtures/`, `models/`, `oracle/.venv/`
+- [x] Create `results/` with a placeholder so it is tracked; `fixtures/` and `models/` are created by the oracle scripts
+- [x] AGPL `LICENSE` file (roadmap decision)
+- [x] Check: `cargo build` and `cargo test` pass on the empty workspace
 
 ## 1.2 Oracle project (HC-3, FR-4, Spec §10)
 
