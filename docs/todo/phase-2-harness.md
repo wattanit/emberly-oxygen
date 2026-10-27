@@ -6,11 +6,11 @@ Layout used throughout: the harness lives in `crates/oxygen/tests/`, with shared
 
 ## 2.1 Stub engine surface (Spec §2, §7, §8)
 
-- [ ] Decide the smallest surface the harness needs and write it down in the module docs: load a model directory; encode text to IDs; decode IDs to text; a session that feeds one token and returns that position's logits, with optional capture of the embedding, each layer's output and the final-norm output; a greedy continuation of `n` tokens
-- [ ] Add the dependencies the surface needs (`thiserror`, `serde`, `serde_json` per Spec §15) and the error type skeleton with only the variants Spec §14 lists
-- [ ] Implement the surface as a stub that compiles and returns wrong values (empty token list, zero logits, no capture), never panics on valid input
-- [ ] Keep the surface minimal: nothing for a later version's needs, and no design for batching or sampling (Requirements §2.3)
-- [ ] Check: `cargo build` passes; a smoke test calls every method on the stub
+- [x] Decide the smallest surface the harness needs and write it down in the module docs: load a model directory; encode text to IDs; decode IDs to text; a session that feeds one token and returns that position's logits, with optional capture of the embedding, each layer's output and the final-norm output; a greedy continuation of `n` tokens
+- [x] Add the dependencies the surface needs (`thiserror` now; `serde` and `serde_json` arrive with the fixture reader in 2.2) and the error type with only the variants Spec §14 lists
+- [x] Implement the surface as a stub that compiles and returns wrong values (empty token list, zero logits, no capture), never panics on valid input
+- [x] Keep the surface minimal: nothing for a later version's needs, and no design for batching or sampling (Requirements §2.3)
+- [x] Check: `cargo build` passes; a smoke test calls every method on the stub
 
 ## 2.2 Fixture reader (FR-4, FR-7, Spec §11)
 
