@@ -46,11 +46,12 @@ The type landed with the stub in task 2.1, so this task is a check, not new code
 
 ## 3.5 Weight binding (FR-12, Spec §3, §5)
 
-- [ ] `weights.rs`: build the expected name list from the `Config` (`model.embed_tokens.weight`, per layer `self_attn.{q,k,v,o}_proj.weight`, `mlp.{gate,up,down}_proj.weight`, both norms, `model.norm.weight`)
-- [ ] Check every tensor's shape against the config; a mismatch is `TensorMismatch` naming the tensor, expected and found shape
-- [ ] A missing tensor and an unexpected tensor (one in the file but not in the expected list) are both `TensorMismatch` naming it; with tied embeddings, an `lm_head.weight` in the file is unexpected unless the Specification says otherwise: check what the real file contains first and record it
-- [ ] `Model::load` loads config and weights through this path; the stub's `load` is replaced, the rest of `Model` stays a stub until Phase 4
-- [ ] Check: tests with an in-memory file missing one tensor, one extra tensor and one mis-shaped tensor, each asserting the name in the message; the real model binds without error
+- [x] `weights.rs`: build the expected name list from the `Config` (`model.embed_tokens.weight`, per layer `self_attn.{q,k,v,o}_proj.weight`, `mlp.{gate,up,down}_proj.weight`, both norms, `model.norm.weight`)
+- [x] Check every tensor's shape against the config; a mismatch is `TensorMismatch` naming the tensor, expected and found shape
+- [x] A missing tensor and an unexpected tensor (one in the file but not in the expected list) are both `TensorMismatch` naming it; with tied embeddings, an `lm_head.weight` in the file is unexpected unless the Specification says otherwise: check what the real file contains first and record it
+- [x] `Model::load` loads config and weights through this path; the stub's `load` is replaced, the rest of `Model` stays a stub until Phase 4
+- [x] Check: tests with an in-memory file missing one tensor, one extra tensor and one mis-shaped tensor, each asserting the name in the message; the real model binds without error
+- Result of the `lm_head.weight` check: the real file has 272 tensors and none is `lm_head.weight`, so an `lm_head.weight` is rejected as unexpected, consistent with Spec §3 (tied embeddings); no Specification change.
 
 ## 3.6 Record the tokenizer's component types (Spec §6, §19)
 

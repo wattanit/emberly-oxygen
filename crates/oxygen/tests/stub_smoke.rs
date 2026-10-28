@@ -7,7 +7,7 @@ use emberly_oxygen::{generate, Model, Tokenizer};
 
 #[test]
 fn stub_surface_runs_without_panicking() {
-    let dir = Path::new("models/none");
+    let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../models/smollm2-135m"));
     let tokenizer = Tokenizer::load(dir).unwrap();
     let model = Model::load(dir).unwrap();
 

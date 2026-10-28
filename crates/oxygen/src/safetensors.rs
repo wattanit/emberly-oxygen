@@ -4,9 +4,6 @@
 //! tensor is copied into an owned f32 tensor. Nothing in a file, however
 //! hostile, may cause a panic (Spec §14).
 
-// Nothing calls the reader until weight binding (task 3.5), which removes this.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs::File;
@@ -225,13 +222,14 @@ fn widen_bf16(bits: u16) -> f32 {
     f32::from_bits(u32::from(bits) << 16)
 }
 
+/// Helpers shared with the weight-binding tests.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod test_util {
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     /// Writes `bytes` to a fresh file in its own temp directory and returns the path.
-    fn temp_file(bytes: &[u8]) -> PathBuf {
+    pub fn temp_file(bytes: &[u8]) -> PathBuf {
         static N: AtomicUsize = AtomicUsize::new(0);
         let dir = std::env::temp_dir().join(format!(
             "oxygen-st-{}-{}",
@@ -243,6 +241,36 @@ mod tests {
         std::fs::write(&path, bytes).unwrap();
         path
     }
+
+    /// A safetensors image holding the given F32 tensors.
+    pub fn f32_image(tensors: &[(String, Vec<usize>)]) -> Vec<u8> {
+        let mut header = String::from("{");
+        let mut data = Vec::new();
+        for (i, (name, shape)) in tensors.iter().enumerate() {
+            let bytes = shape.iter().product::<usize>() * 4;
+            let start = data.len();
+            data.resize(start + bytes, 0u8);
+            if i > 0 {
+                header.push(',');
+            }
+            header.push_str(&format!(
+                r#""{name}":{{"dtype":"F32","shape":{shape:?},"data_offsets":[{start},{}]}}"#,
+                start + bytes
+            ));
+        }
+        header.push('}');
+        let mut out = (header.len() as u64).to_le_bytes().to_vec();
+        out.extend_from_slice(header.as_bytes());
+        out.extend_from_slice(&data);
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use super::test_util::temp_file;
 
     /// Builds a safetensors file image from a header JSON string and a data region.
     fn image(header: &str, data: &[u8]) -> Vec<u8> {

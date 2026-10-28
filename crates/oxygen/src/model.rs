@@ -1,9 +1,17 @@
 use std::path::Path;
 
-use crate::Error;
+use crate::safetensors::SafeTensors;
+use crate::weights::Weights;
+use crate::{Config, Error};
 
-/// A loaded model (Spec §3, §5). Stub: loads nothing.
-pub struct Model;
+/// A loaded model (Spec §3, §5): its configuration and weights, read from the
+/// files as published. The forward pass is still a stub until Phase 4.
+pub struct Model {
+    config: Config,
+    // Read by the forward pass in Phase 4.
+    #[allow(dead_code)]
+    weights: Weights,
+}
 
 /// One sequence being processed: the key-value cache lives here (Spec §2).
 pub struct Session<'a> {
@@ -22,8 +30,18 @@ pub struct Capture {
 }
 
 impl Model {
-    pub fn load(_model_dir: &Path) -> Result<Model, Error> {
-        Ok(Model)
+    /// Loads `config.json` and `model.safetensors` from a model directory.
+    /// Unsupported configurations and files that do not match them are
+    /// rejected by name (FR-12).
+    pub fn load(model_dir: &Path) -> Result<Model, Error> {
+        let config = Config::load(model_dir)?;
+        let file = SafeTensors::open(&model_dir.join("model.safetensors"))?;
+        let weights = Weights::bind(&file, &config)?;
+        Ok(Model { config, weights })
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     /// Starts an empty sequence. Capture is off unless asked for.

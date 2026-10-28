@@ -11,6 +11,7 @@ mod model;
 mod safetensors;
 mod tensor;
 mod tokenizer;
+mod weights;
 
 pub use config::Config;
 pub use error::Error;
