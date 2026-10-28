@@ -29,9 +29,9 @@ The type landed with the stub in task 2.1, so this task is a check, not new code
 
 ## 3.3 Tensor type (HC-1, Spec §3)
 
-- [ ] `tensor.rs`: owned `Vec<f32>` plus row-major shape; constructor that rejects a length that disagrees with the shape product
-- [ ] Only what loading needs: shape, data, row access for `[out, in]` matrices. No operations; kernels arrive in Phase 4
-- [ ] Check: unit tests for construction, mismatch rejection, and row slices
+- [x] `tensor.rs`: owned `Vec<f32>` plus row-major shape; constructor that rejects a length that disagrees with the shape product
+- [x] Only what loading needs: shape, data, row access for `[out, in]` matrices. No operations; kernels arrive in Phase 4
+- [x] Check: unit tests for construction, mismatch rejection, and row slices
 
 ## 3.4 Safetensors reader (FR-11, FR-12, HC-1, Spec §5)
 

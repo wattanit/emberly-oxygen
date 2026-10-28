@@ -8,10 +8,12 @@ mod config;
 mod error;
 mod generate;
 mod model;
+mod tensor;
 mod tokenizer;
 
 pub use config::Config;
 pub use error::Error;
 pub use generate::generate;
 pub use model::{Capture, Model, Session};
+pub use tensor::Tensor;
 pub use tokenizer::Tokenizer;
