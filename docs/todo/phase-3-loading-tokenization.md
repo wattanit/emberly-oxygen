@@ -14,18 +14,18 @@ Dependencies: `memmap2` is the only addition (needed by 3.4), and it is already 
 
 The type landed with the stub in task 2.1, so this task is a check, not new code.
 
-- [ ] Confirm `Error` has exactly the five Spec §14 classes (I/O, malformed file, unsupported component, tensor mismatch, request rejected) and no more
-- [ ] Add a unit test per variant that its message names what Spec §14 says it names (path, component and value, tensor name)
-- [ ] Check: no later task in this phase adds a variant; one that seems to need it goes to the upstream-feedback table instead
+- [x] Confirm `Error` has exactly the five Spec §14 classes (I/O, malformed file, unsupported component, tensor mismatch, request rejected) and no more
+- [x] Add a unit test per variant that its message names what Spec §14 says it names (path, component and value, tensor name)
+- [x] Check: no later task in this phase adds a variant; one that seems to need it goes to the upstream-feedback table instead
 
 ## 3.2 Configuration parsing and supported-set check (FR-12, Spec §3)
 
-- [ ] `config.rs`: typed `Config` read from `config.json` with sizes (hidden, layers, heads, kv heads, head dim, intermediate, vocab, context length), `rope_theta` and `rms_norm_eps` taken from the file, never hard-coded
-- [ ] Head dimension: use the file's value when present, else hidden size divided by heads; reject a hidden size that does not divide evenly, naming the fields
-- [ ] Supported-set check for every row of the Spec §3 table (`model_type`, `hidden_act`, `attention_bias`, `mlp_bias`, `rope_scaling`, `rope_interleaved`, `tie_word_embeddings`, `pretraining_tp`), with absent fields handled as the table says
-- [ ] Rejection is `Error::Unsupported` naming the field and the value found
-- [ ] Reject inconsistent sizes (heads not a multiple of kv heads, zero sizes) as `Malformed`, naming the field
-- [ ] Check: unit tests load the real `config.json` and then altered copies, one per supported-set row, asserting the message contains the field name and the value; a test for each absent-field case
+- [x] `config.rs`: typed `Config` read from `config.json` with sizes (hidden, layers, heads, kv heads, head dim, intermediate, vocab, context length), `rope_theta` and `rms_norm_eps` taken from the file, never hard-coded
+- [x] Head dimension: use the file's value when present, else hidden size divided by heads; reject a hidden size that does not divide evenly, naming the fields
+- [x] Supported-set check for every row of the Spec §3 table (`model_type`, `hidden_act`, `attention_bias`, `mlp_bias`, `rope_scaling`, `rope_interleaved`, `tie_word_embeddings`, `pretraining_tp`), with absent fields handled as the table says
+- [x] Rejection is `Error::Unsupported` naming the field and the value found
+- [x] Reject inconsistent sizes (heads not a multiple of kv heads, zero sizes) as `Malformed`, naming the field
+- [x] Check: unit tests load the real `config.json` and then altered copies, one per supported-set row, asserting the message contains the field name and the value; a test for each absent-field case
 
 ## 3.3 Tensor type (HC-1, Spec §3)
 
@@ -88,26 +88,26 @@ Hand-written, no regex crate (Spec §6). Two stages in the order the file declar
 
 ## 3.10 Decoding (FR-14, Spec §6)
 
-- [ ] IDs to piece strings, pieces to bytes through the inverse map, bytes to a string; invalid UTF-8 in the whole output becomes U+FFFD exactly as the reference's decode does (verify against the oracle with a constructed ID list that splits a character, and record the result)
-- [ ] Special tokens: decide whether they are printed as their text, matching what the oracle's decode does for the fixtures, and write down the reading
-- [ ] An ID outside the vocabulary is `Rejected` naming the ID, never a panic
-- [ ] Check: unit tests for ASCII, Thai, emoji, a special token, an out-of-range ID, and an empty list
+- [x] IDs to piece strings, pieces to bytes through the inverse map, bytes to a string; invalid UTF-8 in the whole output becomes U+FFFD exactly as the reference's decode does (verify against the oracle with a constructed ID list that splits a character, and record the result)
+- [x] Special tokens: decide whether they are printed as their text, matching what the oracle's decode does for the fixtures, and write down the reading
+- [x] An ID outside the vocabulary is `Rejected` naming the ID, never a panic
+- [x] Check: unit tests for ASCII, Thai, emoji, a special token, an out-of-range ID, and an empty list
 
 ## 3.11 Streaming decoder (FR-15, Spec §6, §17)
 
-- [ ] `StreamDecoder` holding a byte buffer: after each token push, emit the longest valid UTF-8 prefix and hold back an incomplete trailing sequence of at most 3 bytes
-- [ ] Bytes that cannot begin or continue a valid sequence become U+FFFD immediately and are not held; `flush` emits whatever is held the same way
-- [ ] Emitted text concatenated over a whole stream equals one-shot `decode` of the same IDs (property test over every prompt's fixture IDs and continuation IDs)
-- [ ] Never emit an incomplete sequence at any chunk boundary
-- [ ] Check: unit test splits a three-byte Thai character across every possible chunk boundary (1+2, 2+1, 1+1+1) and asserts nothing is emitted until the character completes
-- [ ] Check: invalid-byte cases: a stray continuation byte, a truncated four-byte sequence followed by ASCII, a flush with held bytes
+- [x] `StreamDecoder` holding a byte buffer: after each token push, emit the longest valid UTF-8 prefix and hold back an incomplete trailing sequence of at most 3 bytes
+- [x] Bytes that cannot begin or continue a valid sequence become U+FFFD immediately and are not held; `flush` emits whatever is held the same way
+- [x] Emitted text concatenated over a whole stream equals one-shot `decode` of the same IDs (property test over every prompt's fixture IDs and continuation IDs)
+- [x] Never emit an incomplete sequence at any chunk boundary
+- [x] Check: unit test splits a three-byte Thai character across every possible chunk boundary (1+2, 2+1, 1+1+1) and asserts nothing is emitted until the character completes
+- [x] Check: invalid-byte cases: a stray continuation byte, a truncated four-byte sequence followed by ASCII, a flush with held bytes
 
 ## 3.12 Wire into the harness (FR-13 to FR-15, Spec §11)
 
-- [ ] `Tokenizer::load` and `Model::load` use the real implementations; the correctness harness's encode and decode checks now call them
-- [ ] Add the streaming check to the harness: feed the fixture IDs of each `utf8-split` prompt one at a time through the `StreamDecoder`, assert no emitted chunk ends inside a character and the total matches decode; show it as its own column in the pass/fail table
-- [ ] The logits, top-1, intermediates and greedy-continuation checks are left running against the stub and still fail
-- [ ] Check: `cargo test --no-fail-fast` prints the table with the encode, decode and streaming columns passing for all five categories and the other columns failing, exit code non-zero
+- [x] `Tokenizer::load` and `Model::load` use the real implementations; the correctness harness's encode and decode checks now call them
+- [x] Add the streaming check to the harness: feed the fixture IDs of each `utf8-split` prompt one at a time through the `StreamDecoder`, assert no emitted chunk ends inside a character and the total matches decode; show it as its own column in the pass/fail table
+- [x] The logits, top-1, intermediates and greedy-continuation checks are left running against the stub and still fail
+- [x] Check: `cargo test --no-fail-fast` prints the table with the encode, decode and streaming columns passing for all five categories and the other columns failing, exit code non-zero
 
 ## Phase exit check
 
