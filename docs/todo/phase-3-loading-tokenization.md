@@ -35,14 +35,14 @@ The type landed with the stub in task 2.1, so this task is a check, not new code
 
 ## 3.4 Safetensors reader (FR-11, FR-12, HC-1, Spec §5)
 
-- [ ] Add `memmap2` to the library's dependencies
-- [ ] `safetensors.rs`: 8-byte little-endian header length, JSON header, memory map; validate that the header length fits the file and that every byte range lies inside the data region and does not overlap another
-- [ ] F32 copied; BF16 widened to F32 (shift left by 16 bits); any other dtype rejected naming the tensor and dtype
-- [ ] Reject weights split across several files (a `model.safetensors.index.json` beside the file, or a header that signals sharding) with an error saying sharding is not supported
-- [ ] Ignore the `__metadata__` header entry; reject duplicate or malformed entries as `Malformed`
-- [ ] A truncated or hostile file never panics (Spec §14): header length of `u64::MAX`, ranges past the end, shape/byte-length disagreement
-- [ ] Check: unit tests build tiny files in memory (written to a temp file for the map), including a BF16 widening exactness case (every BF16 pattern of a sample set maps to the same f32 bits as the reference widening) and each rejection above
-- [ ] Check: the real `models/smollm2-135m/model.safetensors` opens and lists tensor names and shapes (test skips with a clear message only if the model directory is absent, matching the harness's loud-failure rule from 2.7: it fails naming the download command instead of skipping)
+- [x] Add `memmap2` to the library's dependencies
+- [x] `safetensors.rs`: 8-byte little-endian header length, JSON header, memory map; validate that the header length fits the file and that every byte range lies inside the data region and does not overlap another
+- [x] F32 copied; BF16 widened to F32 (shift left by 16 bits); any other dtype rejected naming the tensor and dtype
+- [x] Reject weights split across several files (a `model.safetensors.index.json` beside the file, or a header that signals sharding) with an error saying sharding is not supported
+- [x] Ignore the `__metadata__` header entry; reject duplicate or malformed entries as `Malformed`
+- [x] A truncated or hostile file never panics (Spec §14): header length of `u64::MAX`, ranges past the end, shape/byte-length disagreement
+- [x] Check: unit tests build tiny files in memory (written to a temp file for the map), including a BF16 widening exactness case (every BF16 pattern of a sample set maps to the same f32 bits as the reference widening) and each rejection above
+- [x] Check: the real `models/smollm2-135m/model.safetensors` opens and lists tensor names and shapes (test skips with a clear message only if the model directory is absent, matching the harness's loud-failure rule from 2.7: it fails naming the download command instead of skipping)
 
 ## 3.5 Weight binding (FR-12, Spec §3, §5)
 
