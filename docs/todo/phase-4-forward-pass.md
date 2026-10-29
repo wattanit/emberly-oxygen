@@ -104,13 +104,13 @@ The harness must be seen to fail. Three deliberate faults, each behind a test-on
 
 ## Phase exit check
 
-- [ ] Logits, intermediates and top-1 checks pass for every prompt in every category (S-5); encode, decode and streaming still pass; greedy still fails
-- [ ] All three negative controls make the harness fail as intended, and each passes with the fault off
-- [ ] Measured maximum logit error and intermediate error per category are written into plan §8
-- [ ] The how-the-switch-is-compiled decision is recorded in plan §9
-- [ ] Every test added in this phase names the HC, FR, S or Spec item it verifies
-- [ ] `cargo test --no-fail-fast` time recorded, `cargo build` has no warnings, and the summary of every test binary was read
-- [ ] README status line updated (Phase 4 done; Phase 3 and 4 summaries)
+- [x] Logits, intermediates and top-1 checks pass for every prompt in every category (S-5); encode, decode and streaming still pass; greedy still fails
+- [x] All three negative controls make the harness fail as intended, and each passes with the fault off
+- [x] Measured maximum logit error and intermediate error per category are written into plan §8
+- [x] The how-the-switch-is-compiled decision is recorded in plan §9
+- [x] Every test added in this phase names the HC, FR, S or Spec item it verifies (checked mechanically; the three Phase 2 tests that carry it in module documentation are unchanged)
+- [x] `cargo test --no-fail-fast` takes about 127 s (the harness 125 s, everything else under 2 s); `cargo build` has no warnings, with and without the `negative-controls` feature; the summary of every test binary was read and only the harness's greedy column fails
+- [x] README status line updated (Phase 4 done; Phase 3 and 4 summaries)
 - [ ] Owner reviews the table output, the measured errors and the negative-control tests before Phase 5 starts
 
 ## Notes to carry forward
@@ -118,3 +118,5 @@ The harness must be seen to fail. Three deliberate faults, each behind a test-on
 - Partial sums are a ready-measured candidate technique for a later version: the 4.1 table shows 2x (4 sums) and 5x (8 sums) on the matrix-vector product alone. Adopting it needs a Specification change to §4's "in index order" wording and a version note with its own measurement.
 - Phase 5 replaces `generate`: greedy decoding over `Session::step`, with the streaming decoder, and the CLI.
 - The 4.1 speed measurement is not a benchmark and is not recorded in `results/`; benchmarking starts in Phase 6.
+- Phase 4 findings for the owner's next Specification bump are in plan §9: the RoPE reference values and the f32-versus-f64 angle difference (task 4.3), and how the negative-control switch is compiled (task 4.7).
+- The harness takes about 2 minutes. The owner accepted this in 4.1 to keep index-order accumulation; while debugging, run one prompt's checks through `check_prompt` (as `tests/negative_controls.rs` does) instead of the whole harness.
