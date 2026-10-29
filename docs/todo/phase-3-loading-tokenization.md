@@ -80,13 +80,14 @@ Hand-written, no regex crate (Spec §6). Two stages in the order the file declar
 
 ## 3.9 BPE encoding (FR-13, Spec §6)
 
-- [ ] Load vocabulary (token to ID) and merges (pair to rank) from `tokenizer.json`; accept both merge representations the file format allows (a `"a b"` string or a two-element array), rejecting anything else as `Malformed`
-- [ ] Special-token matching first: added tokens marked special are matched in the raw text before splitting, longest match first; everything between matches goes through pre-tokenizer and BPE
-- [ ] BPE per piece: map bytes to the alphabet, repeatedly merge the adjacent pair with the lowest rank until no ranked pair remains; piece strings then map to IDs; a piece string missing from the vocabulary is `Malformed`, not a panic
-- [ ] Post-processor: SmolLM2 has none, so no BOS is added; the code follows whatever 3.6 recorded and rejects other post-processors
-- [ ] Empty text encodes to an empty list here; rejecting an empty prompt is the generation layer's job (FR-18), not the tokenizer's
-- [ ] Check: unit tests on a tiny hand-built vocabulary with known merges (rank order decides, ties, no merges available); one test for special tokens appearing mid-text
-- [ ] Check: encode every `oracle/prompts.json` prompt and compare to the fixture IDs exactly (the real check is 3.12)
+- [x] Load vocabulary (token to ID) and merges (pair to rank) from `tokenizer.json`; accept both merge representations the file format allows (a `"a b"` string or a two-element array), rejecting anything else as `Malformed`
+- [x] Special-token matching first: added tokens marked special are matched in the raw text before splitting, longest match first; everything between matches goes through pre-tokenizer and BPE
+- [x] BPE per piece: map bytes to the alphabet, repeatedly merge the adjacent pair with the lowest rank until no ranked pair remains; piece strings then map to IDs; a character with no vocabulary entry is dropped, exactly as the reference does (21 bytes have none; recorded in plan §9); merges that name tokens missing from the vocabulary are `Malformed`
+- [x] Post-processor: SmolLM2 has none, so no BOS is added; the code follows whatever 3.6 recorded and rejects other post-processors
+- [x] Empty text encodes to an empty list here; rejecting an empty prompt is the generation layer's job (FR-18), not the tokenizer's
+- [x] Check: unit tests on a tiny hand-built vocabulary with known merges (rank order decides, ties, no merges available); one test for special tokens appearing mid-text
+- [x] Check: encode every `oracle/prompts.json` prompt and compare to the fixture IDs exactly (the real check is 3.12)
+- [x] Check: the engine's IDs equal the reference's on all 3,997 corpus strings (which include every prompt, special-token text and the characters the vocabulary lacks); making ties go to the rightmost pair fails 294 of them
 
 ## 3.10 Decoding (FR-14, Spec §6)
 

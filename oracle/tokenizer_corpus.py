@@ -2,7 +2,7 @@
 
 For a few thousand strings, stores what the reference tokenizer does: the
 pre-tokenizer's pieces (in the byte-level alphabet) and the encoded token IDs.
-The strings are the prompt set, hand-picked edge cases, and seeded random
+The strings are the prompt set, hand-picked edge cases (including special-token text), and seeded random
 mixtures of character pools chosen to stress the splitting pattern: Thai
 including combining marks, contractions, every kind of white space, digits,
 other-script numerals, emoji sequences and punctuation.
@@ -41,6 +41,10 @@ EDGE_CASES = [
     "你好世界", "こんにちは", "한국어",
     "café", "café", "ü", "ü", "مرحبا",
     "\U0001f600", "\U0001f468‍\U0001f469‍\U0001f467", "\U0001f1f9\U0001f1ed", "a\U0001f600b",
+    "<|endoftext|>", "a<|im_start|>b", "<|im_start|>user\nhi<|im_end|>\n", "<|im_start|><|im_end|>",
+    "<|endoftext", "<|im_start|", "<file_sep>x<filename>", "x <jupyter_code> y", "<issue_start>1<issue_comment>",
+    "<reponame><repo_name>", "<|im_start|>\u0e2a\u0e27\u0e31\u0e2a\u0e14\u0e35<|im_end|>",
+    "\x04", "a\x04b", "\x06\x13\x14\x16\x1d", "x\x1dy z", "\U00040000", "a\U00040001b", "\U0010ffff",
     "def f(x):\n    return x + 1\n", "fmt.Println(\"hi\")\n\n\tfoo()\n", "\r\n", "a\r\nb", "\x00", "a\x00b", "\x7f",
 ]
 
@@ -88,7 +92,7 @@ def main() -> int:
     cases = []
     for text in texts:
         pieces = [p for p, _ in tokenizer.pre_tokenizer.pre_tokenize_str(text)]
-        # Encoded without special-token handling mattering: no corpus string contains one.
+        # Special-token text in a string is matched before splitting, as the engine must.
         ids = tokenizer.encode(text, add_special_tokens=False).ids
         cases.append({"text": text, "pieces": pieces, "ids": ids})
 

@@ -3,8 +3,7 @@
 //! control character or a space. Printable bytes map to themselves; the rest
 //! map, in byte order, to code points from U+0100 upward.
 
-// Nothing calls the map until BPE encoding and decoding (tasks 3.9, 3.10),
-// which remove this.
+// Decoding (task 3.10) is the first caller of `byte_for`, and removes this.
 #![allow(dead_code)]
 
 pub(super) struct ByteMap {

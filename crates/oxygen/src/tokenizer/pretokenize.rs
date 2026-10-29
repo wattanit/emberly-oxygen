@@ -14,9 +14,6 @@
 //! itself rather than from Rust's standard library, so the two cannot disagree
 //! about what a letter is (Thai vowel and tone marks are not letters).
 
-// Nothing calls the splitter until BPE encoding (task 3.9), which removes this.
-#![allow(dead_code)]
-
 use super::unicode_classes::{LETTERS, NUMBERS, SPACES};
 
 fn in_class(table: &[(u32, u32)], c: char) -> bool {
