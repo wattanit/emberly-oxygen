@@ -3,9 +3,6 @@
 //! control character or a space. Printable bytes map to themselves; the rest
 //! map, in byte order, to code points from U+0100 upward.
 
-// Decoding (task 3.10) is the first caller of `byte_for`, and removes this.
-#![allow(dead_code)]
-
 pub(super) struct ByteMap {
     to_char: [char; 256],
     /// Indexed by code point; `None` for characters outside the alphabet.

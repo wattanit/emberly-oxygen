@@ -13,10 +13,11 @@ use crate::Error;
 use bpe::Bpe;
 use byte_map::ByteMap;
 
-/// Byte-level BPE tokenizer (Spec §6). Encoding is real; decoding is still a
-/// stub until task 3.10.
+/// Byte-level BPE tokenizer (Spec §6).
 pub struct Tokenizer {
     bpe: Bpe,
+    /// The piece (in the byte-level alphabet) of each token ID.
+    pieces: Vec<String>,
     byte_map: ByteMap,
     /// Added tokens, matched in raw text before anything else is done to it.
     added: Vec<(String, u32)>,
@@ -56,6 +57,19 @@ impl Tokenizer {
                 .ok_or_else(|| malformed(format!("vocabulary entry {piece:?} has no valid ID")))?;
             vocab.insert(piece.clone(), id);
         }
+        // Decoding needs ID to piece, so IDs must be exactly 0 to n-1, each once.
+        let mut pieces = vec![String::new(); vocab.len()];
+        let mut seen = vec![false; vocab.len()];
+        for (piece, &id) in &vocab {
+            let slot = id as usize;
+            if slot >= pieces.len() || std::mem::replace(&mut seen[slot], true) {
+                return Err(malformed(format!(
+                    "vocabulary IDs are not exactly 0 to {}: {piece:?} has ID {id}",
+                    pieces.len() - 1
+                )));
+            }
+            pieces[slot] = piece.clone();
+        }
 
         // Merges are either "left right" strings or [left, right] pairs.
         let merges_json = json["model"]["merges"]
@@ -82,9 +96,12 @@ impl Tokenizer {
             let (Some(content), Some(id)) = (content, id) else {
                 return Err(malformed(format!("added token {token} has no content or ID")));
             };
+            if pieces.get(id as usize).map(String::as_str) != Some(content) {
+                return Err(malformed(format!("added token {content:?} is not in the vocabulary with ID {id}")));
+            }
             added.push((content.to_owned(), id));
         }
-        Ok(Tokenizer { bpe, byte_map: ByteMap::new(), added })
+        Ok(Tokenizer { bpe, pieces, byte_map: ByteMap::new(), added })
     }
 
     /// Text to token IDs (FR-13). Added tokens are matched first, then the
@@ -121,8 +138,27 @@ impl Tokenizer {
         Ok(())
     }
 
-    pub fn decode(&self, _ids: &[u32]) -> Result<String, Error> {
-        Ok(String::new())
+    /// Token IDs to text (FR-14). The bytes of all tokens are joined before
+    /// they are read as UTF-8, so a character split across tokens comes out
+    /// whole; bytes that form no valid sequence become U+FFFD, as in the
+    /// reference. Added tokens print as their text, like any other token.
+    pub fn decode(&self, ids: &[u32]) -> Result<String, Error> {
+        let mut bytes = Vec::with_capacity(ids.len() * 4);
+        for &id in ids {
+            self.append_bytes(id, &mut bytes)?;
+        }
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// The raw bytes one token stands for. A character outside the byte-level
+    /// alphabet stands for no byte and is skipped, as the reference does.
+    fn append_bytes(&self, id: u32, out: &mut Vec<u8>) -> Result<(), Error> {
+        let piece = self
+            .pieces
+            .get(id as usize)
+            .ok_or_else(|| Error::Rejected(format!("token ID {id} is not in the vocabulary (size {})", self.pieces.len())))?;
+        out.extend(piece.chars().filter_map(|c| self.byte_map.byte_for(c)));
+        Ok(())
     }
 }
 
@@ -150,6 +186,9 @@ mod tests {
             vocab.insert(token.to_string(), Value::from(256 + i));
         }
         let first_added = 256 + merged.len();
+        for (i, content) in added.iter().enumerate() {
+            vocab.insert(content.to_string(), Value::from(first_added + i));
+        }
         let added: Vec<Value> = added
             .iter()
             .enumerate()
@@ -174,6 +213,58 @@ mod tests {
         assert_eq!(t.encode("<e><s>x").unwrap(), [e, s, u32::from(b'x')]);
         assert_eq!(t.encode("<s").unwrap(), [u32::from(b'<'), u32::from(b's')]);
         assert_eq!(t.encode("").unwrap(), Vec::<u32>::new());
+    }
+
+    // FR-14: decoding reverses the byte-level mapping, including multi-byte characters.
+    #[test]
+    fn decoding_reverses_the_byte_mapping() {
+        let t = tiny(&[], &[], &["<s>"]);
+        let ids = |text: &str| text.bytes().map(u32::from).collect::<Vec<_>>();
+        for text in ["", "hello world", "line\n\ttab", "\u{e01}\u{e47}", "caf\u{e9}", "\u{1f600}", "a\u{1f468}\u{200d}\u{1f469}b"] {
+            assert_eq!(t.decode(&ids(text)).unwrap(), text);
+        }
+        assert_eq!(t.decode(&[256]).unwrap(), "<s>", "added tokens print as their text");
+        assert_eq!(t.decode(&[u32::from(b'x'), 256, u32::from(b'y')]).unwrap(), "x<s>y");
+    }
+
+    // FR-14: bytes of one character may arrive in separate tokens; invalid bytes become U+FFFD.
+    #[test]
+    fn split_and_invalid_bytes() {
+        let t = tiny(&[], &[], &[]);
+        let thai = "\u{e01}".as_bytes(); // three bytes
+        let whole: Vec<u32> = thai.iter().map(|&b| u32::from(b)).collect();
+        assert_eq!(t.decode(&whole).unwrap(), "\u{e01}");
+        assert_eq!(t.decode(&whole[..2]).unwrap(), "\u{fffd}", "an incomplete sequence is one replacement");
+        assert_eq!(t.decode(&[0x80]).unwrap(), "\u{fffd}");
+        assert_eq!(t.decode(&[0xFF, u32::from(b'a')]).unwrap(), "\u{fffd}a");
+        assert_eq!(t.decode(&[0xE0, 0xB8, u32::from(b'a')]).unwrap(), "\u{fffd}a");
+    }
+
+    // Spec §14: an unknown ID is a rejected request, never a panic.
+    #[test]
+    fn out_of_range_ids_are_rejected_by_name() {
+        let t = tiny(&[], &[], &[]);
+        let err = t.decode(&[65, 256]).unwrap_err();
+        assert!(matches!(err, Error::Rejected(_)) && err.to_string().contains("256"), "{err}");
+        assert!(t.decode(&[u32::MAX]).is_err());
+    }
+
+    // FR-14: the vocabulary must map IDs to pieces unambiguously.
+    #[test]
+    fn vocabularies_with_gaps_or_repeats_are_malformed() {
+        let map = ByteMap::new();
+        let base = |extra: (&str, u64)| {
+            let mut vocab = serde_json::Map::new();
+            for b in 0..=255u8 {
+                vocab.insert(map.char_for(b).to_string(), Value::from(b));
+            }
+            vocab.insert(extra.0.into(), Value::from(extra.1));
+            serde_json::json!({"model": {"vocab": vocab, "merges": []}})
+        };
+        for extra in [("gap", 300), ("repeat", 7)] {
+            let err = Tokenizer::from_json(&base(extra), Path::new("t.json")).err().expect("rejected");
+            assert!(matches!(err, Error::Malformed { .. }) && err.to_string().contains("IDs"), "{err}");
+        }
     }
 
     // FR-13: the engine's loader accepts both merge spellings.
@@ -212,12 +303,14 @@ mod tests {
     fn bytes_without_an_entry_are_dropped() {
         let map = ByteMap::new();
         let mut vocab = serde_json::Map::new();
-        for b in (0..=255u8).filter(|&b| b != 4) {
-            vocab.insert(map.char_for(b).to_string(), Value::from(b));
+        // Contiguous IDs, with the character of byte 4 left out.
+        for (id, b) in (0..=255u8).filter(|&b| b != 4).enumerate() {
+            vocab.insert(map.char_for(b).to_string(), Value::from(id));
         }
+        let (a, b) = (vocab["a"].as_u64().unwrap() as u32, vocab["b"].as_u64().unwrap() as u32);
         let json = serde_json::json!({"model": {"vocab": vocab, "merges": []}});
         let t = Tokenizer::from_json(&json, Path::new("t.json")).unwrap();
-        assert_eq!(t.encode("a\u{4}b").unwrap(), [u32::from(b'a'), u32::from(b'b')]);
+        assert_eq!(t.encode("a\u{4}b").unwrap(), [a, b]);
         assert_eq!(t.encode("\u{4}").unwrap(), Vec::<u32>::new());
     }
 
@@ -248,6 +341,65 @@ mod tests {
             cases.len(),
             &failures[..failures.len().min(5)]
         );
+    }
+
+    fn corpus() -> Value {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/smollm2-135m/tokenizer-corpus.json");
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
+            panic!("{path}: {e}; run `cd oracle && uv run python tokenizer_corpus.py`")
+        });
+        serde_json::from_str(&text).unwrap()
+    }
+
+    fn ids_of(value: &Value) -> Vec<u32> {
+        value.as_array().unwrap().iter().map(|n| n.as_u64().unwrap() as u32).collect()
+    }
+
+    // FR-14: decoding matches the oracle's decoder for the reference IDs of every
+    // corpus string, for every single token in the vocabulary, and for random ID
+    // sequences that split characters across tokens and form invalid UTF-8.
+    #[test]
+    fn decoding_matches_the_reference() {
+        let corpus = corpus();
+        let tokenizer = Tokenizer::load(&model_dir()).unwrap();
+        let mut failures = Vec::new();
+        let mut check = |what: String, ids: Vec<u32>, expected: &str| {
+            let ours = tokenizer.decode(&ids).unwrap();
+            if ours != expected {
+                failures.push(format!("{what} {ids:?}: ours {ours:?}, reference {expected:?}"));
+            }
+        };
+
+        let cases = corpus["cases"].as_array().unwrap();
+        for case in cases {
+            check("case".into(), ids_of(&case["ids"]), case["decoded"].as_str().unwrap());
+        }
+        let singles = corpus["single_tokens"].as_array().unwrap();
+        assert_eq!(singles.len(), 49152);
+        for (id, expected) in singles.iter().enumerate() {
+            check("token".into(), vec![id as u32], expected.as_str().unwrap());
+        }
+        let sequences = corpus["sequences"].as_array().unwrap();
+        assert!(sequences.len() >= 4000);
+        for seq in sequences {
+            check("sequence".into(), ids_of(&seq["ids"]), seq["decoded"].as_str().unwrap());
+        }
+        assert!(
+            failures.is_empty(),
+            "{} of {} differ, first: {:#?}",
+            failures.len(),
+            cases.len() + singles.len() + sequences.len(),
+            &failures[..failures.len().min(5)]
+        );
+    }
+
+    // FR-13, FR-14: text survives encode then decode, except bytes the vocabulary cannot hold.
+    #[test]
+    fn encode_then_decode_round_trips_ordinary_text() {
+        let tokenizer = Tokenizer::load(&model_dir()).unwrap();
+        for text in ["Hello, world!", "  indented\n\tcode()", "\u{e2a}\u{e27}\u{e31}\u{e2a}\u{e14}\u{e35}", "\u{1f468}\u{200d}\u{1f469} <|im_start|>x"] {
+            assert_eq!(tokenizer.decode(&tokenizer.encode(text).unwrap()).unwrap(), text);
+        }
     }
 
     #[test]

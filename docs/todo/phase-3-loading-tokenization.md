@@ -92,9 +92,10 @@ Hand-written, no regex crate (Spec §6). Two stages in the order the file declar
 ## 3.10 Decoding (FR-14, Spec §6)
 
 - [x] IDs to piece strings, pieces to bytes through the inverse map, bytes to a string; invalid UTF-8 in the whole output becomes U+FFFD exactly as the reference's decode does (verify against the oracle with a constructed ID list that splits a character, and record the result)
-- [x] Special tokens: decide whether they are printed as their text, matching what the oracle's decode does for the fixtures, and write down the reading
+- [x] Special tokens: printed as their text, matching the oracle's `decode` (default options); recorded in plan §9
 - [x] An ID outside the vocabulary is `Rejected` naming the ID, never a panic
 - [x] Check: unit tests for ASCII, Thai, emoji, a special token, an out-of-range ID, and an empty list
+- [x] Check: decoding matches the oracle on the reference IDs of all 3,997 corpus strings, on every one of the 49,152 single tokens, and on 4,000 seeded random ID sequences; decoding each token separately instead fails 3,418 of them
 
 ## 3.11 Streaming decoder (FR-15, Spec §6, §17)
 

@@ -7,6 +7,11 @@ mixtures of character pools chosen to stress the splitting pattern: Thai
 including combining marks, contractions, every kind of white space, digits,
 other-script numerals, emoji sequences and punctuation.
 
+It also stores what the oracle's decoder (transformers' AutoTokenizer, the one
+generate.py uses) returns: the decoded text of every case's IDs, of every single
+token ID, and of seeded random ID sequences, which split characters across tokens
+and produce invalid UTF-8.
+
 Output: fixtures/<model-id>/tokenizer-corpus.json (git-ignored like the other
 fixtures). The same seed always produces the same strings.
 
@@ -19,6 +24,7 @@ import sys
 from pathlib import Path
 
 from tokenizers import Tokenizer
+from transformers import AutoTokenizer
 
 from download import MODEL_DIR, MODEL_ID
 
@@ -26,6 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "fixtures" / MODEL_ID / "tokenizer-corpus.json"
 SEED = 20261029
 RANDOM_STRINGS = 4000
+RANDOM_SEQUENCES = 4000
 
 EDGE_CASES = [
     "", " ", "  ", "\n", "\n\n", " \n ", "\t\t x", "a", "a ", " a", "  a", "   a  ",
@@ -78,6 +85,13 @@ def random_string(rng: random.Random) -> str:
     return "".join(rng.choice(rng.choice(chosen)) for _ in range(n))
 
 
+def random_ids(rng: random.Random, vocab: int, byte_ids: list[int], thai_ids: list[int]) -> list[int]:
+    """A token ID sequence: mixed pools make split and invalid UTF-8 common."""
+    pools = [list(range(vocab)), list(range(17)), byte_ids, thai_ids]
+    chosen = rng.sample(pools, rng.randint(1, 3))
+    return [rng.choice(rng.choice(chosen)) for _ in range(rng.randint(1, 16))]
+
+
 def main() -> int:
     path = MODEL_DIR / "tokenizer.json"
     if not path.exists():
@@ -89,16 +103,35 @@ def main() -> int:
     rng = random.Random(SEED)
     texts = list(dict.fromkeys(EDGE_CASES + prompts + [random_string(rng) for _ in range(RANDOM_STRINGS)]))
 
+    oracle_decoder = AutoTokenizer.from_pretrained(MODEL_DIR)
+    vocab = tokenizer.get_vocab_size()
+
     cases = []
     for text in texts:
         pieces = [p for p, _ in tokenizer.pre_tokenizer.pre_tokenize_str(text)]
         # Special-token text in a string is matched before splitting, as the engine must.
         ids = tokenizer.encode(text, add_special_tokens=False).ids
-        cases.append({"text": text, "pieces": pieces, "ids": ids})
+        cases.append({"text": text, "pieces": pieces, "ids": ids, "decoded": oracle_decoder.decode(ids)})
+
+    # Decoding on its own: every single token, then random sequences.
+    single_tokens = [oracle_decoder.decode([i]) for i in range(vocab)]
+    # Sorted, because the vocabulary dict's order varies between runs.
+    byte_ids = sorted(i for p, i in tokenizer.get_vocab().items() if len(p) == 1 and ord(p) < 0x144)
+    thai_ids = sorted(i for p, i in tokenizer.get_vocab().items() if p.startswith("\u00e0\u00b8") or p.startswith("\u00e0\u00b9"))
+    sequences = []
+    for _ in range(RANDOM_SEQUENCES):
+        ids = random_ids(rng, vocab, byte_ids, thai_ids)
+        sequences.append({"ids": ids, "decoded": oracle_decoder.decode(ids)})
+
+    # The oracle's decoder and the bare library should not disagree; say so if they do.
+    differ = sum(tokenizer.decode(c["ids"], skip_special_tokens=False) != c["decoded"] for c in cases)
+    differ += sum(tokenizer.decode(q["ids"], skip_special_tokens=False) != q["decoded"] for q in sequences)
+    if differ:
+        print(f"note: transformers and tokenizers decode {differ} strings differently")
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps({"seed": SEED, "cases": cases}, ensure_ascii=False))
-    print(f"wrote {len(cases)} cases to {OUT.relative_to(ROOT)}")
+    OUT.write_text(json.dumps({"seed": SEED, "cases": cases, "single_tokens": single_tokens, "sequences": sequences}, ensure_ascii=False))
+    print(f"wrote {len(cases)} cases, {len(single_tokens)} single tokens and {len(sequences)} sequences to {OUT.relative_to(ROOT)}")
     return 0
 
 
