@@ -124,7 +124,7 @@ Hand-written, no regex crate (Spec §6). Two stages in the order the file declar
 - [x] Every test added in this phase names the HC, FR, S or Spec item it verifies (checked mechanically). Three Phase 2 tests (`stub_smoke`, `correctness_harness`, the printed-error test in `report.rs`) carry it in their module documentation instead
 - [x] Plan §9 holds the task 3.6 row filled in; any decision that changes HOW (for example the `lm_head.weight` reading in 3.5, the Thai character classification in 3.8) is recorded there and not decided here
 - [x] `cargo test --no-fail-fast` time recorded: about 0.6 s with a warm build (67 library tests, the harness over 12 prompts at about 0.2 s, and the tokenizer tests that read the 2 MB corpus); `cargo build` has no warnings
-- [ ] Owner reviews the table output and the tokenizer tests before Phase 4 starts
+- [x] Owner reviews the table output and the tokenizer tests before Phase 4 starts
 
 ## Notes to carry forward
 
