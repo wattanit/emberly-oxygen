@@ -1,3 +1,4 @@
+mod byte_map;
 mod components;
 
 use std::path::Path;

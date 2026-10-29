@@ -62,9 +62,9 @@ The type landed with the stub in task 2.1, so this task is a check, not new code
 
 ## 3.7 Byte-to-unicode map (FR-13, FR-14, Spec §6, §17)
 
-- [ ] The standard byte-level alphabet: printable bytes map to themselves, the rest to code points from U+0100 upward in byte order; and its inverse
-- [ ] Check: unit tests round-trip all 256 bytes; the map is a bijection onto 256 distinct characters; spot values (space → `Ġ`, newline → `Ċ`)
-- [ ] Check: every vocabulary entry of the real `tokenizer.json` is made only of characters in the alphabet (apart from added tokens)
+- [x] The standard byte-level alphabet: printable bytes map to themselves, the rest to code points from U+0100 upward in byte order; and its inverse
+- [x] Check: unit tests round-trip all 256 bytes; the map is a bijection onto 256 distinct characters; spot values (space → `Ġ`, newline → `Ċ`)
+- [x] Check: every vocabulary entry of the real `tokenizer.json` is made only of characters in the alphabet (apart from added tokens)
 
 ## 3.8 Pre-tokenizer splitting (FR-13, Spec §6)
 
