@@ -55,10 +55,10 @@ The type landed with the stub in task 2.1, so this task is a check, not new code
 
 ## 3.6 Record the tokenizer's component types (Spec §6, §19)
 
-- [ ] Read `tokenizer.json` and confirm the facts at the top of this file: model type, normalizer, pre-tokenizer sequence and options, post-processor, decoder, added tokens (list their IDs and whether each is `special`)
-- [ ] Record the result in the plan's §9 upstream-feedback table (the row for task 3.6 already exists), narrowing Spec §6 and resolving the first open item in §19
-- [ ] Note which options are implemented and which are rejected: anything outside what SmolLM2 uses (for example a non-null normalizer, `add_prefix_space: true`, a post-processor of any type) is `Unsupported` naming the type
-- [ ] Check: the recorded text matches the file; a test parses the real `tokenizer.json` and asserts the same facts so a model-revision change cannot silently invalidate them
+- [x] Read `tokenizer.json` and confirm the facts at the top of this file: model type, normalizer, pre-tokenizer sequence and options, post-processor, decoder, added tokens (list their IDs and whether each is `special`)
+- [x] Record the result in the plan's §9 upstream-feedback table (the row for task 3.6 already exists), narrowing Spec §6 and resolving the first open item in §19
+- [x] Note which options are implemented and which are rejected: anything outside what SmolLM2 uses (for example a non-null normalizer, `add_prefix_space: true`, a post-processor of any type) is `Unsupported` naming the type
+- [x] Check: the recorded text matches the file; a test parses the real `tokenizer.json` and asserts the same facts so a model-revision change cannot silently invalidate them
 
 ## 3.7 Byte-to-unicode map (FR-13, FR-14, Spec §6, §17)
 
