@@ -60,10 +60,10 @@ The index-order loop is about three times faster than the 1 G per second guessed
 
 ## 4.4 Key-value cache (Spec §3)
 
-- [ ] `KvCache`: per layer, one growing `Vec<f32>` for keys and one for values, laid out `[position][kv_heads × head_dim]`; appending a position is one extend; reading position `t` is a contiguous slice
-- [ ] Appending and reading are checked by length: appending a slice of the wrong size is an internal bug and asserts
-- [ ] The cache knows its length in positions and refuses to grow past the model's context length with a `Rejected` error (Spec §14, FR-18), never a panic or silent wrap
-- [ ] Check: unit tests for append, read-back of each position, per-layer separation, the context limit
+- [x] `KvCache`: per layer, one growing `Vec<f32>` for keys and one for values, laid out `[position][kv_heads × head_dim]`; appending a position is one extend; reading position `t` is a contiguous slice
+- [x] Appending and reading are checked by length: appending a slice of the wrong size is an internal bug and asserts
+- [x] The cache knows its length in positions and refuses to grow past the model's context length with a `Rejected` error (Spec §14, FR-18), never a panic or silent wrap
+- [x] Check: unit tests for append, read-back of each position, per-layer separation, the context limit
 
 ## 4.5 Forward pass for one token (FR-1, Spec §7)
 

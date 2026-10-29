@@ -7,6 +7,7 @@
 mod config;
 mod error;
 mod generate;
+mod kv_cache;
 mod model;
 mod ops;
 mod safetensors;
