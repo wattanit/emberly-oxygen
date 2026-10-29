@@ -26,7 +26,7 @@ The 12 prompts hold 2,596 positions, and every position computes all layers and 
 - [x] Unit tests against `matrixmultiply::sgemm` (as an `[out, in] × [in, 1]` product) on seeded random inputs, at every shape the model uses: `[576, 576]`, `[192, 576]`, `[1536, 576]`, `[576, 1536]` and the tied output projection `[49152, 576]`; the error bound is stated in the test and is far below S-1
 - [x] Hand-computed small cases (identity matrix, a 2×3 example) and zero-sized edge cases
 - [x] **Measure:** a test that prints (not asserts) the time and multiply-adds per second of `matvec` at the five shapes, and the estimated time of a full harness run (349 G multiply-adds divided by the measured rate); record the figures in the commit message and below
-- [ ] **Stop and report the figures to the owner before starting 4.2** (reported; waiting for the owner's choice, then tick), with the three options above, if the estimate exceeds about 60 seconds
+- [x] **Stop and report the figures to the owner before starting 4.2.** Reported; **decision: option 1, accept the index-order loop** and the roughly 2-minute full run. It keeps this version's logic pure and by-the-book; speed techniques are added and measured one at a time in later versions, with the three options above, if the estimate exceeds about 60 seconds
 - [x] Check: every test names HC-1, HC-2 or Spec §4
 
 Measured (Apple M5, the test profile, `cargo test -p emberly-oxygen --lib -- --ignored --nocapture matvec_speed`), matrix-vector part only, so attention, norms and RoPE come on top (up to about 13% more on the 500-token prompts):
@@ -111,5 +111,6 @@ The harness must be seen to fail. Three deliberate faults, each behind a test-on
 
 ## Notes to carry forward
 
+- Partial sums are a ready-measured candidate technique for a later version: the 4.1 table shows 2x (4 sums) and 5x (8 sums) on the matrix-vector product alone. Adopting it needs a Specification change to §4's "in index order" wording and a version note with its own measurement.
 - Phase 5 replaces `generate`: greedy decoding over `Session::step`, with the streaming decoder, and the CLI.
 - The 4.1 speed measurement is not a benchmark and is not recorded in `results/`; benchmarking starts in Phase 6.
