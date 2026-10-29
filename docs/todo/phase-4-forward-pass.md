@@ -111,7 +111,7 @@ The harness must be seen to fail. Three deliberate faults, each behind a test-on
 - [x] Every test added in this phase names the HC, FR, S or Spec item it verifies (checked mechanically; the three Phase 2 tests that carry it in module documentation are unchanged)
 - [x] `cargo test --no-fail-fast` takes about 127 s (the harness 125 s, everything else under 2 s); `cargo build` has no warnings, with and without the `negative-controls` feature; the summary of every test binary was read and only the harness's greedy column fails
 - [x] README status line updated (Phase 4 done; Phase 3 and 4 summaries)
-- [ ] Owner reviews the table output, the measured errors and the negative-control tests before Phase 5 starts
+- [x] Owner reviews the table output, the measured errors and the negative-control tests before Phase 5 starts
 
 ## Notes to carry forward
 
