@@ -84,6 +84,18 @@ pub(crate) fn mul_assign(a: &mut [f32], b: &[f32]) {
     }
 }
 
+/// The cosine and sine of each rotation angle at one position, one pair per
+/// frequency: `position * theta^(-2i/head_dim)`, all in f32.
+pub(crate) fn rope_angles(position: usize, head_dim: usize, theta: f32) -> Vec<(f32, f32)> {
+    (0..head_dim / 2)
+        .map(|i| {
+            let frequency = 1.0 / theta.powf((2 * i) as f32 / head_dim as f32);
+            let angle = position as f32 * frequency;
+            (angle.cos(), angle.sin())
+        })
+        .collect()
+}
+
 /// Rotary position embedding in place, for `heads` heads of `head_dim` values
 /// at one position. Half-split pairing: dimension `i` rotates with dimension
 /// `i + head_dim/2`, by the angle `position * theta^(-2i/head_dim)`. The
@@ -94,13 +106,7 @@ pub(crate) fn rope(x: &mut [f32], position: usize, heads: usize, head_dim: usize
     assert!(head_dim % 2 == 0, "head_dim must be even, got {head_dim}");
     assert_eq!(x.len(), heads * head_dim, "x must hold `heads` heads of `head_dim` values");
     let half = head_dim / 2;
-    let angles: Vec<(f32, f32)> = (0..half)
-        .map(|i| {
-            let frequency = 1.0 / theta.powf((2 * i) as f32 / head_dim as f32);
-            let angle = position as f32 * frequency;
-            (angle.cos(), angle.sin())
-        })
-        .collect();
+    let angles = rope_angles(position, head_dim, theta);
     for head in x.chunks_exact_mut(head_dim) {
         let (first, second) = head.split_at_mut(half);
         for ((a, b), &(cos, sin)) in first.iter_mut().zip(second.iter_mut()).zip(&angles) {
@@ -262,18 +268,21 @@ mod tests {
         mul_assign(&mut [], &[]);
     }
 
+    // Spec §4, §14: a length mismatch in a kernel call is an internal bug and panics.
     #[test]
     #[should_panic(expected = "equal lengths")]
     fn add_with_unequal_lengths_panics() {
         add_assign(&mut [1., 2.], &[1.]);
     }
 
+    // Spec §4, §14: a length mismatch in a kernel call is an internal bug and panics.
     #[test]
     #[should_panic(expected = "equal lengths")]
     fn multiply_with_unequal_lengths_panics() {
         mul_assign(&mut [1.], &[1., 2.]);
     }
 
+    // Spec §4, §14: a length mismatch in a kernel call is an internal bug and panics.
     #[test]
     #[should_panic(expected = "weight length")]
     fn rms_norm_with_a_short_weight_panics() {
@@ -401,6 +410,7 @@ mod tests {
         rope(&mut [0.; 3], 1, 1, 3, 10000.0);
     }
 
+    // Spec §4, §14: a length mismatch in a kernel call is an internal bug and panics.
     #[test]
     #[should_panic(expected = "heads")]
     fn rope_with_wrong_length_panics() {
@@ -456,12 +466,14 @@ mod tests {
         matvec(&weight(2, 3, 1), &[1., 2.], &mut [0.; 2]);
     }
 
+    // Spec §4, §14: a length mismatch in a kernel call is an internal bug and panics.
     #[test]
     #[should_panic(expected = "output length")]
     fn wrong_output_length_panics() {
         matvec(&weight(2, 3, 1), &[1., 2., 3.], &mut [0.; 3]);
     }
 
+    // Spec §4, §14: a length mismatch in a kernel call is an internal bug and panics.
     #[test]
     #[should_panic(expected = "2-D")]
     fn a_vector_is_not_a_weight() {

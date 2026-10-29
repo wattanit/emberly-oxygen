@@ -6,6 +6,7 @@
 
 mod config;
 mod error;
+mod fault;
 mod forward;
 mod generate;
 mod kv_cache;
@@ -18,6 +19,8 @@ mod weights;
 
 pub use config::Config;
 pub use error::Error;
+#[cfg(feature = "negative-controls")]
+pub use fault::Fault;
 pub use generate::generate;
 pub use model::{Capture, Model, Session};
 pub use tensor::Tensor;

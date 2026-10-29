@@ -12,3 +12,11 @@ memmap2 = "0.9.12"
 
 [dev-dependencies]
 matrixmultiply = "0.3.11"
+# The library enabling its own fault feature for its tests, so plain `cargo test`
+# always runs the negative controls; a normal build ignores dev-dependencies.
+emberly-oxygen = { path = ".", features = ["negative-controls"] }
+
+[features]
+# Deliberate faults for the negative controls (Spec §17). Never enabled by a
+# normal build: only the dev-dependency above turns it on, for tests.
+negative-controls = []

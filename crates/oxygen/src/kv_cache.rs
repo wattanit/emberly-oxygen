@@ -162,12 +162,14 @@ mod tests {
         KvCache::new(1, 2, 2, 4).append(0, &[0.; 3], &[0.; 4]).unwrap();
     }
 
+    // Spec §3, §14: a misuse of the cache is an internal bug and panics.
     #[test]
     #[should_panic(expected = "a value holds")]
     fn a_value_of_the_wrong_width_panics() {
         KvCache::new(1, 2, 2, 4).append(0, &[0.; 4], &[0.; 5]).unwrap();
     }
 
+    // Spec §3, §14: a misuse of the cache is an internal bug and panics.
     #[test]
     #[should_panic(expected = "not in the cache")]
     fn reading_an_unstored_position_panics() {

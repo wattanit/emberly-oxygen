@@ -4,6 +4,7 @@
 //! normalized in place; only the copies fed to attention, the MLP and the
 //! output are.
 
+use crate::fault::{self, Fault};
 use crate::kv_cache::KvCache;
 use crate::ops::{add_assign, matvec, mul_assign, rms_norm, rope, silu, softmax};
 use crate::weights::Weights;
@@ -21,6 +22,7 @@ pub(crate) fn step(
     cache: &mut KvCache,
     token: u32,
     mut capture: Option<&mut Capture>,
+    fault: Option<Fault>,
 ) -> Result<Vec<f32>, Error> {
     if token as usize >= config.vocab_size {
         return Err(Error::Rejected(format!(
@@ -54,8 +56,13 @@ pub(crate) fn step(
         matvec(&layer.q_proj, &h, &mut q);
         matvec(&layer.k_proj, &h, &mut k);
         matvec(&layer.v_proj, &h, &mut v);
-        rope(&mut q, position, heads, head_dim, theta);
-        rope(&mut k, position, kv_heads, head_dim, theta);
+        if let Some(f) = fault.filter(|f| f.interleaves_rope()) {
+            fault::rope_interleaved(f, &mut q, position, heads, head_dim, theta);
+            fault::rope_interleaved(f, &mut k, position, kv_heads, head_dim, theta);
+        } else {
+            rope(&mut q, position, heads, head_dim, theta);
+            rope(&mut k, position, kv_heads, head_dim, theta);
+        }
         cache.append(index, &k, &v)?;
 
         let mut attended = vec![0f32; heads * head_dim];
@@ -82,12 +89,17 @@ pub(crate) fn step(
     }
 
     // 3. Logits = the tied embedding table times the final-norm output.
-    rms_norm(&x, weights.final_norm.data(), eps, &mut h);
+    if fault.is_some_and(Fault::skips_final_norm) {
+        h.copy_from_slice(&x);
+    } else {
+        rms_norm(&x, weights.final_norm.data(), eps, &mut h);
+    }
     if let Some(c) = capture {
         c.final_norm = h.clone();
     }
     let mut logits = vec![0f32; config.vocab_size];
     matvec(&weights.embed_tokens, &h, &mut logits);
+    fault::perturb_logits(fault, position, &mut logits);
     Ok(logits)
 }
 

@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use crate::fault::Fault;
 use crate::forward;
 use crate::kv_cache::KvCache;
 use crate::safetensors::SafeTensors;
@@ -11,6 +12,7 @@ use crate::{Config, Error};
 pub struct Model {
     config: Config,
     pub(crate) weights: Weights,
+    fault: Option<Fault>,
 }
 
 /// One sequence being processed: the key-value cache lives here (Spec §2).
@@ -38,7 +40,7 @@ impl Model {
         let config = Config::load(model_dir)?;
         let file = SafeTensors::open(&model_dir.join("model.safetensors"))?;
         let weights = Weights::bind(&file, &config)?;
-        Ok(Model { config, weights })
+        Ok(Model { config, weights, fault: None })
     }
 
     pub fn config(&self) -> &Config {
@@ -48,7 +50,15 @@ impl Model {
     /// A model built from parts already in memory, for tests that need a tiny one.
     #[cfg(test)]
     pub(crate) fn from_parts(config: Config, weights: Weights) -> Model {
-        Model { config, weights }
+        Model { config, weights, fault: None }
+    }
+
+    /// Makes the forward pass deliberately wrong in one known way, so a test can
+    /// check that the harness notices (Spec §17). Only exists with the
+    /// `negative-controls` feature, which a normal build never enables.
+    #[cfg(feature = "negative-controls")]
+    pub fn inject_fault(&mut self, fault: Fault) {
+        self.fault = Some(fault);
     }
 
     /// Starts an empty sequence. Capture is off unless asked for.
@@ -73,6 +83,7 @@ impl Session<'_> {
             &mut self.cache,
             token,
             self.capture.as_mut(),
+            self.model.fault,
         )
     }
 

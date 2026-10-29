@@ -94,12 +94,13 @@ The index-order loop is about three times faster than the 1 G per second guessed
 
 The harness must be seen to fail. Three deliberate faults, each behind a test-only switch, and a test asserts the harness fails on each.
 
-- [ ] **Interleaved RoPE pairing:** dimension `2i` pairs with `2i + 1` instead of `i` with `i + d/2`; the intermediates (and so S-2) must fail
-- [ ] **A 2e-3 perturbation of one logit:** just over S-1's 1e-3; the logits check must fail and name the position
-- [ ] **A dropped final norm:** the logits are computed from the un-normalized residual stream; logits and final-norm intermediate must fail
-- [ ] How the switch is compiled in is an implementation choice recorded in plan §9 for the Specification, because it touches the engine's public surface. Candidates: a Cargo feature that only tests enable (for example through a self-referencing dev-dependency), or a hidden constructor. The switch must be impossible to turn on in a normal build and must not change any result when off
-- [ ] Each test runs a short prompt through `check_prompt` with the fault on and asserts a specific check fails (and that with the fault off it passes), so a fault that does nothing is itself caught
-- [ ] Check: every test names S-1, S-2 or Spec §17
+- [x] **Interleaved RoPE pairing:** dimension `2i` pairs with `2i + 1` instead of `i` with `i + d/2`; the intermediates (and so S-2) must fail
+- [x] **A 2e-3 perturbation of one logit:** just over S-1's 1e-3; the logits check must fail and name the position
+- [x] **A dropped final norm:** the logits are computed from the un-normalized residual stream; logits and final-norm intermediate must fail
+- [x] How the switch is compiled in is an implementation choice recorded in plan §9 for the Specification, because it touches the engine's public surface. Candidates: a Cargo feature that only tests enable (for example through a self-referencing dev-dependency), or a hidden constructor. The switch must be impossible to turn on in a normal build and must not change any result when off
+- [x] Each test runs a short prompt through `check_prompt` with the fault on and asserts a specific check fails (and that with the fault off it passes), so a fault that does nothing is itself caught
+- [x] Check: every test names S-1, S-2 or Spec §17
+- [x] Results: the interleaved-RoPE fault fails the intermediates at layer 0, position 1 (position 0 is unrotated); the perturbed logit fails the logits at exactly the injected position with a measured error of about 2e-3 while the intermediates still pass; the dropped final norm fails the logits and the final-norm tensor, with every layer before it passing. With no fault the same prompt passes all numeric checks
 
 ## Phase exit check
 
