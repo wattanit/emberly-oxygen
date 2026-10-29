@@ -51,6 +51,7 @@ Run them from `oracle/` with `uv run python <script>`. They find the repository 
 | `validate_prompts.py` | none | Prints token counts per prompt and fails if `oracle/prompts.json` breaks a category rule. |
 | `tokenizer_corpus.py` | none | Runs the reference tokenizer over about 4,000 strings (the prompts, edge cases and seeded random mixtures of Thai, white space, contractions, digits and emoji) and writes the expected pre-tokenizer pieces and token IDs, plus the oracle's decoded text for every string, every single token and 4,000 random ID sequences, to `fixtures/smollm2-135m/tokenizer-corpus.json`. The engine's tokenizer tests compare against it. Needs the model from `download.py`. |
 | `unicode_classes.py` | none | Measures which characters the reference treats as letters, numbers and white space, by running every Unicode scalar value through its pre-tokenizer, and writes `crates/oxygen/src/tokenizer/unicode_classes.rs`. That file is committed; re-run the script only after changing the model revision. |
+| `rope_reference.py` | none | Prints the reference's rotary-embedding cosines and sines for SmolLM2 (positions 1 and 5000) as Rust constants. They are pasted into the engine's RoPE test, so the script is only needed to regenerate them. Needs the model from `download.py`. |
 
 `--out` is for comparing runs: for example, `uv run python generate.py --out /tmp/run2` writes a second set that you can diff against the first. The engine's tests only read `fixtures/smollm2-135m/`.
 

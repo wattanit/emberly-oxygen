@@ -87,6 +87,33 @@ pub(crate) fn mul_assign(a: &mut [f32], b: &[f32]) {
     }
 }
 
+/// Rotary position embedding in place, for `heads` heads of `head_dim` values
+/// at one position. Half-split pairing: dimension `i` rotates with dimension
+/// `i + head_dim/2`, by the angle `position * theta^(-2i/head_dim)`. The
+/// frequency, angle, sine and cosine are all f32, because the reference
+/// computes them in f32 and a more precise angle is a different angle: at
+/// position 5000 the f32 and f64 cosines differ by 8e-5 (Spec §4).
+pub(crate) fn rope(x: &mut [f32], position: usize, heads: usize, head_dim: usize, theta: f32) {
+    assert!(head_dim % 2 == 0, "head_dim must be even, got {head_dim}");
+    assert_eq!(x.len(), heads * head_dim, "x must hold `heads` heads of `head_dim` values");
+    let half = head_dim / 2;
+    let angles: Vec<(f32, f32)> = (0..half)
+        .map(|i| {
+            let frequency = 1.0 / theta.powf((2 * i) as f32 / head_dim as f32);
+            let angle = position as f32 * frequency;
+            (angle.cos(), angle.sin())
+        })
+        .collect();
+    for head in x.chunks_exact_mut(head_dim) {
+        let (first, second) = head.split_at_mut(half);
+        for ((a, b), &(cos, sin)) in first.iter_mut().zip(second.iter_mut()).zip(&angles) {
+            let (x1, x2) = (*a, *b);
+            *a = x1 * cos - x2 * sin;
+            *b = x2 * cos + x1 * sin;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -254,6 +281,133 @@ mod tests {
     #[should_panic(expected = "weight length")]
     fn rms_norm_with_a_short_weight_panics() {
         rms_norm(&[1., 2.], &[1.], 0.0, &mut [0.; 2]);
+    }
+
+
+    // Reference values: cosines and sines of the rotation angles at positions 1 and 5000, for
+    // SmolLM2-135M's head_dim 64 and rope_theta 100000, from transformers 5.21.0's
+    // LlamaRotaryEmbedding in float32 (torch 2.14.1). Regenerate with
+    // `cd oracle && uv run python rope_reference.py`.
+    const POS1_COS: [f32; 32] = [
+        5.403023362e-01, 7.662379742e-01, 8.837559819e-01, 9.428144097e-01,
+        9.720144868e-01, 9.863391519e-01, 9.933397770e-01, 9.967548251e-01,
+        9.984192848e-01, 9.992301464e-01, 9.996250868e-01, 9.998174310e-01,
+        9.999110699e-01, 9.999567270e-01, 9.999789000e-01, 9.999897480e-01,
+        9.999949932e-01, 9.999975562e-01, 9.999988079e-01, 9.999994636e-01,
+        9.999997020e-01, 9.999998808e-01, 9.999999404e-01, 1.000000000e+00,
+        1.000000000e+00, 1.000000000e+00, 1.000000000e+00, 1.000000000e+00,
+        1.000000000e+00, 1.000000000e+00, 1.000000000e+00, 1.000000000e+00,
+    ];
+    const POS1_SIN: [f32; 32] = [
+        8.414709568e-01, 6.425569057e-01, 4.679480791e-01, 3.333181739e-01,
+        2.349210680e-01, 1.647274643e-01, 1.152217165e-01, 8.049702644e-02,
+        5.620449409e-02, 3.923182935e-02, 2.738077380e-02, 1.910836808e-02,
+        1.333482005e-02, 9.305586107e-03, 6.493770983e-03, 4.531568382e-03,
+        3.162272507e-03, 2.206732286e-03, 1.539925928e-03, 1.074607600e-03,
+        7.498941268e-04, 5.232990952e-04, 3.651741135e-04, 2.548296761e-04,
+        1.778279402e-04, 1.240937709e-04, 8.659643208e-05, 6.042963651e-05,
+        4.216965317e-05, 2.942727224e-05, 2.053524986e-05, 1.433012676e-05,
+    ];
+    const POS5000_COS: [f32; 32] = [
+        1.546684057e-01, -4.024487436e-01, -9.946651459e-01, -8.787785769e-01,
+        -2.613872588e-01, -3.904827535e-01, 7.887293696e-01, 6.987187266e-01,
+        -1.888198312e-03, 1.395955384e-01, 2.587175369e-01, 2.676206231e-01,
+        -7.631481886e-01, -8.279874921e-01, 4.948315620e-01, -7.858231068e-01,
+        -9.946563244e-01, 3.808692470e-02, 1.537368596e-01, 6.136304140e-01,
+        -8.208616376e-01, -8.652752042e-01, -2.523171902e-01, 2.923162580e-01,
+        6.300802827e-01, 8.136059642e-01, 9.077185392e-01, 9.546994567e-01,
+        9.778537154e-01, 9.891949892e-01, 9.947333932e-01, 9.974341989e-01,
+    ];
+    const POS5000_SIN: [f32; 32] = [
+        -9.879664183e-01, 9.154425263e-01, -1.031561196e-01, 4.772297442e-01,
+        -9.652340412e-01, -9.206102490e-01, -6.147406101e-01, 7.153964639e-01,
+        -9.999982119e-01, 9.902086258e-01, -9.659530520e-01, 9.635243416e-01,
+        -6.462234855e-01, 5.607466102e-01, 8.689889312e-01, -6.184512973e-01,
+        -1.032414138e-01, -9.992744327e-01, 9.881118536e-01, -7.895933986e-01,
+        -5.711271167e-01, 5.012971759e-01, 9.676445723e-01, 9.563217163e-01,
+        7.765299678e-01, 5.814166665e-01, 4.195796251e-01, 2.975717783e-01,
+        2.092894614e-01, 1.466060430e-01, 1.024959385e-01, 7.158934325e-02,
+    ];
+
+    /// Rotating `[1; 32] ++ [0; 32]` gives the cosines in the first half and the sines in the second.
+    fn rotation_table(position: usize) -> (Vec<f32>, Vec<f32>) {
+        let mut x = vec![0f32; 64];
+        x[..32].fill(1.0);
+        rope(&mut x, position, 1, 64, 100000.0);
+        (x[..32].to_vec(), x[32..].to_vec())
+    }
+
+    // Spec §4, §17: the f32 angles reproduce the reference's cosines and sines, including at a
+    // high position where an f64 angle would already differ by 8e-5.
+    #[test]
+    fn rope_matches_the_reference_rotation_table() {
+        for (position, cos, sin) in [(1, POS1_COS, POS1_SIN), (5000, POS5000_COS, POS5000_SIN)] {
+            let (our_cos, our_sin) = rotation_table(position);
+            close(&our_cos, &cos, 1e-6);
+            close(&our_sin, &sin, 1e-6);
+        }
+    }
+
+    // Spec §4, §17: position 0 rotates by nothing, exactly.
+    #[test]
+    fn rope_is_the_identity_at_position_zero() {
+        let original = random(21, 3 * 8);
+        let mut x = original.clone();
+        rope(&mut x, 0, 3, 8, 10000.0);
+        assert_eq!(x, original);
+    }
+
+    // Spec §4, §17: hand-computed rotation at position 1 for head_dim 4, theta 10000. The two
+    // frequencies are 10000^0 = 1 and 10000^(-1/2) = 0.01, so the pairs (x0, x2) and (x1, x3)
+    // turn by 1 and 0.01 radians.
+    #[test]
+    fn rope_hand_computed_at_position_one() {
+        let mut x = [1f32, 2., 3., 4.];
+        rope(&mut x, 1, 1, 4, 10000.0);
+        close(&x, &[-1.984_110_6, 1.959_900_7, 2.462_378_0, 4.019_799_7], 1e-6);
+    }
+
+    // Spec §4: the first pair turns by exactly `position` radians, since its frequency is 1.
+    #[test]
+    fn rope_first_pair_turns_by_the_position() {
+        for position in [1usize, 2, 7, 100] {
+            let mut x = [1f32, 0., 0., 0.];
+            rope(&mut x, position, 1, 4, 10000.0);
+            let angle = position as f64;
+            close(&x[..1], &[angle.cos() as f32], 1e-5);
+            close(&x[2..3], &[angle.sin() as f32], 1e-5);
+        }
+    }
+
+    // Spec §4: a rotation never changes the length of a pair, and every head turns independently
+    // by the same angles.
+    #[test]
+    fn rope_preserves_pair_lengths_and_treats_heads_alike() {
+        let head = random(33, 8);
+        let mut two = [head.clone(), head.clone()].concat();
+        rope(&mut two, 9, 2, 8, 10000.0);
+        assert_eq!(&two[..8], &two[8..], "identical heads stay identical");
+        let mut one = head.clone();
+        rope(&mut one, 9, 1, 8, 10000.0);
+        assert_eq!(&two[..8], &one[..], "a head does not depend on its neighbour");
+        for i in 0..4 {
+            let before = head[i].hypot(head[i + 4]);
+            let after = one[i].hypot(one[i + 4]);
+            assert!((before - after).abs() < 1e-6, "pair {i}: {before} vs {after}");
+        }
+    }
+
+    // Spec §14: a head_dim that cannot be paired, or a wrong length, is an internal bug.
+    #[test]
+    #[should_panic(expected = "even")]
+    fn rope_with_odd_head_dim_panics() {
+        rope(&mut [0.; 3], 1, 1, 3, 10000.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "heads")]
+    fn rope_with_wrong_length_panics() {
+        rope(&mut [0.; 7], 1, 2, 4, 10000.0);
     }
 
     // HC-1, HC-2, Spec §4: hand-computed 2x3 case.
