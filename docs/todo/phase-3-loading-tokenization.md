@@ -101,10 +101,11 @@ Hand-written, no regex crate (Spec §6). Two stages in the order the file declar
 
 - [x] `StreamDecoder` holding a byte buffer: after each token push, emit the longest valid UTF-8 prefix and hold back an incomplete trailing sequence of at most 3 bytes
 - [x] Bytes that cannot begin or continue a valid sequence become U+FFFD immediately and are not held; `flush` emits whatever is held the same way
-- [x] Emitted text concatenated over a whole stream equals one-shot `decode` of the same IDs (property test over every prompt's fixture IDs and continuation IDs)
+- [x] Emitted text concatenated over a whole stream equals one-shot `decode` of the same IDs (property test over the reference IDs of every corpus string, which include every prompt, over 4,000 random ID sequences and over every single token; the manifest's continuation IDs are covered by the harness in 3.12)
 - [x] Never emit an incomplete sequence at any chunk boundary
 - [x] Check: unit test splits a three-byte Thai character across every possible chunk boundary (1+2, 2+1, 1+1+1) and asserts nothing is emitted until the character completes
 - [x] Check: invalid-byte cases: a stray continuation byte, a truncated four-byte sequence followed by ASCII, a flush with held bytes
+- [x] Check: with held-back bytes emitted as replacements instead, all 7 streaming tests fail, so they detect the error they are there for
 
 ## 3.12 Wire into the harness (FR-13 to FR-15, Spec §11)
 

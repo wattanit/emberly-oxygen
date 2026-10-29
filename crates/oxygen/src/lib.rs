@@ -18,4 +18,4 @@ pub use error::Error;
 pub use generate::generate;
 pub use model::{Capture, Model, Session};
 pub use tensor::Tensor;
-pub use tokenizer::Tokenizer;
+pub use tokenizer::{StreamDecoder, Tokenizer};

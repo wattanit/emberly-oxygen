@@ -2,6 +2,7 @@ mod bpe;
 mod byte_map;
 mod components;
 mod pretokenize;
+mod stream;
 mod unicode_classes;
 
 use std::collections::HashMap;
@@ -12,6 +13,7 @@ use serde_json::Value;
 use crate::Error;
 use bpe::Bpe;
 use byte_map::ByteMap;
+pub use stream::StreamDecoder;
 
 /// Byte-level BPE tokenizer (Spec §6).
 pub struct Tokenizer {
@@ -168,7 +170,7 @@ mod tests {
 
     use super::*;
 
-    fn model_dir() -> PathBuf {
+    pub(super) fn model_dir() -> PathBuf {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/smollm2-135m");
         assert!(dir.exists(), "{}: missing; run `cd oracle && uv run python download.py`", dir.display());
         dir
@@ -343,7 +345,7 @@ mod tests {
         );
     }
 
-    fn corpus() -> Value {
+    pub(super) fn corpus() -> Value {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/smollm2-135m/tokenizer-corpus.json");
         let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
             panic!("{path}: {e}; run `cd oracle && uv run python tokenizer_corpus.py`")
@@ -351,7 +353,7 @@ mod tests {
         serde_json::from_str(&text).unwrap()
     }
 
-    fn ids_of(value: &Value) -> Vec<u32> {
+    pub(super) fn ids_of(value: &Value) -> Vec<u32> {
         value.as_array().unwrap().iter().map(|n| n.as_u64().unwrap() as u32).collect()
     }
 
