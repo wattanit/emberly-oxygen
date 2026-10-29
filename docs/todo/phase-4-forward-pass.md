@@ -20,14 +20,24 @@ The 12 prompts hold 2,596 positions, and every position computes all layers and 
 
 ## 4.1 Matrix-vector product and its speed (HC-1, HC-2, Spec §4, §17)
 
-- [ ] `ops::matvec(weight, input, output)`: output element `i` is the dot product of weight row `i` with the input, matching the published `[out, in]` layout; f32 accumulation in index order
-- [ ] Shape errors are impossible by construction for the engine's own calls; the function asserts input and output lengths (a mismatch is an internal bug, Spec §14)
-- [ ] Add `matrixmultiply` to `[dev-dependencies]`
-- [ ] Unit tests against `matrixmultiply::sgemm` (as an `[out, in] × [in, 1]` product) on seeded random inputs, at every shape the model uses: `[576, 576]`, `[192, 576]`, `[1536, 576]`, `[576, 1536]` and the tied output projection `[49152, 576]`; the error bound is stated in the test and is far below S-1
-- [ ] Hand-computed small cases (identity matrix, a 2×3 example) and zero-sized edge cases
-- [ ] **Measure:** a test that prints (not asserts) the time and multiply-adds per second of `matvec` at the five shapes, and the estimated time of a full harness run (349 G multiply-adds divided by the measured rate); record the figures in the commit message and below
-- [ ] **Stop and report the figures to the owner before starting 4.2**, with the three options above, if the estimate exceeds about 60 seconds
-- [ ] Check: every test names HC-1, HC-2 or Spec §4
+- [x] `ops::matvec(weight, input, output)`: output element `i` is the dot product of weight row `i` with the input, matching the published `[out, in]` layout; f32 accumulation in index order
+- [x] Shape errors are impossible by construction for the engine's own calls; the function asserts input and output lengths (a mismatch is an internal bug, Spec §14)
+- [x] Add `matrixmultiply` to `[dev-dependencies]`
+- [x] Unit tests against `matrixmultiply::sgemm` (as an `[out, in] × [in, 1]` product) on seeded random inputs, at every shape the model uses: `[576, 576]`, `[192, 576]`, `[1536, 576]`, `[576, 1536]` and the tied output projection `[49152, 576]`; the error bound is stated in the test and is far below S-1
+- [x] Hand-computed small cases (identity matrix, a 2×3 example) and zero-sized edge cases
+- [x] **Measure:** a test that prints (not asserts) the time and multiply-adds per second of `matvec` at the five shapes, and the estimated time of a full harness run (349 G multiply-adds divided by the measured rate); record the figures in the commit message and below
+- [ ] **Stop and report the figures to the owner before starting 4.2** (reported; waiting for the owner's choice, then tick), with the three options above, if the estimate exceeds about 60 seconds
+- [x] Check: every test names HC-1, HC-2 or Spec §4
+
+Measured (Apple M5, the test profile, `cargo test -p emberly-oxygen --lib -- --ignored --nocapture matvec_speed`), matrix-vector part only, so attention, norms and RoPE come on top (up to about 13% more on the 500-token prompts):
+
+| Dot product | multiply-adds per second | per token | full harness run (2,596 positions) |
+| --- | --- | --- | --- |
+| Index order (Spec §4 as written) | 2.3 to 3.0 G | 47.5 ms | about 123 s |
+| 4 partial sums | 5.7 to 5.8 G | 23.3 ms | about 60 s |
+| 8 partial sums | 14 to 16 G | 8.8 ms | about 23 s |
+
+The index-order loop is about three times faster than the 1 G per second guessed above, so a full run is about 2 minutes, not 6 to 8. It still exceeds the 60-second threshold set above, hence the stop.
 
 ## 4.2 RMSNorm, softmax, SiLU, add, multiply (Spec §4, §17)
 

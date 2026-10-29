@@ -8,6 +8,7 @@ mod config;
 mod error;
 mod generate;
 mod model;
+mod ops;
 mod safetensors;
 mod tensor;
 mod tokenizer;
