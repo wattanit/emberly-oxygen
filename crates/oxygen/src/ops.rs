@@ -29,6 +29,64 @@ pub(crate) fn matvec(weight: &Tensor, input: &[f32], output: &mut [f32]) {
     }
 }
 
+/// RMSNorm: `weight * (x / sqrt(mean(x^2) + eps))`. The mean of squares is a
+/// sum in index order divided by the length, and the reciprocal square root
+/// is taken once, then multiplied in, as the reference does in f32.
+pub(crate) fn rms_norm(x: &[f32], weight: &[f32], eps: f32, out: &mut [f32]) {
+    assert_eq!(weight.len(), x.len(), "weight length must equal the input's");
+    assert_eq!(out.len(), x.len(), "output length must equal the input's");
+    let mut sum = 0f32;
+    for v in x {
+        sum += v * v;
+    }
+    let scale = 1.0 / (sum / x.len() as f32 + eps).sqrt();
+    for ((o, v), w) in out.iter_mut().zip(x).zip(weight) {
+        *o = w * (v * scale);
+    }
+}
+
+/// Softmax in place. The maximum is subtracted first, so a large score cannot
+/// overflow `exp`, and a very small one underflows to 0 instead of NaN.
+/// Scores are finite: the engine never masks with infinity (attention only
+/// reads cached positions).
+pub(crate) fn softmax(x: &mut [f32]) {
+    let Some(max) = x.iter().copied().reduce(f32::max) else {
+        return;
+    };
+    let mut sum = 0f32;
+    for v in x.iter_mut() {
+        *v = (*v - max).exp();
+        sum += *v;
+    }
+    for v in x.iter_mut() {
+        *v /= sum;
+    }
+}
+
+/// SiLU in place: `x * sigmoid(x) = x / (1 + exp(-x))`. For a large negative
+/// `x`, `exp(-x)` is infinite and the result is -0, not NaN.
+pub(crate) fn silu(x: &mut [f32]) {
+    for v in x.iter_mut() {
+        *v /= 1.0 + (-*v).exp();
+    }
+}
+
+/// `a[i] += b[i]`.
+pub(crate) fn add_assign(a: &mut [f32], b: &[f32]) {
+    assert_eq!(a.len(), b.len(), "operands must have equal lengths");
+    for (x, y) in a.iter_mut().zip(b) {
+        *x += y;
+    }
+}
+
+/// `a[i] *= b[i]`.
+pub(crate) fn mul_assign(a: &mut [f32], b: &[f32]) {
+    assert_eq!(a.len(), b.len(), "operands must have equal lengths");
+    for (x, y) in a.iter_mut().zip(b) {
+        *x *= y;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
@@ -67,6 +125,135 @@ mod tests {
             );
         }
         out
+    }
+
+
+    fn close(actual: &[f32], expected: &[f32], tolerance: f32) {
+        assert_eq!(actual.len(), expected.len());
+        for (i, (a, e)) in actual.iter().zip(expected).enumerate() {
+            assert!((a - e).abs() <= tolerance, "element {i}: {a} vs {e} (tolerance {tolerance})");
+        }
+    }
+
+    // Spec §4, §17: RMSNorm of [3, 4] has mean square 12.5, so the scale is 1/sqrt(12.5).
+    #[test]
+    fn rms_norm_hand_computed() {
+        let mut out = [0f32; 2];
+        rms_norm(&[3., 4.], &[1., 1.], 0.0, &mut out);
+        close(&out, &[0.848_528_1, 1.131_370_9], 1e-6);
+        rms_norm(&[3., 4.], &[2., 0.5], 0.0, &mut out);
+        close(&out, &[1.697_056_3, 0.565_685_4], 1e-6);
+    }
+
+    // Spec §4, §17: with unit weights the output has unit mean square, whatever the input's scale.
+    #[test]
+    fn rms_norm_output_has_unit_rms() {
+        for scale in [1e-3f32, 1.0, 1e3] {
+            let x: Vec<f32> = random(5, 64).iter().map(|v| v * scale).collect();
+            let mut out = vec![0f32; 64];
+            rms_norm(&x, &vec![1.0; 64], 0.0, &mut out);
+            let mean_square: f32 = out.iter().map(|v| v * v).sum::<f32>() / 64.0;
+            assert!((mean_square - 1.0).abs() < 1e-5, "scale {scale}: {mean_square}");
+        }
+    }
+
+    // Spec §4: eps is added inside the square root, so it shows, and it keeps a zero input finite.
+    #[test]
+    fn rms_norm_epsilon() {
+        let mut out = [0f32; 1];
+        rms_norm(&[1.], &[1.], 1.0, &mut out);
+        close(&out, &[std::f32::consts::FRAC_1_SQRT_2], 1e-7); // 1 / sqrt(1 + 1)
+        let mut out = [9f32; 3];
+        rms_norm(&[0., 0., 0.], &[1., 2., 3.], 1e-5, &mut out);
+        assert_eq!(out, [0., 0., 0.]);
+        rms_norm(&[], &[], 1e-5, &mut []);
+    }
+
+    // Spec §4, §17: softmax of [1, 2, 3] is the textbook [0.0900, 0.2447, 0.6652]; it sums to 1.
+    #[test]
+    fn softmax_hand_computed() {
+        let mut x = [1f32, 2., 3.];
+        softmax(&mut x);
+        close(&x, &[0.090_030_57, 0.244_728_47, 0.665_240_96], 1e-7);
+        assert!((x.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+        let mut equal = [5f32, 5.];
+        softmax(&mut equal);
+        assert_eq!(equal, [0.5, 0.5]);
+        let mut one = [-123f32];
+        softmax(&mut one);
+        assert_eq!(one, [1.0]);
+        softmax(&mut []);
+    }
+
+    // Spec §4, §17: subtracting the maximum keeps large scores finite and small ones at 0.
+    #[test]
+    fn softmax_does_not_overflow() {
+        let mut x = [1000f32, 1000., 999.];
+        softmax(&mut x);
+        close(&x, &[0.422_318_8, 0.422_318_8, 0.155_362_4], 1e-6);
+        assert!(x.iter().all(|v| v.is_finite()));
+        let mut x = [0f32, -1000.];
+        softmax(&mut x);
+        assert_eq!(x, [1.0, 0.0]);
+        let mut x = [3e38f32, 3e38];
+        softmax(&mut x);
+        assert_eq!(x, [0.5, 0.5]);
+    }
+
+    // Spec §4: adding a constant to every score changes nothing, which is why the maximum can be removed.
+    #[test]
+    fn softmax_is_shift_invariant() {
+        let base = random(9, 32);
+        let mut a = base.clone();
+        softmax(&mut a);
+        for shift in [-500.0f32, 7.5, 500.0] {
+            let mut b: Vec<f32> = base.iter().map(|v| v + shift).collect();
+            softmax(&mut b);
+            close(&b, &a, 1e-5);
+        }
+    }
+
+    // Spec §4, §17: SiLU at 0, +-1, and far out on both sides.
+    #[test]
+    fn silu_hand_computed_and_limits() {
+        let mut x = [0f32, 1., -1., 100., -1000., 1e30, -1e30];
+        silu(&mut x);
+        assert_eq!(x[0], 0.0);
+        close(&x[1..3], &[0.731_058_6, -0.268_941_4], 1e-7);
+        assert_eq!(x[3], 100.0, "large positive values pass through");
+        assert!(x[4..].iter().all(|v| !v.is_nan()), "{x:?}");
+        assert!(x[4].abs() < 1e-30 && x[6].abs() < 1e-30, "large negative values go to zero: {x:?}");
+        assert_eq!(x[5], 1e30);
+    }
+
+    // Spec §4: elementwise operations on equal lengths; a mismatch is an internal bug.
+    #[test]
+    fn elementwise_add_and_multiply() {
+        let mut a = [1f32, 2., 3.];
+        add_assign(&mut a, &[10., 20., 30.]);
+        assert_eq!(a, [11., 22., 33.]);
+        mul_assign(&mut a, &[2., 0., -1.]);
+        assert_eq!(a, [22., 0., -33.]);
+        add_assign(&mut [], &[]);
+        mul_assign(&mut [], &[]);
+    }
+
+    #[test]
+    #[should_panic(expected = "equal lengths")]
+    fn add_with_unequal_lengths_panics() {
+        add_assign(&mut [1., 2.], &[1.]);
+    }
+
+    #[test]
+    #[should_panic(expected = "equal lengths")]
+    fn multiply_with_unequal_lengths_panics() {
+        mul_assign(&mut [1.], &[1., 2.]);
+    }
+
+    #[test]
+    #[should_panic(expected = "weight length")]
+    fn rms_norm_with_a_short_weight_panics() {
+        rms_norm(&[1., 2.], &[1.], 0.0, &mut [0.; 2]);
     }
 
     // HC-1, HC-2, Spec §4: hand-computed 2x3 case.

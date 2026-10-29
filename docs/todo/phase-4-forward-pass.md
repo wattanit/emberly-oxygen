@@ -41,14 +41,14 @@ The index-order loop is about three times faster than the 1 G per second guessed
 
 ## 4.2 RMSNorm, softmax, SiLU, add, multiply (Spec §4, §17)
 
-- [ ] `rms_norm(x, weight, eps, out)`: `x · w / sqrt(mean(x²) + eps)`, with `eps` from the configuration; the reference computes the mean of squares and the reciprocal square root in f32 and then multiplies by the weight, so use that order
-- [ ] `softmax(x)` in place: subtract the maximum first, then exponentiate and divide by the sum
-- [ ] `silu(x)` in place: `x / (1 + exp(-x))`
-- [ ] `add_assign(a, b)` and `mul_assign(a, b)`: elementwise, lengths asserted
-- [ ] Hand-computed small cases for each; RMSNorm of a known vector with unit weights, with a weight and with `eps` visible (an all-zero input must not produce NaN)
-- [ ] Softmax: sums to 1 within 1e-6, equal inputs give equal outputs, a large-score case (for example `[1000, 1000, 999]`) does not overflow and a very negative score underflows to 0 rather than NaN, one-element input gives `[1.0]`
-- [ ] SiLU at 0, at a large positive value (≈ x) and at a large negative value (≈ 0, no NaN from `exp` overflow)
-- [ ] Check: every test names Spec §4 or §17
+- [x] `rms_norm(x, weight, eps, out)`: `x · w / sqrt(mean(x²) + eps)`, with `eps` from the configuration; the reference computes the mean of squares and the reciprocal square root in f32 and then multiplies by the weight, so use that order
+- [x] `softmax(x)` in place: subtract the maximum first, then exponentiate and divide by the sum
+- [x] `silu(x)` in place: `x / (1 + exp(-x))`
+- [x] `add_assign(a, b)` and `mul_assign(a, b)`: elementwise, lengths asserted
+- [x] Hand-computed small cases for each; RMSNorm of a known vector with unit weights, with a weight and with `eps` visible (an all-zero input must not produce NaN)
+- [x] Softmax: sums to 1 within 1e-6, equal inputs give equal outputs, a large-score case (for example `[1000, 1000, 999]`) does not overflow and a very negative score underflows to 0 rather than NaN, one-element input gives `[1.0]`
+- [x] SiLU at 0, at a large positive value (≈ x) and at a large negative value (≈ 0, no NaN from `exp` overflow)
+- [x] Check: every test names Spec §4 or §17
 
 ## 4.3 RoPE (Spec §4, §17)
 
