@@ -1,6 +1,6 @@
 //! Calls every method of the engine surface once. The tokenizer is real since
-//! Phase 3; the forward pass and generation are still stubs, and this file is
-//! removed when the correctness harness covers them.
+//! Phase 3 and the forward pass since Phase 4; generation is still a stub, and
+//! this file is removed when the correctness harness covers it (Phase 5).
 
 use std::path::Path;
 
@@ -17,8 +17,10 @@ fn stub_surface_runs_without_panicking() {
     assert_eq!(tokenizer.decode(&ids).unwrap(), "hello");
 
     let mut session = model.session(true);
-    assert!(session.step(0).unwrap().is_empty());
-    assert!(session.capture().unwrap().layers.is_empty());
+    let logits = session.step(0).unwrap();
+    assert_eq!(logits.len(), model.config().vocab_size);
+    assert!(logits.iter().all(|x| x.is_finite()));
+    assert_eq!(session.capture().unwrap().layers.len(), model.config().layers);
     assert!(model.session(false).capture().is_none());
 
     let mut pieces = Vec::new();

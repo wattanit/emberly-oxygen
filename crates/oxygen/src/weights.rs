@@ -9,8 +9,6 @@ use crate::safetensors::SafeTensors;
 use crate::{Config, Error, Tensor};
 
 /// One decoder layer's weights. Matrices keep the published `[out, in]` layout.
-// Fields are read by the forward pass in Phase 4.
-#[allow(dead_code)]
 pub struct LayerWeights {
     pub attn_norm: Tensor,
     pub q_proj: Tensor,
@@ -25,7 +23,6 @@ pub struct LayerWeights {
 
 /// Every learned parameter of the model. The embedding table doubles as the
 /// output projection because embeddings are tied (Spec §3).
-#[allow(dead_code)]
 pub struct Weights {
     pub embed_tokens: Tensor,
     pub layers: Vec<LayerWeights>,

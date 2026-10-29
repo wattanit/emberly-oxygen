@@ -3,9 +3,6 @@
 //! Appending a position is one extend, and reading position `t` is one
 //! contiguous slice, so attention walks the cache without any gathering.
 
-// The forward pass (task 4.5) is the first caller of the cache, and removes this.
-#![allow(dead_code)]
-
 use crate::Error;
 
 pub(crate) struct KvCache {

@@ -3,9 +3,6 @@
 //! or threading (HC-1). The reference sums in a different order, so results
 //! differ in the last bits; S-1 and S-2 bound that difference.
 
-// The forward pass (task 4.5) is the first caller of these, and removes this.
-#![allow(dead_code)]
-
 use crate::Tensor;
 
 /// `output[i]` = dot product of weight row `i` with `input`, for a weight in

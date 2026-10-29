@@ -6,6 +6,7 @@
 
 mod config;
 mod error;
+mod forward;
 mod generate;
 mod kv_cache;
 mod model;

@@ -67,15 +67,17 @@ The index-order loop is about three times faster than the 1 G per second guessed
 
 ## 4.5 Forward pass for one token (FR-1, Spec §7)
 
-- [ ] `Session` holds a `KvCache` and the next position; `Session::step(token)` runs Spec §7 steps 1 to 3 and returns logits
-- [ ] Step 1: embedding row of the token; an ID outside the vocabulary is `Rejected` naming it
-- [ ] Step 2, per layer: RMSNorm with the attention norm; query, key, value projections; RoPE on query and key; append key and value; each query head attends over cached positions `0..=p` of key-value head `head / (heads / kv_heads)`, scores scaled by `1/sqrt(head_dim)`, softmax, weighted sum of values; output projection added to `x`; RMSNorm with the MLP norm; `x += down(silu(gate(h)) × up(h))`
-- [ ] Step 3: final RMSNorm, then the tied embedding table as the output projection, giving `vocab` logits
-- [ ] The residual stream `x` is never normalized in place; only the copies fed to attention, the MLP and the output are
-- [ ] Capture (off by default): embedding, raw output of every layer, and the final-norm output, exactly as the stub's `Capture` documents them; capture off allocates nothing extra
-- [ ] A step after the context is full is `Rejected`, and the failed step leaves the session unchanged
-- [ ] Unit tests on a **tiny synthetic model** (a few dimensions, weights chosen by hand): a one-layer, one-head case small enough to compute by hand; grouped-query indexing with 4 query heads over 2 key-value heads (heads in the same group read the same key-value head, heads in different groups do not); causality (a later token never changes an earlier position's logits); capture shapes and that the capture's last layer plus the final norm reproduces the logits
-- [ ] Check: no `unsafe`, no threads, no dependency added; every test names FR-1 or Spec §7
+- [x] `Session` holds a `KvCache` and the next position; `Session::step(token)` runs Spec §7 steps 1 to 3 and returns logits
+- [x] Step 1: embedding row of the token; an ID outside the vocabulary is `Rejected` naming it
+- [x] Step 2, per layer: RMSNorm with the attention norm; query, key, value projections; RoPE on query and key; append key and value; each query head attends over cached positions `0..=p` of key-value head `head / (heads / kv_heads)`, scores scaled by `1/sqrt(head_dim)`, softmax, weighted sum of values; output projection added to `x`; RMSNorm with the MLP norm; `x += down(silu(gate(h)) × up(h))`
+- [x] Step 3: final RMSNorm, then the tied embedding table as the output projection, giving `vocab` logits
+- [x] The residual stream `x` is never normalized in place; only the copies fed to attention, the MLP and the output are
+- [x] Capture (off by default): embedding, raw output of every layer, and the final-norm output, exactly as the stub's `Capture` documents them; capture off allocates nothing extra
+- [x] A step after the context is full is `Rejected`, and the failed step leaves the session unchanged
+- [x] Unit tests on a **tiny synthetic model** (a few dimensions, weights chosen by hand): a one-layer, one-head case small enough to compute by hand; grouped-query indexing with 4 query heads over 2 key-value heads (heads in the same group read the same key-value head, heads in different groups do not); causality (a later token never changes an earlier position's logits); capture shapes and that the capture's last layer plus the final norm reproduces the logits
+- [x] Check: no `unsafe`, no threads, no dependency added; every test names FR-1 or Spec §7
+- [x] The harness's first run against the real engine: logits, top-1 and intermediates pass for all 12 prompts; largest logit error 2.36e-4 and largest relative intermediate error 5.9e-6; the full run takes about 125 s (the figure estimated in 4.1 was about 123 s for the matrix-vector part)
+- [x] `stub_smoke.rs` updated: the model step is real now, so it checks finite logits of the vocabulary's length and one capture per layer; only `generate` is still a stub
 
 ## 4.6 Connect to the harness (S-1 to S-3, FR-6)
 
