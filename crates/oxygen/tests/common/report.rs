@@ -55,7 +55,7 @@ pub fn render(results: &[CheckResult]) -> Report {
             text.push('\n');
         }
 
-        writeln!(text, "\ncategory     prompts  result").unwrap();
+        writeln!(text, "\ncategory     prompts  result  max logit error  max intermediate error").unwrap();
         for category in distinct(rows.iter().map(|r| r.category.as_str())) {
             let of_category: Vec<_> = rows.iter().filter(|r| r.category == category).collect();
             let prompts = distinct(of_category.iter().map(|r| r.prompt.as_str()));
@@ -64,7 +64,20 @@ pub fn render(results: &[CheckResult]) -> Report {
                 .filter(|p| of_category.iter().any(|r| r.prompt == **p && r.verdict.is_failure()))
                 .count();
             let verdict = if bad == 0 { "pass" } else { "FAIL" };
-            writeln!(text, "{category:<12} {:>2}/{:<5} {verdict}", prompts.len() - bad, prompts.len()).unwrap();
+            // Worst error measured within the category, for the checks that measure one (S-1, S-2).
+            let worst = |check: Check| {
+                let e = of_category.iter().filter(|r| r.check == check).filter_map(|r| r.max_error);
+                e.fold(None, |m: Option<f32>, e| Some(m.map_or(e, |m| m.max(e)))).map_or("-".to_string(), |e| format!("{e:e}"))
+            };
+            writeln!(
+                text,
+                "{category:<12} {:>2}/{:<5} {verdict:<7} {:<16} {}",
+                prompts.len() - bad,
+                prompts.len(),
+                worst(Check::Logits),
+                worst(Check::Intermediates)
+            )
+            .unwrap();
             if bad > 0 {
                 failed.push((model.to_string(), category.to_string()));
             }

@@ -108,3 +108,23 @@ fn the_measured_error_is_printed() {
     let report = render(&results("a1", "english", passing()));
     assert!(report.text.contains("largest logit error: 2.5e-4"), "{}", report.text);
 }
+
+// S-1, S-2, FR-5: the category summary gives each category's own worst error, not only the overall one.
+#[test]
+fn the_measured_error_is_printed_per_category() {
+    let mut all = results("a1", "english", passing());
+    // `results` gives the logits check 2.5e-4; give the thai prompt a larger one.
+    let mut thai = results("t1", "thai", passing());
+    for r in &mut thai {
+        if r.check == Check::Logits {
+            r.max_error = Some(7.5e-4);
+        }
+        if r.check == Check::Intermediates {
+            r.max_error = Some(3e-6);
+        }
+    }
+    all.extend(thai);
+    let text = squeeze(&render(&all).text);
+    assert!(text.contains("english 1/1 pass 2.5e-4 -"), "{text}");
+    assert!(text.contains("thai 1/1 pass 7.5e-4 3e-6"), "{text}");
+}

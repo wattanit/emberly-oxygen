@@ -81,13 +81,14 @@ The index-order loop is about three times faster than the 1 G per second guessed
 
 ## 4.6 Connect to the harness (S-1 to S-3, FR-6)
 
-- [ ] The harness already feeds the engine one token at a time with capture on; nothing in `tests/common/` should need to change except for the checks below
-- [ ] Run the shortest prompts first (`english-short`, `utf8-split-emoji`, `english-medium`) and read the first-diverging-layer report (FR-6) on every failure; fix the engine, never the tolerance
-- [ ] Work through each failure by the layer report: embedding first, then layer 0, and so on; a bug is found in the first layer that is wrong, and a unit test in `ops` or `forward` is added for it so it cannot come back
-- [ ] Then the remaining categories, `long` last
-- [ ] Record the **measured maximum logit error and maximum relative intermediate error per category** (plan §8, Phase 4 exit); if they suggest changing 1e-3 or 1e-4, record that in plan §9 and do not change the thresholds here
-- [ ] Record how long the full run takes, and compare it with the 4.1 estimate
-- [ ] Check: with a real forward pass, the harness table shows encode, decode, streaming, logits, top-1 and intermediates passing in every category; greedy still fails (Phase 5)
+- [x] The harness already feeds the engine one token at a time with capture on; nothing in `tests/common/` should need to change except for the checks below
+- [x] Run the shortest prompts first (`english-short`, `utf8-split-emoji`, `english-medium`) and read the first-diverging-layer report (FR-6) on every failure; fix the engine, never the tolerance
+- [x] Work through each failure by the layer report: embedding first, then layer 0, and so on; a bug is found in the first layer that is wrong, and a unit test in `ops` or `forward` is added for it so it cannot come back
+- [x] Then the remaining categories, `long` last. No failures needed fixing: every prompt passed logits, top-1 and intermediates on the first run, so no bug was found by the layer report (the report itself is exercised by the negative controls in 4.7)
+- [x] Record the **measured maximum logit error and maximum relative intermediate error per category** (plan §8, Phase 4 exit); if they suggest changing 1e-3 or 1e-4, record that in plan §9 and do not change the thresholds here
+- [x] Record how long the full run takes, and compare it with the 4.1 estimate
+- [x] Check: with a real forward pass, the harness table shows encode, decode, streaming, logits, top-1 and intermediates passing in every category; greedy still fails (Phase 5)
+- [x] The harness's category summary now prints each category's own worst logit and intermediate error (`tests/report.rs` tests it), and the figures are recorded in plan §8
 
 ## 4.7 Negative controls (Spec §17, S-1, S-2)
 

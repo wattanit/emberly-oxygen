@@ -126,6 +126,18 @@ Kernels come first and one at a time, because a kernel bug found through the ful
 Filled in during the phases; they are inputs to the Specification's and Requirements' "tune with the first measured comparison" clauses and are not tuned here.
 
 - Maximum logit error and intermediate error per category (Phase 4 exit) — for S-1 and S-2.
+
+  Measured at Phase 4 exit with the harness over all 12 prompts (Apple M5, f32, index-order accumulation; thresholds S-1 1e-3 absolute, S-2 1e-4 relative). Every prompt passed with a wide margin: the worst logit error is under a quarter of S-1's limit and the worst intermediate error under a sixteenth of S-2's.
+
+  | Category | Prompts | Max logit error (S-1) | Max relative intermediate error (S-2) |
+  | --- | --- | --- | --- |
+  | english | 2 | 1.81e-4 | 4.78e-6 |
+  | thai | 2 | 2.36e-4 | 5.38e-6 |
+  | code | 3 | 1.97e-4 | 5.91e-6 |
+  | utf8-split | 2 | 2.16e-4 | 4.59e-6 |
+  | long | 3 | 1.81e-4 | 5.21e-6 |
+
+  The `english` and `long` logit maxima are identical because `english-short` and `long-prose` both start with the token `The`, and the logits at position 0 depend on that token alone. The margins do not suggest changing 1e-3 or 1e-4 yet: the long prompts (about 500 positions) are no worse than the short ones, so the error is not growing with context at this length. A full harness run takes about 125 s.
 - Near-ties encountered in greedy continuations (Phase 5) — for S-3 and S-4.
 - Run-to-run logit difference (task 5.7) — for S-6.
 
