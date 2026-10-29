@@ -29,9 +29,12 @@ uv run python generate.py
 
 # 4. Check the prompt set against the model's tokenizer (optional)
 uv run python validate_prompts.py
+
+# 5. Generate the tokenizer's comparison corpus (about 1 MB, a few seconds)
+uv run python tokenizer_corpus.py
 cd ..
 
-# 5. Build and test the engine
+# 6. Build and test the engine
 cargo test
 ```
 
@@ -46,6 +49,8 @@ Run them from `oracle/` with `uv run python <script>`. They find the repository 
 | `download.py` | none | Fetches `config.json`, `model.safetensors` and `tokenizer.json` of `HuggingFaceTB/SmolLM2-135M` at the pinned commit into `models/smollm2-135m/`. Checks the commit and file sizes. Safe to re-run: files already present are not downloaded again. The download is anonymous, so a stale Hugging Face token on the machine does not matter. |
 | `generate.py` | `--out DIR` (optional) | Runs the model through Hugging Face `transformers` in float32 on CPU and writes one safetensors file per prompt plus `manifest.json`. Without `--out` it writes to `fixtures/smollm2-135m/`. Needs the model from `download.py`. |
 | `validate_prompts.py` | none | Prints token counts per prompt and fails if `oracle/prompts.json` breaks a category rule. |
+| `tokenizer_corpus.py` | none | Runs the reference tokenizer over about 4,000 strings (the prompts, edge cases and seeded random mixtures of Thai, white space, contractions, digits and emoji) and writes the expected pre-tokenizer pieces and token IDs to `fixtures/smollm2-135m/tokenizer-corpus.json`. The engine's tokenizer tests compare against it. Needs the model from `download.py`. |
+| `unicode_classes.py` | none | Measures which characters the reference treats as letters, numbers and white space, by running every Unicode scalar value through its pre-tokenizer, and writes `crates/oxygen/src/tokenizer/unicode_classes.rs`. That file is committed; re-run the script only after changing the model revision. |
 
 `--out` is for comparing runs: for example, `uv run python generate.py --out /tmp/run2` writes a second set that you can diff against the first. The engine's tests only read `fixtures/smollm2-135m/`.
 

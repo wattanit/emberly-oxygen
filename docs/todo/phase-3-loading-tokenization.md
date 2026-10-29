@@ -70,12 +70,13 @@ The type landed with the stub in task 2.1, so this task is a check, not new code
 
 Hand-written, no regex crate (Spec §6). Two stages in the order the file declares: digits split individually, then the ByteLevel pattern.
 
-- [ ] Digit stage: every digit becomes its own piece
-- [ ] ByteLevel stage: the GPT-2 style pattern, written as a scanner over characters: contractions (`'s 't 're 've 'm 'll 'd`), optional-space-plus-letters, optional-space-plus-other-symbols, whitespace runs with the trailing-space lookahead rule (whitespace not followed by non-whitespace, so the last space attaches to the next word), and `use_regex: true` honoured
-- [ ] Unicode letter and number classification for Thai and other scripts: decide how `\p{L}`, `\p{N}` are approximated with `char` methods and write down any known gap
-- [ ] Never panic on any `&str`, including empty input and lone combining marks
-- [ ] Check: unit tests on constructed strings: contractions, digits (`a123` → `a`,`1`,`2`,`3`), punctuation runs, whitespace runs (spaces, tabs, newlines, trailing spaces), Thai, emoji, mixed
-- [ ] Check: concatenating the pieces always reproduces the input exactly (property over every prompt in `oracle/prompts.json` and a set of constructed strings)
+- [x] Digit stage: every digit becomes its own piece
+- [x] ByteLevel stage: the GPT-2 style pattern, written as a scanner over characters: contractions (`'s 't 're 've 'm 'll 'd`), optional-space-plus-letters, optional-space-plus-other-symbols, whitespace runs with the trailing-space lookahead rule (whitespace not followed by non-whitespace, so the last space attaches to the next word), and `use_regex: true` honoured
+- [x] Unicode letter and number classification for Thai and other scripts: **decided** not to approximate with `char` methods. The classes are measured from the reference over every scalar value (`oracle/unicode_classes.py`) and committed as `unicode_classes.rs`; recorded in plan §9
+- [x] Never panic on any `&str`, including empty input and lone combining marks
+- [x] Check: unit tests on constructed strings: contractions, digits (`a123` → `a`,`1`,`2`,`3`), punctuation runs, whitespace runs (spaces, tabs, newlines, trailing spaces), Thai, emoji, mixed
+- [x] Check: concatenating the pieces always reproduces the input exactly (every Unicode scalar value, and every corpus string including all prompts)
+- [x] Check: the splitter agrees with the reference on all 3,979 strings of `oracle/tokenizer_corpus.py`'s output (prompts, edge cases, 4,000 seeded random mixtures); a deliberate `is_alphabetic` substitution fails 557 of them
 
 ## 3.9 BPE encoding (FR-13, Spec §6)
 

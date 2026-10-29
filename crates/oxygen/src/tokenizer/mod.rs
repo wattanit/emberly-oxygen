@@ -1,5 +1,7 @@
 mod byte_map;
 mod components;
+mod pretokenize;
+mod unicode_classes;
 
 use std::path::Path;
 
