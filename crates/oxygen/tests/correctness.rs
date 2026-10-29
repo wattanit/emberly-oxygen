@@ -1,6 +1,6 @@
 //! The correctness harness (Spec §11): compares the engine against every
 //! stored expected output. Verifies FR-5 (full comparison), FR-13 to FR-15
-//! (tokenizer, as far as the checks cover them), S-1 to S-4 and S-5 (a release
+//! (tokenizer: encoding, decoding and streaming), S-1 to S-4 and S-5 (a release
 //! passes only if every prompt category passes).
 //!
 //! A failing run shows the table in its failure message; a passing run prints
@@ -11,7 +11,7 @@ mod common;
 use common::fixtures::{discover, require_model_dir, workspace_root};
 use common::harness::{check_prompt, CheckResult};
 use common::report::render;
-use emberly_oxygen::Model;
+use emberly_oxygen::{Model, Tokenizer};
 
 #[test]
 fn correctness_harness() {
@@ -23,9 +23,10 @@ fn correctness_harness() {
         let model_dir = root.join("models").join(&fixtures.manifest.model_id);
         require_model_dir(&model_dir).unwrap_or_else(|e| panic!("{e}"));
         let model = Model::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
+        let tokenizer = Tokenizer::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
         for prompt in &fixtures.manifest.prompts {
             let reference = fixtures.load_tensors(prompt).unwrap_or_else(|e| panic!("{e}"));
-            results.extend(check_prompt(fixtures, prompt, &reference, &model_dir, &model));
+            results.extend(check_prompt(fixtures, prompt, &reference, &tokenizer, &model));
         }
     }
 

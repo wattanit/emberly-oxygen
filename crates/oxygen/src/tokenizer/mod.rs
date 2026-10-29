@@ -404,6 +404,7 @@ mod tests {
         }
     }
 
+    // FR-13: the real vocabulary's special tokens encode to their own IDs.
     #[test]
     fn real_special_tokens() {
         let t = Tokenizer::load(&model_dir()).unwrap();

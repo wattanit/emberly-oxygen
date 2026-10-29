@@ -51,6 +51,7 @@ mod tests {
         assert_eq!(t.data(), &[0., 1., 2., 3., 4., 5.]);
     }
 
+    // HC-1, Spec §3: scalar and zero-length shapes are valid tensors.
     #[test]
     fn scalar_and_empty_shapes() {
         assert!(Tensor::new(vec![], vec![7.]).is_ok());

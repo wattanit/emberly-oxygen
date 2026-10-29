@@ -113,18 +113,24 @@ Hand-written, no regex crate (Spec §6). Two stages in the order the file declar
 - [x] Add the streaming check to the harness: feed the fixture IDs of each `utf8-split` prompt one at a time through the `StreamDecoder`, assert no emitted chunk ends inside a character and the total matches decode; show it as its own column in the pass/fail table
 - [x] The logits, top-1, intermediates and greedy-continuation checks are left running against the stub and still fail
 - [x] Check: `cargo test --no-fail-fast` prints the table with the encode, decode and streaming columns passing for all five categories and the other columns failing, exit code non-zero
+- [x] The harness now loads the tokenizer once per model instead of once per check, which brought its run from about 1 s back to 0.2 s
+- [x] The streaming check streams both the prompt's token IDs and the reference continuation and compares each with its reference text; on a `utf8-split` prompt it also fails unless some token left a character unfinished. `tests/streaming.rs` has negative controls (a plain prompt labelled `utf8-split`, a wrong reference text)
 
 ## Phase exit check
 
-- [ ] For every prompt in every category, the harness's encoding and decoding checks pass, and the streaming check passes on `utf8-split` prompts (plan §4)
-- [ ] The logit, intermediate and continuation checks still fail, because the forward pass is still the stub
-- [ ] An unsupported-configuration test shows the error names the field; the same for an unsupported tokenizer component and a mis-shaped tensor
-- [ ] Every test names the HC, FR or S item it verifies
-- [ ] Plan §9 holds the task 3.6 row filled in; any decision that changes HOW (for example the `lm_head.weight` reading in 3.5, the Thai character classification in 3.8) is recorded there and not decided here
-- [ ] `cargo test --no-fail-fast` time recorded, and `cargo build` has no new warnings
+- [x] For every prompt in every category, the harness's encoding and decoding checks pass, and the streaming check passes on `utf8-split` prompts (plan §4)
+- [x] The logit, intermediate and continuation checks still fail, because the forward pass is still the stub
+- [x] An unsupported-configuration test shows the error names the field; the same for an unsupported tokenizer component and a mis-shaped tensor
+- [x] Every test added in this phase names the HC, FR, S or Spec item it verifies (checked mechanically). Three Phase 2 tests (`stub_smoke`, `correctness_harness`, the printed-error test in `report.rs`) carry it in their module documentation instead
+- [x] Plan §9 holds the task 3.6 row filled in; any decision that changes HOW (for example the `lm_head.weight` reading in 3.5, the Thai character classification in 3.8) is recorded there and not decided here
+- [x] `cargo test --no-fail-fast` time recorded: about 0.6 s with a warm build (67 library tests, the harness over 12 prompts at about 0.2 s, and the tokenizer tests that read the 2 MB corpus); `cargo build` has no warnings
 - [ ] Owner reviews the table output and the tokenizer tests before Phase 4 starts
 
 ## Notes to carry forward
 
 - Phase 4 replaces the rest of `Model` (the forward pass); the loader built here is what it receives.
 - Plain `cargo test` stops at the first failing test binary; keep using `--no-fail-fast` until the correctness harness passes.
+- Three decisions are recorded in plan §9 for the owner to carry into the Specification at the next bump: the 21 bytes with no vocabulary entry that the reference drops silently (task 3.9), the decode reading with special tokens kept (3.10), and the reference-measured character classes with the two new oracle outputs (3.8).
+- A new machine needs `uv run python tokenizer_corpus.py` before `cargo test`; the README says so. `unicode_classes.rs` is committed, so it needs no step.
+- `stub_smoke.rs` now checks the real tokenizer and the stubbed model step and generation; it goes away when the harness covers those (Phases 4 and 5).
+- Task 3.9 and 3.10 commits left `stub_smoke` failing for a few commits because I filtered the test output too tightly; it was fixed with 3.12. Run the unfiltered `cargo test --no-fail-fast` summary at every task from here on.

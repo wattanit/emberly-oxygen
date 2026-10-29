@@ -324,6 +324,7 @@ mod tests {
         assert_eq!(widen_bf16(0x0001), 2f32.powi(-133));
     }
 
+    // FR-11, HC-1, Spec §5: BF16 data read through a file is widened exactly.
     #[test]
     fn reads_bf16_tensors_through_the_file() {
         let header = r#"{"w":{"dtype":"BF16","shape":[2,2],"data_offsets":[0,8]}}"#;
@@ -376,6 +377,7 @@ mod tests {
         }
     }
 
+    // FR-12, Spec §5, §14: a bad range or shape is rejected naming the tensor.
     #[test]
     fn bad_ranges_and_shapes_name_the_tensor() {
         let cases = [
@@ -396,6 +398,7 @@ mod tests {
         }
     }
 
+    // FR-12, Spec §5: overlapping or repeated entries are rejected naming them.
     #[test]
     fn overlapping_and_duplicate_entries_are_rejected() {
         let overlap = r#"{"a":{"dtype":"F32","shape":[2],"data_offsets":[0,8]},
@@ -409,6 +412,7 @@ mod tests {
         assert!(msg.contains("tensor a") && msg.contains("twice"), "{msg}");
     }
 
+    // FR-12, Spec §5: an empty tensor between two others cannot mask their overlap.
     #[test]
     fn an_empty_tensor_does_not_hide_an_overlap() {
         let header = r#"{"a":{"dtype":"F32","shape":[2],"data_offsets":[0,8]},
@@ -418,6 +422,7 @@ mod tests {
         assert!(msg.contains("overlap"), "{msg}");
     }
 
+    // Spec §5: an empty tensor occupies no bytes and overlaps nothing.
     #[test]
     fn empty_tensors_do_not_count_as_overlap() {
         let header = r#"{"a":{"dtype":"F32","shape":[0],"data_offsets":[0,0]},

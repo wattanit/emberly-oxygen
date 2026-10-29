@@ -166,6 +166,7 @@ mod tests {
         assert_eq!(c.rms_norm_eps, 1e-5);
     }
 
+    // FR-11, FR-12: the configuration is read from the published file in the model directory.
     #[test]
     fn load_reads_a_model_directory() {
         let dir = Path::new(REAL).parent().unwrap();
@@ -227,6 +228,7 @@ mod tests {
         assert!(msg.contains("rms_norm_eps"), "{msg}");
     }
 
+    // FR-12, Spec §14: a broken configuration file is an error, never a panic.
     #[test]
     fn non_json_is_malformed_not_a_panic() {
         for text in ["", "[]", "{", "null"] {

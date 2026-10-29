@@ -139,6 +139,7 @@ mod tests {
         assert_eq!(pieces.concat(), text);
     }
 
+    // FR-13, Spec §6: a word takes the single space before it.
     #[test]
     fn words_and_leading_spaces() {
         check("Hello world", &["Hello", " world"]);
@@ -148,6 +149,7 @@ mod tests {
     }
 
     // The contraction alternatives come first and are case-sensitive.
+    // FR-13, Spec §6: contractions split off, case-sensitively.
     #[test]
     fn contractions() {
         check("it's", &["it", "'s"]);
@@ -159,6 +161,7 @@ mod tests {
     }
 
     // The digit stage runs first, so every digit stands alone and takes no space.
+    // FR-13, Spec §6: the digit stage isolates every number character.
     #[test]
     fn digits() {
         check("a123", &["a", "1", "2", "3"]);
@@ -167,6 +170,7 @@ mod tests {
         check("\u{0661}\u{2167}", &["\u{0661}", "\u{2167}"]);
     }
 
+    // FR-13, Spec §6: a run of other symbols is one piece, with an optional leading space.
     #[test]
     fn punctuation_runs() {
         check("!!", &["!!"]);
@@ -177,6 +181,7 @@ mod tests {
     }
 
     // `\s+(?!\S)`: the last white-space character before a word leads the word.
+    // FR-13, Spec §6: white-space runs follow the lookahead rule.
     #[test]
     fn white_space_runs() {
         check("a  b", &["a", " ", " b"]);
@@ -189,6 +194,7 @@ mod tests {
     }
 
     // Thai vowel and tone marks are not letters, so they split off.
+    // FR-13, Spec §6: Thai vowel and tone marks are not letters, so they split off.
     #[test]
     fn thai() {
         check("\u{0e01}\u{0e47}", &["\u{0e01}", "\u{0e47}"]);
@@ -197,6 +203,7 @@ mod tests {
         check("a\u{0e31}b", &["a", "\u{0e31}", "b"]);
     }
 
+    // FR-13, Spec §6: emoji and mixed text.
     #[test]
     fn emoji_and_mixed() {
         check("a\u{1f600}b", &["a", "\u{1f600}", "b"]);

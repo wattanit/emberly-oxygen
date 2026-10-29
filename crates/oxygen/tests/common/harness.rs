@@ -2,8 +2,6 @@
 //! check (FR-5). Nothing is skipped: a check the engine cannot perform yet is
 //! run anyway and fails, so the gate is seen to fail.
 
-use std::path::Path;
-
 use emberly_oxygen::{generate, Capture, Model, Tokenizer};
 
 use super::compare::{
@@ -17,6 +15,10 @@ pub enum Check {
     Encode,
     /// FR-14: the reference continuation IDs decode to the reference text.
     Decode,
+    /// FR-15: streaming the reference IDs one token at a time gives the same
+    /// text as decoding them at once, and a `utf8-split` prompt really does
+    /// make the decoder hold a character back.
+    Streaming,
     /// S-1: logits at every position.
     Logits,
     /// S-3: top token at every position.
@@ -28,13 +30,21 @@ pub enum Check {
 }
 
 impl Check {
-    pub const ALL: [Check; 6] =
-        [Check::Encode, Check::Decode, Check::Logits, Check::Top1, Check::Intermediates, Check::Greedy];
+    pub const ALL: [Check; 7] = [
+        Check::Encode,
+        Check::Decode,
+        Check::Streaming,
+        Check::Logits,
+        Check::Top1,
+        Check::Intermediates,
+        Check::Greedy,
+    ];
 
     pub fn name(self) -> &'static str {
         match self {
             Check::Encode => "encode",
             Check::Decode => "decode",
+            Check::Streaming => "streaming",
             Check::Logits => "logits",
             Check::Top1 => "top-1",
             Check::Intermediates => "intermediates",
@@ -115,9 +125,8 @@ pub fn check_intermediates(run: &EngineRun, reference: &PromptTensors, layers: u
     Numeric { max_error, verdict: first_bad.unwrap_or(Verdict::Pass) }
 }
 
-fn encode_check(model_dir: &Path, prompt: &Prompt) -> Verdict {
-    let encoded = Tokenizer::load(model_dir).and_then(|t| t.encode(&prompt.text));
-    match encoded {
+fn encode_check(tokenizer: &Tokenizer, prompt: &Prompt) -> Verdict {
+    match tokenizer.encode(&prompt.text) {
         Err(e) => Verdict::Fail { position: None, message: e.to_string() },
         Ok(ids) if ids == prompt.token_ids => Verdict::Pass,
         Ok(ids) => {
@@ -130,8 +139,8 @@ fn encode_check(model_dir: &Path, prompt: &Prompt) -> Verdict {
     }
 }
 
-fn decode_check(model_dir: &Path, prompt: &Prompt) -> Verdict {
-    match Tokenizer::load(model_dir).and_then(|t| t.decode(&prompt.continuation_ids)) {
+fn decode_check(tokenizer: &Tokenizer, prompt: &Prompt) -> Verdict {
+    match tokenizer.decode(&prompt.continuation_ids) {
         Err(e) => Verdict::Fail { position: None, message: e.to_string() },
         Ok(text) if text == prompt.continuation_text => Verdict::Pass,
         Ok(text) => Verdict::Fail {
@@ -141,9 +150,46 @@ fn decode_check(model_dir: &Path, prompt: &Prompt) -> Verdict {
     }
 }
 
-fn greedy(model_dir: &Path, model: &Model, prompt: &Prompt) -> Verdict {
-    let run = Tokenizer::load(model_dir)
-        .and_then(|t| generate(model, &t, &prompt.text, prompt.continuation_ids.len(), &mut |_| {}));
+/// FR-15: streams the prompt's reference IDs and its reference continuation
+/// through the decoder one token at a time. Each must give back the reference
+/// text, and for a `utf8-split` prompt the prompt's tokens must make the
+/// decoder hold bytes back at least once, or the prompt tests nothing.
+pub fn streaming_check(tokenizer: &Tokenizer, prompt: &Prompt) -> Verdict {
+    let fail = |position, message: String| Verdict::Fail { position: Some(position), message };
+    let mut held_back = false;
+    for (what, ids, expected) in [
+        ("prompt", &prompt.token_ids, &prompt.text),
+        ("continuation", &prompt.continuation_ids, &prompt.continuation_text),
+    ] {
+        let mut decoder = tokenizer.stream_decoder();
+        let mut text = String::new();
+        for (step, &id) in ids.iter().enumerate() {
+            let chunk = match decoder.push(id) {
+                Ok(chunk) => chunk,
+                Err(e) => return fail(step, format!("{what}: {e}")),
+            };
+            // A token with bytes of its own that emitted nothing left a character unfinished.
+            if what == "prompt" && chunk.is_empty() && tokenizer.decode(&[id]).is_ok_and(|t| !t.is_empty()) {
+                held_back = true;
+            }
+            text.push_str(&chunk);
+            if !expected.starts_with(&text) {
+                return fail(step, format!("{what}: streamed {text:?}, which is not a prefix of {expected:?}"));
+            }
+        }
+        text.push_str(&decoder.finish());
+        if text != *expected {
+            return fail(ids.len(), format!("{what}: streamed {text:?}, reference {expected:?}"));
+        }
+    }
+    if prompt.category == "utf8-split" && !held_back {
+        return fail(0, "no token of this prompt split a character, so it does not test streaming".into());
+    }
+    Verdict::Pass
+}
+
+fn greedy(tokenizer: &Tokenizer, model: &Model, prompt: &Prompt) -> Verdict {
+    let run = generate(model, tokenizer, &prompt.text, prompt.continuation_ids.len(), &mut |_| {});
     match run {
         Err(e) => Verdict::Fail { position: None, message: e.to_string() },
         Ok(ids) => greedy_check(&ids, &prompt.continuation_ids, &prompt.continuation_top2_gaps),
@@ -155,7 +201,7 @@ pub fn check_prompt(
     fixtures: &Fixtures,
     prompt: &Prompt,
     reference: &PromptTensors,
-    model_dir: &Path,
+    tokenizer: &Tokenizer,
     model: &Model,
 ) -> Vec<CheckResult> {
     let dims = &fixtures.manifest.dims;
@@ -179,11 +225,12 @@ pub fn check_prompt(
         Err(e) => (fail(e.clone()), Verdict::Fail { position: None, message: e.clone() }, fail(e.clone())),
     };
     vec![
-        result(Check::Encode, encode_check(model_dir, prompt), None),
-        result(Check::Decode, decode_check(model_dir, prompt), None),
+        result(Check::Encode, encode_check(tokenizer, prompt), None),
+        result(Check::Decode, decode_check(tokenizer, prompt), None),
+        result(Check::Streaming, streaming_check(tokenizer, prompt), None),
         result(Check::Logits, logits.verdict, Some(logits.max_error)),
         result(Check::Top1, top1, None),
         result(Check::Intermediates, inter.verdict, Some(inter.max_error)),
-        result(Check::Greedy, greedy(model_dir, model, prompt), None),
+        result(Check::Greedy, greedy(tokenizer, model, prompt), None),
     ]
 }

@@ -1,5 +1,6 @@
-//! Calls every method of the stub surface once; removed when the real
-//! implementations land and the correctness harness covers them.
+//! Calls every method of the engine surface once. The tokenizer is real since
+//! Phase 3; the forward pass and generation are still stubs, and this file is
+//! removed when the correctness harness covers them.
 
 use std::path::Path;
 
@@ -11,8 +12,9 @@ fn stub_surface_runs_without_panicking() {
     let tokenizer = Tokenizer::load(dir).unwrap();
     let model = Model::load(dir).unwrap();
 
-    assert!(tokenizer.encode("hello").unwrap().is_empty());
-    assert_eq!(tokenizer.decode(&[1, 2, 3]).unwrap(), "");
+    let ids = tokenizer.encode("hello").unwrap();
+    assert!(!ids.is_empty());
+    assert_eq!(tokenizer.decode(&ids).unwrap(), "hello");
 
     let mut session = model.session(true);
     assert!(session.step(0).unwrap().is_empty());

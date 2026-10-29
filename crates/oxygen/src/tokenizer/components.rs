@@ -176,6 +176,7 @@ mod tests {
         assert_eq!(added[0]["content"], "<|endoftext|>");
     }
 
+    // FR-12, Spec §6: SmolLM2's own tokenizer.json passes the supported-set check.
     #[test]
     fn the_real_file_is_supported() {
         check(&real()).unwrap();

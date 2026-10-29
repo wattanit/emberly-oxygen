@@ -152,6 +152,7 @@ mod tests {
         }
     }
 
+    // FR-15: complete text is emitted at once and only the incomplete tail is held.
     #[test]
     fn complete_text_is_emitted_at_once_with_the_incomplete_tail_held() {
         let t = bytes_tokenizer();

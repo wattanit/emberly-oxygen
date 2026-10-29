@@ -8,7 +8,7 @@ use common::compare::Verdict;
 use common::harness::{Check, CheckResult};
 use common::report::render;
 
-fn results(prompt: &str, category: &str, verdicts: [Verdict; 6]) -> Vec<CheckResult> {
+fn results(prompt: &str, category: &str, verdicts: [Verdict; Check::ALL.len()]) -> Vec<CheckResult> {
     Check::ALL
         .into_iter()
         .zip(verdicts)
@@ -28,8 +28,13 @@ fn squeeze(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn passing() -> [Verdict; 6] {
+fn passing() -> [Verdict; Check::ALL.len()] {
     std::array::from_fn(|_| Verdict::Pass)
+}
+
+/// Where a check's verdict sits in the array, whatever the column order.
+fn at(check: Check) -> usize {
+    Check::ALL.iter().position(|&c| c == check).unwrap()
 }
 
 fn failing_at(position: usize) -> Verdict {
@@ -41,7 +46,7 @@ fn s5_one_failing_prompt_fails_its_category_only() {
     let mut all = results("a1", "english", passing());
     all.extend(results("a2", "english", passing()));
     let mut bad = passing();
-    bad[2] = failing_at(7);
+    bad[at(Check::Logits)] = failing_at(7);
     all.extend(results("t1", "thai", bad));
     all.extend(results("t2", "thai", passing()));
 
@@ -60,7 +65,7 @@ fn s5_a_category_is_never_passed_by_average() {
         all.extend(results(&format!("p{i}"), "code", passing()));
     }
     let mut bad = passing();
-    bad[5] = failing_at(0);
+    bad[at(Check::Greedy)] = failing_at(0);
     all.extend(results("p9", "code", bad));
     assert_eq!(render(&all).failed.len(), 1);
 }
@@ -78,13 +83,13 @@ fn fr5_every_check_has_a_column_and_a_cell() {
         assert!(report.text.contains(check.name()), "missing column {}", check.name());
     }
     let row = report.text.lines().find(|l| l.starts_with("a1")).unwrap();
-    assert_eq!(row.matches("pass").count(), 6, "{row}");
+    assert_eq!(row.matches("pass").count(), Check::ALL.len(), "{row}");
 }
 
 #[test]
 fn fr6_a_failure_line_gives_the_first_diverging_position() {
     let mut bad = passing();
-    bad[4] = Verdict::Fail { position: Some(12), message: "layer 3: too large".into() };
+    bad[at(Check::Intermediates)] = Verdict::Fail { position: Some(12), message: "layer 3: too large".into() };
     let report = render(&results("a1", "english", bad));
     assert!(report.text.contains("a1 / intermediates: first diverges at position 12: layer 3: too large"), "{}", report.text);
 }
@@ -92,7 +97,7 @@ fn fr6_a_failure_line_gives_the_first_diverging_position() {
 #[test]
 fn s4_a_near_tie_passes_but_is_reported() {
     let mut tie = passing();
-    tie[5] = Verdict::NearTie { position: 9 };
+    tie[at(Check::Greedy)] = Verdict::NearTie { position: 9 };
     let report = render(&results("a1", "english", tie));
     assert!(report.failed.is_empty());
     assert!(report.text.contains("near-tie, position 9"), "{}", report.text);
