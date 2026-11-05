@@ -129,6 +129,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "emberly-oxygen",
+ "serde_json",
  "tracing-subscriber",
 ]
 

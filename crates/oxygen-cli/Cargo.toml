@@ -12,3 +12,7 @@ path = "src/main.rs"
 emberly-oxygen = { path = "../oxygen" }
 clap = { version = "4", features = ["derive"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+
+[dev-dependencies]
+# Reads the fixture manifest for the expected text; tests only.
+serde_json = "1"

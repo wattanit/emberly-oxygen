@@ -71,14 +71,16 @@ Each has a recommendation; none is decided by this to-do. The first two block wo
 
 In `crates/oxygen-cli/tests/`, using `env!("CARGO_BIN_EXE_emberly-oxygen")` and the real model; the fixtures supply the expected text.
 
-- [ ] Standard output is exactly the oracle's `continuation_text` for `english-short` with 32 new tokens (FR-19, FR-17, FR-20), and standard error is empty at the default level
-- [ ] A prompt on standard input and the same prompt as an argument give identical output
-- [ ] `--stats` writes the four figures to standard error and leaves standard output unchanged (FR-21)
-- [ ] A request that exceeds the context (`--max-new-tokens 100000`) exits 1 with a message naming the numbers, prints nothing to standard output, and returns quickly because nothing was computed (FR-18)
-- [ ] An empty prompt, a missing model directory (message names the path), a model directory with an unsupported `config.json` (message names the field) and invalid UTF-8 on standard input each exit 1 with standard output empty
-- [ ] A missing `--model`, a non-numeric `--max-new-tokens` and an unknown flag exit 2
-- [ ] `--log-file` leaves standard error empty and the file non-empty at `-vv`; an unwritable path exits 1
-- [ ] Check: every test names FR-18 to FR-21 or Spec §9
+Done in `crates/oxygen-cli/tests/cli.rs`: 10 tests, about 5 s. `serde_json` (already in Spec §15) is a dev-dependency of the CLI package to read the fixture manifest; it is not linked into the binary.
+
+- [x] Standard output is exactly the oracle's `continuation_text` for `english-short` with 32 new tokens (FR-19, FR-17, FR-20), and standard error is empty at the default level
+- [x] A prompt on standard input and the same prompt as an argument give identical output
+- [x] `--stats` writes the four figures to standard error and leaves standard output unchanged (FR-21); the prompt token count is checked against the fixture's (30)
+- [x] A request that exceeds the context (`--max-new-tokens 100000`) exits 1 with a message naming the numbers, prints nothing to standard output, and returns quickly because nothing was computed (FR-18). Shown deterministically: the run is at `-vv`, the model-load event is logged, and no step event is; a loose 5 s bound is checked too
+- [x] An empty prompt (as an argument and as empty standard input), a missing model directory (message names the path), a model directory with an unsupported `config.json` (message names the field) and invalid UTF-8 on standard input each exit 1 with standard output empty
+- [x] A missing `--model`, a non-numeric `--max-new-tokens` and an unknown flag exit 2
+- [x] `--log-file` leaves standard error empty and the file non-empty at `-vv`; an unwritable path exits 1. The file is checked to hold the run summary and a `step{pos=0}` span, and standard output to equal a run without logging
+- [x] Check: every test names FR-18 to FR-21 or Spec §9
 
 ## 5.6 Logging invariance (S-8)
 
