@@ -139,6 +139,8 @@ Filled in during the phases; they are inputs to the Specification's and Requirem
 
   The `english` and `long` logit maxima are identical because `english-short` and `long-prose` both start with the token `The`, and the logits at position 0 depend on that token alone. The margins do not suggest changing 1e-3 or 1e-4 yet: the long prompts (about 500 positions) are no worse than the short ones, so the error is not growing with context at this length. A full harness run takes about 125 s.
 - Near-ties encountered in greedy continuations (Phase 5) — for S-3 and S-4.
+
+  Measured at task 5.2: none. All 12 greedy continuations (32 tokens each) match the oracle token for token, and no comparison stopped at a near-tie; the smallest reference top-two gap before any continuation token is 2.16e-3 (`code-rust`), just over twice S-3's 1e-3. With the harness's prompts running in parallel threads (test code only), a full harness run takes about 61 s.
 - Run-to-run logit difference (task 5.7) — for S-6.
 
 ## 9. Upstream feedback
