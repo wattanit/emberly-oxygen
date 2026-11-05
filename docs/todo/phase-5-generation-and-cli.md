@@ -91,8 +91,9 @@ Done in `crates/oxygen-cli/tests/cli.rs`: 10 tests, about 5 s. `serde_json` (alr
 
 ## 5.7 Reproducibility (S-6)
 
-- [ ] Two runs of the same prompt in one process and in two separate loads of the model give logits within S-1 of each other (the engine is single-threaded and deterministic, so they are expected to be bit-identical; assert the bound S-6 states, and report whether they are identical) and identical continuations (S-6, S-4)
-- [ ] Check: the test names S-6
+- [x] Two runs of the same prompt in one process and in two separate loads of the model give logits within S-1 of each other (the engine is single-threaded and deterministic, so they are expected to be bit-identical; assert the bound S-6 states, and report whether they are identical) and identical continuations (S-6, S-4)
+- [x] Done in `crates/oxygen/tests/reproducibility.rs` on `english-short`: a second run on the same load and a run on a second load are bit-identical over all 30 positions (largest difference 0, S-1 asserted) and the 16-token continuations are identical, compared exactly. Recorded in plan §8. The test takes about 12 s, and since Cargo runs test binaries one after another, the whole `cargo test --no-fail-fast` now takes about 87 s
+- [x] Check: the test names S-6
 
 ## Phase exit check
 

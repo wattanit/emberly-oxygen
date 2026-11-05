@@ -143,6 +143,8 @@ Filled in during the phases; they are inputs to the Specification's and Requirem
   Measured at task 5.2: none. All 12 greedy continuations (32 tokens each) match the oracle token for token, and no comparison stopped at a near-tie; the smallest reference top-two gap before any continuation token is 2.16e-3 (`code-rust`), just over twice S-3's 1e-3. With the harness's prompts running in parallel threads (test code only), a full harness run takes about 61 s.
 - Run-to-run logit difference (task 5.7) — for S-6.
 
+  Measured at task 5.7 (`tests/reproducibility.rs`, `english-short`, all 30 positions, 1,474,560 logits): a second run on the same loaded model and a run on a second load of the model are **bit-identical** to the first, largest difference 0, and their 16-token greedy continuations are identical. This is expected of a single-threaded engine that adds in index order; S-6's allowance (differences up to S-1, continuations differing at near-ties) is left for a later version that adds in parallel. Across processes the harness gives the same evidence: its worst errors per category have been identical to the last digit in every run since Phase 4.
+
 ## 9. Upstream feedback
 
 Recorded here and absorbed by the upstream owner at the next bump; the upstream documents are not edited from this one. This section is a permanent record.
