@@ -23,7 +23,7 @@ pub use config::Config;
 pub use error::Error;
 #[cfg(feature = "negative-controls")]
 pub use fault::Fault;
-pub use generate::generate;
+pub use generate::{generate, Generation, Stats};
 pub use model::{Capture, Model, Session};
 pub use tensor::Tensor;
 pub use tokenizer::{StreamDecoder, Tokenizer};

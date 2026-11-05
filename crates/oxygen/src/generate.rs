@@ -1,11 +1,45 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use tracing::Level;
 
 use crate::{Error, Model, Session, Tokenizer};
 
-/// Greedy generation (Spec §8): returns the generated token IDs and calls
-/// `on_text` with each completed piece of text as soon as it exists.
+/// What [`generate`] returns: the generated token IDs and how long it took.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Generation {
+    pub ids: Vec<u32>,
+    pub stats: Stats,
+}
+
+/// Timings of one generation (FR-21, Spec §12). The first generated token's
+/// cost belongs to the prompt: `time_to_first_token` runs from receiving the
+/// prompt string (encoding included) to choosing the first token, and
+/// `generation_time` is everything after it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Stats {
+    pub prompt_tokens: usize,
+    pub generated_tokens: usize,
+    /// `None` when no token was asked for.
+    pub time_to_first_token: Option<Duration>,
+    pub generation_time: Duration,
+}
+
+impl Stats {
+    /// Prompt tokens over the time to first token.
+    pub fn prompt_tokens_per_second(&self) -> Option<f64> {
+        self.time_to_first_token.map(|t| self.prompt_tokens as f64 / t.as_secs_f64())
+    }
+
+    /// The tokens after the first over the time after it; `None` for fewer
+    /// than two tokens, since nothing was generated after the first.
+    pub fn generation_tokens_per_second(&self) -> Option<f64> {
+        let after_first = self.generated_tokens.checked_sub(1).filter(|&n| n > 0)?;
+        Some(after_first as f64 / self.generation_time.as_secs_f64())
+    }
+}
+
+/// Greedy generation (Spec §8): returns the generated token IDs with timings
+/// and calls `on_text` with each completed piece of text as soon as it exists.
 ///
 /// The request is checked before any computation (FR-18). Generation stops
 /// after `max_new_tokens` tokens or at the end-of-sequence token, which is
@@ -22,7 +56,7 @@ pub fn generate(
     prompt: &str,
     max_new_tokens: usize,
     on_text: &mut dyn FnMut(&str),
-) -> Result<Vec<u32>, Error> {
+) -> Result<Generation, Error> {
     let _generate = tracing::info_span!("generate").entered();
     let start = Instant::now();
     let config = model.config();
@@ -42,7 +76,13 @@ pub fn generate(
     }
     tracing::info!(prompt_tokens = prompt_ids.len(), max_new_tokens, "prompt encoded");
     if max_new_tokens == 0 {
-        return Ok(Vec::new());
+        let stats = Stats {
+            prompt_tokens: prompt_ids.len(),
+            generated_tokens: 0,
+            time_to_first_token: None,
+            generation_time: Duration::ZERO,
+        };
+        return Ok(Generation { ids: Vec::new(), stats });
     }
 
     let mut steps = Steps {
@@ -78,22 +118,23 @@ pub fn generate(
         on_text(&rest);
     }
 
-    // The first token's cost is the prompt's: time to first token runs from
-    // receiving the prompt string to choosing that token, and generation
-    // throughput counts the tokens after it over the time after it.
-    let generation = start.elapsed() - first_token;
-    let after_first = ids.len() - 1;
+    let stats = Stats {
+        prompt_tokens: prompt_ids.len(),
+        generated_tokens: ids.len(),
+        time_to_first_token: Some(first_token),
+        generation_time: start.elapsed() - first_token,
+    };
     tracing::info!(
-        prompt_tokens = prompt_ids.len(),
-        generated_tokens = ids.len(),
+        prompt_tokens = stats.prompt_tokens,
+        generated_tokens = stats.generated_tokens,
         stopped_at_eos = ids.last() == Some(&config.eos_token_id),
-        time_to_first_token_ms = first_token.as_secs_f64() * 1000.0,
-        prompt_tokens_per_s = prompt_ids.len() as f64 / first_token.as_secs_f64(),
-        generation_ms = generation.as_secs_f64() * 1000.0,
-        generation_tokens_per_s = (after_first > 0).then(|| after_first as f64 / generation.as_secs_f64()),
+        time_to_first_token_ms = %ms(first_token),
+        prompt_tokens_per_s = stats.prompt_tokens_per_second().map(rate),
+        generation_ms = %ms(stats.generation_time),
+        generation_tokens_per_s = stats.generation_tokens_per_second().map(rate),
         "run summary"
     );
-    Ok(ids)
+    Ok(Generation { ids, stats })
 }
 
 /// The decode loop's forward steps, each in its own span and, at debug
@@ -112,16 +153,16 @@ impl Steps<'_> {
         let _step = tracing::debug_span!("step", pos).entered();
         let start = self.debug.then(Instant::now);
         let logits = self.session.step(token)?;
-        let step_ms = start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
+        let step_ms = start.map(|s| ms(s.elapsed()));
         let next = argmax(&logits);
         if let Some(step_ms) = step_ms {
             let text = self.text(token);
             let top5 = self.top5(&logits);
             if chooses {
                 let next_text = self.text(next);
-                tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms, next, next_text = ?next_text, "step");
+                tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms = %step_ms, next, next_text = ?next_text, "step");
             } else {
-                tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms, "step");
+                tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms = %step_ms, "step");
             }
         }
         Ok(next)
@@ -148,6 +189,16 @@ impl Steps<'_> {
             .collect();
         shown.join(", ")
     }
+}
+
+/// A duration in milliseconds to the microsecond, for the log.
+fn ms(d: Duration) -> String {
+    format!("{:.3}", d.as_secs_f64() * 1000.0)
+}
+
+/// A throughput to two decimals, for the log.
+fn rate(r: f64) -> tracing::field::DisplayValue<String> {
+    tracing::field::display(format!("{r:.2}"))
 }
 
 /// The ID of the highest logit; on an exact tie the lowest ID wins, as the
@@ -269,7 +320,7 @@ mod tests {
     /// Runs `generate`, returning the result and every chunk passed to `on_text`.
     fn run(model: &Model, prompt: &str, max_new_tokens: usize) -> (Result<Vec<u32>, Error>, Vec<String>) {
         let mut chunks = Vec::new();
-        let ids = generate(model, &tokenizer(), prompt, max_new_tokens, &mut |s| chunks.push(s.to_owned()));
+        let ids = generate(model, &tokenizer(), prompt, max_new_tokens, &mut |s| chunks.push(s.to_owned())).map(|g| g.ids);
         assert!(chunks.iter().all(|c| !c.is_empty()), "on_text was called with an empty string: {chunks:?}");
         (ids, chunks)
     }
@@ -342,7 +393,7 @@ mod tests {
     fn streamed_text_equals_the_decode_and_never_holds_half_a_character() {
         let model = bigram_model(&THAI_CHAIN, 32);
         let mut order = Vec::new();
-        let ids = generate(&model, &tokenizer(), "a", 20, &mut |s| order.push(s.to_owned())).unwrap();
+        let ids = generate(&model, &tokenizer(), "a", 20, &mut |s| order.push(s.to_owned())).unwrap().ids;
         assert_eq!(order, ["\u{e01}", "b"], "one chunk when the character completes, one for b");
         let text = tokenizer().decode(&ids[..ids.len() - 1]).unwrap();
         assert_eq!(order.concat(), text);
@@ -525,5 +576,33 @@ mod tests {
             let (i, c, _) = logged(&model, "a", 20, Some(level));
             assert_eq!((&i, &c), (&ids, &chunks), "{level}");
         }
+    }
+
+    // FR-21, Spec §12: the returned timings follow the definitions, and agree with the run summary.
+    #[test]
+    fn stats_follow_the_definitions() {
+        let model = bigram_model(&CYCLE, 16);
+        let (generation, events) = collect(Some(Level::INFO), || generate(&model, &tokenizer(), "ab", 4, &mut |_| {}).unwrap());
+        let stats = generation.stats;
+        assert_eq!((stats.prompt_tokens, stats.generated_tokens), (2, 4));
+        let first = stats.time_to_first_token.unwrap();
+        let summary = events.iter().find(|e| e.message() == "run summary").unwrap();
+        assert_eq!(summary.get("time_to_first_token_ms").unwrap(), format!("{:.3}", first.as_secs_f64() * 1000.0));
+        assert_eq!(summary.get("generation_tokens_per_s").unwrap(), format!("{:.2}", stats.generation_tokens_per_second().unwrap()));
+        assert_eq!(summary.get("prompt_tokens_per_s").unwrap(), format!("{:.2}", stats.prompt_tokens_per_second().unwrap()));
+
+        let at = |generated_tokens, ms| Stats {
+            prompt_tokens: 10,
+            generated_tokens,
+            time_to_first_token: Some(Duration::from_millis(500)),
+            generation_time: Duration::from_millis(ms),
+        };
+        assert_eq!(at(5, 2000).prompt_tokens_per_second(), Some(20.0));
+        assert_eq!(at(5, 2000).generation_tokens_per_second(), Some(2.0), "4 tokens after the first in 2 s");
+        assert_eq!(at(1, 0).generation_tokens_per_second(), None);
+        assert_eq!(at(0, 0).generation_tokens_per_second(), None);
+
+        let zero = generate(&model, &tokenizer(), "ab", 0, &mut |_| {}).unwrap().stats;
+        assert_eq!((zero.prompt_tokens, zero.generated_tokens, zero.time_to_first_token), (2, 0, None));
     }
 }

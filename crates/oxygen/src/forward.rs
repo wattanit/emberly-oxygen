@@ -98,8 +98,8 @@ pub(crate) fn step(
 
         if stats {
             tracing::trace!(
-                residual_norm_after_attention = after_attention,
-                residual_norm_after_mlp = norm(&x),
+                residual_norm_after_attention = %after_attention,
+                residual_norm_after_mlp = %norm(&x),
                 most_attended = ?most_attended,
                 "layer"
             );

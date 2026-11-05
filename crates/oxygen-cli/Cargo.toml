@@ -9,3 +9,6 @@ name = "emberly-oxygen"
 path = "src/main.rs"
 
 [dependencies]
+emberly-oxygen = { path = "../oxygen" }
+clap = { version = "4", features = ["derive"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }

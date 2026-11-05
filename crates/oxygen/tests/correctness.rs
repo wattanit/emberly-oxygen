@@ -58,7 +58,7 @@ fn a_shifted_continuation_names_the_first_diverging_position() {
     let (model, tokenizer) = load(&root, fixtures);
 
     let n = prompt.continuation_ids.len();
-    let ids = generate(&model, &tokenizer, &prompt.text, n + 1, &mut |_| {}).unwrap();
+    let ids = generate(&model, &tokenizer, &prompt.text, n + 1, &mut |_| {}).unwrap().ids;
     let gaps = &prompt.continuation_top2_gaps;
     assert!(!greedy_check(&ids[..n], &prompt.continuation_ids, gaps).is_failure(), "unshifted passes");
 

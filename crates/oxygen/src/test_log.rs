@@ -2,12 +2,14 @@
 //! level, fields and the names of the spans it happened in. `tracing-subscriber`
 //! is for the command-line tool only (Spec §15), so the library's tests use this.
 
+use std::cell::RefCell;
 use std::fmt::Debug;
-use std::sync::Mutex;
+use std::sync::Once;
 
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record};
 use tracing::subscriber::Interest;
+use tracing::level_filters::LevelFilter;
 use tracing::{Event, Level, Metadata, Subscriber};
 
 /// One event: its level, its fields as text, and the path of spans it was in,
@@ -29,25 +31,56 @@ impl Logged {
     }
 }
 
-/// Runs `f` with a collector at `level` installed for this thread, and returns
-/// what `f` returned with every event logged meanwhile. `None` installs nothing.
+/// Runs `f` with a collector at `level` for this thread, and returns what `f`
+/// returned with every event logged meanwhile. `None` collects nothing, which
+/// is the same as running with no subscriber.
+///
+/// One subscriber, [`Router`], is installed globally once and hands each event
+/// to the collector of the thread it happens on. Installing a subscriber per
+/// test (`with_default`) is racy with tests on parallel threads: `tracing`
+/// caches whether anyone is interested in a callsite, and a callsite first
+/// reached on a thread with no subscriber while another thread is installing
+/// one can be cached as uninteresting, so a test silently receives nothing
+/// (seen as a debug test with no step events in about one run in ten).
+///
+/// The same can happen once here, to a callsite being registered on another
+/// thread while the router is installed. So after installing, registrations
+/// already under way are given time to finish, and every call rebuilds the
+/// cache before running `f` (seen as a layer event without its layer span
+/// about one run in 300).
 pub fn collect<T>(level: Option<Level>, f: impl FnOnce() -> T) -> (T, Vec<Logged>) {
     let Some(level) = level else {
         return (f(), Vec::new());
     };
-    let collector = std::sync::Arc::new(Collector { level, spans: Mutex::default(), stack: Mutex::default(), events: Mutex::default() });
-    let result = tracing::subscriber::with_default(collector.clone(), f);
-    let events = collector.events.lock().unwrap().clone();
-    (result, events)
+    static INSTALL: Once = Once::new();
+    INSTALL.call_once(|| {
+        tracing::subscriber::set_global_default(Router).expect("no other global subscriber in tests");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    });
+    tracing::callsite::rebuild_interest_cache();
+
+    CURRENT.with(|c| *c.borrow_mut() = Some(Collector { level, spans: Vec::new(), stack: Vec::new(), events: Vec::new() }));
+    let result = f();
+    let collector = CURRENT.with(|c| c.borrow_mut().take()).expect("the collector is still there");
+    (result, collector.events)
 }
 
+thread_local! {
+    static CURRENT: RefCell<Option<Collector>> = const { RefCell::new(None) };
+}
+
+/// What one thread's test has logged.
 struct Collector {
     level: Level,
     /// Every span created, as shown in a path; the ID is the index plus one.
-    spans: Mutex<Vec<String>>,
+    spans: Vec<String>,
     /// The spans entered and not yet left, innermost last.
-    stack: Mutex<Vec<u64>>,
-    events: Mutex<Vec<Logged>>,
+    stack: Vec<u64>,
+    events: Vec<Logged>,
+}
+
+fn with_current<R>(f: impl FnOnce(&mut Collector) -> R) -> Option<R> {
+    CURRENT.with(|c| c.borrow_mut().as_mut().map(f))
 }
 
 #[derive(Default)]
@@ -63,15 +96,21 @@ impl Visit for Fields {
     }
 }
 
-impl Subscriber for Collector {
-    // Ask every time, so collectors at different levels on other test threads
-    // do not decide for this one.
+/// The one global subscriber of the test binary: interested in everything,
+/// enabled only on a thread with a collector at a level that wants the event.
+struct Router;
+
+impl Subscriber for Router {
     fn register_callsite(&self, _: &'static Metadata<'static>) -> Interest {
         Interest::sometimes()
     }
 
+    fn max_level_hint(&self) -> Option<LevelFilter> {
+        Some(LevelFilter::TRACE)
+    }
+
     fn enabled(&self, metadata: &Metadata<'_>) -> bool {
-        *metadata.level() <= self.level
+        with_current(|c| *metadata.level() <= c.level).unwrap_or(false)
     }
 
     fn new_span(&self, attrs: &Attributes<'_>) -> Id {
@@ -84,9 +123,11 @@ impl Subscriber for Collector {
             let inner: Vec<String> = fields.0.iter().map(|(n, v)| format!("{n}={v}")).collect();
             format!("{name}{{{}}}", inner.join(","))
         };
-        let mut spans = self.spans.lock().unwrap();
-        spans.push(shown);
-        Id::from_u64(spans.len() as u64)
+        let id = with_current(|c| {
+            c.spans.push(shown);
+            c.spans.len() as u64
+        });
+        Id::from_u64(id.expect("spans are only created where enabled"))
     }
 
     fn record(&self, _: &Id, _: &Record<'_>) {}
@@ -96,18 +137,20 @@ impl Subscriber for Collector {
     fn event(&self, event: &Event<'_>) {
         let mut fields = Fields::default();
         event.record(&mut fields);
-        let spans = self.spans.lock().unwrap();
-        let path = self.stack.lock().unwrap().iter().map(|&id| spans[id as usize - 1].clone()).collect();
-        self.events.lock().unwrap().push(Logged { level: *event.metadata().level(), fields: fields.0, path });
+        with_current(|c| {
+            let path = c.stack.iter().map(|&id| c.spans[id as usize - 1].clone()).collect();
+            c.events.push(Logged { level: *event.metadata().level(), fields: fields.0, path });
+        });
     }
 
     fn enter(&self, span: &Id) {
-        self.stack.lock().unwrap().push(span.into_u64());
+        with_current(|c| c.stack.push(span.into_u64()));
     }
 
     fn exit(&self, span: &Id) {
-        let mut stack = self.stack.lock().unwrap();
-        let at = stack.iter().rposition(|&id| id == span.into_u64()).expect("exit of a span that was entered");
-        stack.remove(at);
+        with_current(|c| {
+            let at = c.stack.iter().rposition(|&id| id == span.into_u64()).expect("exit of a span that was entered");
+            c.stack.remove(at);
+        });
     }
 }

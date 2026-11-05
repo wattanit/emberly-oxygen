@@ -192,7 +192,7 @@ fn greedy(tokenizer: &Tokenizer, model: &Model, prompt: &Prompt) -> Verdict {
     let run = generate(model, tokenizer, &prompt.text, prompt.continuation_ids.len(), &mut |_| {});
     match run {
         Err(e) => Verdict::Fail { position: None, message: e.to_string() },
-        Ok(ids) => greedy_check(&ids, &prompt.continuation_ids, &prompt.continuation_top2_gaps),
+        Ok(run) => greedy_check(&run.ids, &prompt.continuation_ids, &prompt.continuation_top2_gaps),
     }
 }
 

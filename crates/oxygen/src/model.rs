@@ -53,7 +53,7 @@ impl Model {
             intermediate_size = c.intermediate_size,
             vocab_size = c.vocab_size,
             context_length = c.context_length,
-            load_ms = start.elapsed().as_secs_f64() * 1000.0,
+            load_ms = %format_args!("{:.3}", start.elapsed().as_secs_f64() * 1000.0),
             "model loaded"
         );
         Ok(Model { config, weights, fault: None })
