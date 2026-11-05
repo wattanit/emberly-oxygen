@@ -2,7 +2,7 @@
 
 A decoder-only LLM inference engine written from scratch in Rust, to understand every part by building it. It starts naive and improves one version at a time; the first target is SmolLM2-135M on CPU. The foundation documents in `docs/` are the source of truth: [Requirements](docs/emberly-oxygen-requirements.md), [Technical Specification](docs/emberly-oxygen-technical-specification.md), and the [roadmap](docs/high-level-roadmap.md) for direction.
 
-Status: release 0.1.0 is in progress. Phases 1 to 4 are done: the oracle, the correctness harness, model loading and the tokenizer, and the forward pass. The engine's logits, intermediates and top-1 tokens match the oracle on every prompt category. Phase 5 is under way: greedy generation is written and its continuations match the oracle token for token, so `cargo test` passes in full; logging and the command-line tool are next. See [`docs/todo/`](docs/todo/) for the current phase.
+Status: release 0.1.0 is in progress. Phases 1 to 5 are done: the oracle, the correctness harness, model loading and the tokenizer, the forward pass, and generation with the command-line tool. The engine matches the oracle on every check in every prompt category, including greedy continuations token for token, so `cargo test` passes in full. Phase 6, the baseline benchmark, is next. See [`docs/todo/`](docs/todo/) for the current phase.
 
 ## Setup on a new machine
 
@@ -65,12 +65,37 @@ Run them from `oracle/` with `uv run python <script>`. They find the repository 
 
 ```sh
 cargo build                   # debug build
-cargo test                    # correctness harness and unit tests (optimized, debug assertions on); about a minute, nearly all of it the harness running the 12 prompts in parallel threads
-cargo test --no-fail-fast     # same, but keeps running other test files after the harness fails
+cargo test                    # every test (optimized, debug assertions on); about 90 s, of which the harness running the 12 prompts in parallel threads takes about 60
+cargo test --no-fail-fast     # same, but keeps running other test files after one fails
 cargo build --release         # optimized build; the binary is target/release/emberly-oxygen
 ```
 
-The command-line tool (`emberly-oxygen generate ...`) and the benchmark harness (`cargo bench`) arrive in later phases; the plan in `docs/` says when. The correctness harness never downloads files and never runs Python: if `models/` or `fixtures/` is missing, it fails and names the command that creates it.
+The benchmark harness (`cargo bench`) arrives in Phase 6. The correctness harness never downloads files and never runs Python: if `models/` or `fixtures/` is missing, it fails and names the command that creates it.
+
+## Command-line tool
+
+```sh
+emberly-oxygen generate --model <DIR> --max-new-tokens <N> [--stats] [-v|-vv|-vvv] [--log-file <PATH>] [PROMPT]
+```
+
+For example, after `cargo build --release`:
+
+```sh
+target/release/emberly-oxygen generate --model models/smollm2-135m --max-new-tokens 32 "The quick brown fox"
+```
+
+It generates greedily (always the highest-scoring token) and streams the text to standard output as it is produced. Standard output carries the generated text and nothing else; everything else goes to standard error.
+
+| Option | What it does |
+| --- | --- |
+| `--model <DIR>` | Model directory with `config.json`, `model.safetensors` and `tokenizer.json`. Required. |
+| `--max-new-tokens <N>` | The most tokens to generate. Required. Generation also stops at the end-of-sequence token, which is not printed. `0` checks the prompt and prints nothing. |
+| `PROMPT` | The prompt. Without it, all of standard input is read exactly as given, so `echo hello \| ...` sends `hello` with a trailing newline; use `printf` or `echo -n` to leave it out. Input that is not UTF-8 is an error. |
+| `--stats` | Prints to standard error: model load time, prompt and generated token counts, time to first token and generation throughput. The first generated token counts as prompt work: time to first token runs from receiving the prompt to choosing the first token, and throughput is the tokens after the first per second after it. |
+| `-v`, `-vv`, `-vvv` | Log to standard error: `-v` model summary, prompt token count and a run summary with timings; `-vv` adds one line per decode step (position, token, its text, the top 5 candidates, step time; `next` is the token chosen); `-vvv` adds one line per layer per step (residual-stream norms and the position each head attends to most). Each line shows where it happened, for example `generate:step{pos=3}:layer{idx=0}`. By default only warnings and errors are logged. |
+| `--log-file <PATH>` | Writes the log to this file instead of standard error. The file is created before any work. `-vvv` writes 30 lines per token, so use it for long runs. |
+
+Exit codes: `0` on success; `1` on an error (missing or unsupported model files, an empty prompt, a prompt plus `--max-new-tokens` longer than the model's context, input that is not UTF-8, a log file that cannot be created, or standard output closed early), with the message on standard error and any text already generated left printed; `2` on a usage error such as a missing option or an unknown flag.
 
 ## Repository layout
 

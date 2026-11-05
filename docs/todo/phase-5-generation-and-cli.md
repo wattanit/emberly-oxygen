@@ -97,16 +97,18 @@ Done in `crates/oxygen-cli/tests/cli.rs`: 10 tests, about 5 s. `serde_json` (alr
 
 ## Phase exit check
 
-- [ ] The full `cargo test --no-fail-fast` passes in every category, including S-4 (greedy), and exits 0
-- [ ] The CLI generates a recognizable continuation for an English prompt, run by hand and shown to the owner
-- [ ] `-vvv` on a short prompt can be followed through the decode loop by eye (FR-23), shown to the owner
-- [ ] Decision points 1 to 4 are resolved and recorded: 1 in plan §9 for Spec §8, the stats definition in §9 for Spec §12
-- [ ] Every test added in this phase names the item it verifies (checked mechanically)
-- [ ] Full test time recorded, `cargo build` has no warnings, and the summary of every test binary was read
-- [ ] README: usage section for the CLI (the flags, stdin, exit codes, the log file), status line updated
+- [x] The full `cargo test --no-fail-fast` passes in every category, including S-4 (greedy), and exits 0
+- [ ] The CLI generates a recognizable continuation for an English prompt, run by hand and shown to the owner. Prepared: "Photosynthesis is the process by which plants" with 60 new tokens gives " convert light energy into chemical energy. The process is a complex one, involving the use of chlorophyll, a green pigment, ..." at about 20 tokens/s; awaiting the owner
+- [ ] `-vvv` on a short prompt can be followed through the decode loop by eye (FR-23), shown to the owner. Prepared on "Paris is" with 2 new tokens: for each position the 30 layer lines, then the step line with its top 5 and the chosen `next` (" a", then " city"), then the run summary; awaiting the owner
+- [x] Decision points 1 to 4 are resolved and recorded: 1 in plan §9 for Spec §8, the stats definition in §9 for Spec §12 (task 5.3 row; 2 to 4 are marked resolved at the top of this file)
+- [x] Every test added in this phase names the item it verifies (checked mechanically): a script lists every `#[test]` added since the Phase 5 to-do commit and the IDs in the comment above it; 38 new tests, none without an ID
+- [x] Full test time recorded, `cargo build` has no warnings, and the summary of every test binary was read: `cargo test --no-fail-fast` takes about 85 s and exits 0 (the harness 61 s, reproducibility 12 s, negative controls 5 s, the CLI's two files 7 s); no warnings with or without the `negative-controls` feature; all 13 test binaries' summaries read, 196 tests passing, 2 ignored (the two speed measurements)
+- [x] README: usage section for the CLI (the flags, stdin, exit codes, the log file), status line updated
 - [ ] Owner reviews the CLI output, the verbosity levels and the tests before Phase 6 starts
 
 ## Notes to carry forward
 
 - Prefill computes the output projection (about a fifth of a step's work) for every prompt position and discards all but the last. That is by the book here (Spec §7 returns logits for every call, and the harness needs them), and skipping it during generation is a candidate technique for a later version, to be measured on its own.
-- Phase 6 reuses `--stats`'s definitions for the benchmark harness; they should agree with Spec §12.
+- Phase 6 reuses `--stats`'s definitions for the benchmark harness; they should agree with Spec §12. They are `emberly_oxygen::Stats` (plan §9, tasks 5.3 and 5.4), so the benchmark can take them from `generate` directly.
+- `cargo test` takes about 85 s; the reproducibility test adds 12 s of it because Cargo runs test binaries one after another.
+- Per-test `tracing` subscribers race on parallel test threads; library tests that read log events must go through `test_log::collect` (task 5.4).
