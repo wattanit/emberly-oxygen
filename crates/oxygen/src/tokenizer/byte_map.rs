@@ -3,7 +3,7 @@
 //! control character or a space. Printable bytes map to themselves; the rest
 //! map, in byte order, to code points from U+0100 upward.
 
-pub(super) struct ByteMap {
+pub(crate) struct ByteMap {
     to_char: [char; 256],
     /// Indexed by code point; `None` for characters outside the alphabet.
     to_byte: Vec<Option<u8>>,

@@ -1,5 +1,5 @@
 mod bpe;
-mod byte_map;
+pub(crate) mod byte_map;
 mod components;
 mod pretokenize;
 mod stream;
@@ -42,7 +42,7 @@ impl Tokenizer {
         Tokenizer::from_json(&json, &path)
     }
 
-    fn from_json(json: &Value, path: &Path) -> Result<Tokenizer, Error> {
+    pub(crate) fn from_json(json: &Value, path: &Path) -> Result<Tokenizer, Error> {
         let malformed = |reason: String| Error::Malformed {
             path: path.to_owned(),
             reason,

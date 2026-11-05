@@ -102,6 +102,7 @@ mod tests {
             context_length: 16,
             rope_theta: 10000.0,
             rms_norm_eps: 1e-5,
+            eos_token_id: 0,
         }
     }
 

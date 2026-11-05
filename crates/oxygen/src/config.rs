@@ -18,6 +18,8 @@ pub struct Config {
     pub context_length: usize,
     pub rope_theta: f64,
     pub rms_norm_eps: f64,
+    /// The token that ends generation (Spec §8).
+    pub eos_token_id: u32,
 }
 
 impl Config {
@@ -78,6 +80,14 @@ impl Config {
             }
         };
 
+        let vocab_size = size("vocab_size")?;
+        let eos_token_id = eos_token_id(obj)?;
+        if eos_token_id as usize >= vocab_size {
+            return Err(malformed(format!(
+                "eos_token_id ({eos_token_id}) is outside the vocabulary of {vocab_size} tokens"
+            )));
+        }
+
         Ok(Config {
             hidden_size,
             layers: size("num_hidden_layers")?,
@@ -85,12 +95,27 @@ impl Config {
             kv_heads,
             head_dim,
             intermediate_size: size("intermediate_size")?,
-            vocab_size: size("vocab_size")?,
+            vocab_size,
             context_length: size("max_position_embeddings")?,
             rope_theta: float("rope_theta")?,
             rms_norm_eps: float("rms_norm_eps")?,
+            eos_token_id,
         })
     }
+}
+
+/// The end-of-sequence token: one whole number. Some models list several, or
+/// none; generation here stops on exactly one, so any other form is outside
+/// the supported set (Spec §3).
+fn eos_token_id(obj: &serde_json::Map<String, Value>) -> Result<u32, Error> {
+    let found = obj.get("eos_token_id");
+    found
+        .and_then(Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok())
+        .ok_or_else(|| Error::Unsupported {
+            component: "eos_token_id".into(),
+            value: found.map_or("absent".into(), Value::to_string),
+        })
 }
 
 /// Rejects anything outside the Spec §3 supported set, naming field and value.
@@ -164,6 +189,7 @@ mod tests {
         assert_eq!(c.context_length, 8192);
         assert_eq!(c.rope_theta, 100000.0);
         assert_eq!(c.rms_norm_eps, 1e-5);
+        assert_eq!(c.eos_token_id, 0);
     }
 
     // FR-11, FR-12: the configuration is read from the published file in the model directory.
@@ -226,6 +252,28 @@ mod tests {
 
         let msg = message(parse(&altered("rms_norm_eps", Some(Value::from("x")))));
         assert!(msg.contains("rms_norm_eps"), "{msg}");
+    }
+
+    // FR-12, Spec §3, Spec §8: the end-of-sequence token is one whole number inside the vocabulary.
+    #[test]
+    fn eos_token_id_is_one_token_in_the_vocabulary() {
+        assert_eq!(parse(&altered("eos_token_id", Some(Value::from(2)))).unwrap().eos_token_id, 2);
+        for (value, shown) in [
+            (Some(serde_json::json!([0, 2])), "[0,2]"),
+            (None, "absent"),
+            (Some(Value::Null), "null"),
+            (Some(Value::from(-1)), "-1"),
+            (Some(Value::from(1.5)), "1.5"),
+            (Some(Value::from("0")), "\"0\""),
+            (Some(Value::from(1u64 << 32)), "4294967296"),
+        ] {
+            let err = parse(&altered("eos_token_id", value)).unwrap_err();
+            let msg = err.to_string();
+            assert!(matches!(err, Error::Unsupported { .. }), "{msg}");
+            assert!(msg.contains("eos_token_id") && msg.contains(shown), "{msg}");
+        }
+        let msg = message(parse(&altered("eos_token_id", Some(Value::from(49152)))));
+        assert!(msg.contains("eos_token_id") && msg.contains("49152"), "{msg}");
     }
 
     // FR-12, Spec §14: a broken configuration file is an error, never a panic.

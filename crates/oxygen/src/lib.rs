@@ -1,8 +1,8 @@
 //! Emberly Oxygen: a decoder-only LLM inference engine, built from scratch.
 //!
-//! The surface below is the minimum the correctness harness needs. Its
-//! implementation is a stub that returns wrong values, so the harness can be
-//! seen to fail (Spec §18, M2); later phases replace it piece by piece.
+//! The surface below is the minimum the correctness harness and the
+//! command-line tool need: loading, tokenization, the forward pass one token
+//! at a time, and greedy generation (Spec §1).
 
 mod config;
 mod error;
