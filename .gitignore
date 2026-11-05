@@ -3,3 +3,4 @@ fixtures/
 models/
 oracle/.venv/
 .DS_Store
+__pycache__/
