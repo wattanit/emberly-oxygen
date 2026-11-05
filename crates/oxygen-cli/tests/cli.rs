@@ -2,58 +2,13 @@
 //! a user sees: standard output, standard error and the exit code (Spec §9).
 //! The fixtures supply the expected text.
 
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+mod common;
 
+use std::path::Path;
+use std::time::Duration;
+
+use common::{generate, model_dir, root, run, Run};
 use serde_json::Value;
-
-struct Run {
-    code: i32,
-    stdout: Vec<u8>,
-    stderr: String,
-    elapsed: Duration,
-}
-
-fn root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
-}
-
-fn model_dir() -> String {
-    let dir = root().join("models/smollm2-135m");
-    assert!(dir.exists(), "{}: missing; run `cd oracle && uv run python download.py`", dir.display());
-    dir.to_str().unwrap().to_owned()
-}
-
-/// Runs the binary with `args`, giving it `stdin` (empty when `None`).
-fn run(args: &[&str], stdin: Option<&[u8]>) -> Run {
-    let start = Instant::now();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_emberly-oxygen"))
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut input = child.stdin.take().unwrap();
-    input.write_all(stdin.unwrap_or_default()).unwrap();
-    drop(input);
-    let out = child.wait_with_output().unwrap();
-    Run {
-        code: out.status.code().expect("exited normally, not by a signal"),
-        stdout: out.stdout,
-        stderr: String::from_utf8(out.stderr).unwrap(),
-        elapsed: start.elapsed(),
-    }
-}
-
-fn generate(extra: &[&str]) -> Run {
-    let model = model_dir();
-    let mut args = vec!["generate", "--model", &model];
-    args.extend(extra);
-    run(&args, None)
-}
 
 /// `english-short` from the fixture manifest: its prompt text, the oracle's continuation, and
 /// the prompt's and the continuation's token counts.

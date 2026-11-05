@@ -84,9 +84,10 @@ Done in `crates/oxygen-cli/tests/cli.rs`: 10 tests, about 5 s. `serde_json` (alr
 
 ## 5.6 Logging invariance (S-8)
 
-- [ ] The same prompt at the default level, `-v`, `-vv` and `-vvv`, run through the built binary, gives byte-identical standard output (S-8)
-- [ ] The same runs show what each level promises: nothing on standard error at the default level; a run summary at `-v`; at `-vv` one step event per forward step, every prompt token appearing once as `token` and every generated token once as `next` (5.3); per-layer events carrying the span path at `-vvv` (FR-23)
-- [ ] Check: every test names S-8 or FR-23
+- [x] The same prompt at the default level, `-v`, `-vv` and `-vvv`, run through the built binary, gives byte-identical standard output (S-8)
+- [x] The same runs show what each level promises: nothing on standard error at the default level; a run summary at `-v`; at `-vv` one step event per forward step, every prompt token appearing once as `token` and every generated token once as `next` (5.3); per-layer events carrying the span path at `-vvv` (FR-23)
+- [x] Done in `crates/oxygen-cli/tests/logging.rs` (2 tests, about 2 s) with "The quick brown fox" and 6 new tokens. At `-vv` the step events are checked in position order with their phase, `text`, `top5` and `step_ms`; `next` appears exactly on the steps whose result is taken, and each generated token but the last is the next step's `token`. At `-vvv` there are exactly 30 layer events per step, each with the full `generate:step{pos}:layer{idx}` path, both norms and 9 most-attended positions no later than the step's own. The run helpers moved to `tests/common/mod.rs`, shared with `cli.rs`
+- [x] Check: every test names S-8 or FR-23
 
 ## 5.7 Reproducibility (S-6)
 
