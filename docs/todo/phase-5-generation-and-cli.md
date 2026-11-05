@@ -41,14 +41,16 @@ Each has a recommendation; none is decided by this to-do. The first two block wo
 
 ## 5.3 Logging through `tracing` (FR-22, FR-23, S-8, Spec §14)
 
-- [ ] Add `tracing` to the library; the library never prints (FR-22)
-- [ ] Spans nested as `generate` → `step{pos}` → `layer{idx}`, so every event carries its place in the decode loop
-- [ ] Events by level, exactly as the Spec §14 table: **info** model and configuration summary and load time (at `Model::load`), prompt token count, run summary with throughput; **debug** one event per decode step with position, token id, decoded text, the top 5 candidates with their logits, and the step time, prompt-feeding steps marked as such; **trace** per layer within each step: residual-stream norm after attention and after the MLP, and for each head the position receiving the most attention weight
-- [ ] Per-layer and per-step statistics are computed only when the level is enabled (`tracing::enabled!`), and no statistic feeds back into the computation (S-8); `attention` reports the most-attended position per head only when asked
-- [ ] The decoded text and top-5 candidates are built only when debug is enabled
-- [ ] Measure that the disabled spans cost nothing visible: the Phase 4 harness-step time is unchanged within noise
-- [ ] Tests with a small collecting subscriber (in the test only; `tracing-subscriber` stays CLI-only per Spec §15, so write the minimal `Subscriber` or collect through `tracing`'s own test facilities): at the info level the run summary appears and no per-step events; at debug there is one event per step with the fields above, prompt steps marked; at trace there is one per-layer event per layer per step with a most-attended position for every head
-- [ ] Check: every test names FR-22, FR-23, S-8 or Spec §14
+- [x] Add `tracing` to the library; the library never prints (FR-22). Version 0.1.44 with `default-features = false, features = ["std"]`, which drops the proc-macro `attributes` feature: the only new crates are `tracing-core` and `pin-project-lite`
+- [x] Spans nested as `generate` → `step{pos}` → `layer{idx}`, so every event carries its place in the decode loop. `generate` is an info span, `step` a debug span created by `generate` around each forward step, `layer` a trace span in the forward pass; a direct `Session::step` (as the harness makes) has layer spans only
+- [x] Events by level, exactly as the Spec §14 table: **info** model and configuration summary and load time (at `Model::load`), prompt token count, run summary with throughput; **debug** one event per decode step with position, token id, decoded text, the top 5 candidates with their logits, and the step time, prompt-feeding steps marked as such (one event per forward step: `phase` is `prompt` or `generate`, `token` and `text` are the token fed, and a step whose result is taken also carries `next` and `next_text`, so every prompt token appears once as `token` and every generated token once as `next`; the last generated token is never fed, plan §9 task 5.1, so a run has prompt + generated − 1 step events); **trace** per layer within each step: residual-stream norm after attention and after the MLP, and for each head the position receiving the most attention weight
+- [x] Per-layer and per-step statistics are computed only when the level is enabled (`tracing::enabled!`), and no statistic feeds back into the computation (S-8); `attention` reports the most-attended position per head only when asked
+- [x] The decoded text and top-5 candidates are built only when debug is enabled
+- [x] Measure that the disabled spans cost nothing visible: the Phase 4 harness-step time is unchanged within noise. A new ignored measurement, `forward::tests::step_speed` (five rounds of 128 real-model steps), gave a median of 49.25 ms per step before the change and 49.29 to 49.32 ms after (+0.1%), inside the before-runs' own spread of 49.22 to 49.65
+- [x] Tests with a small collecting subscriber (`src/test_log.rs`, test-only; it asks for every callsite each time so collectors on parallel test threads do not decide for one another) (in the test only; `tracing-subscriber` stays CLI-only per Spec §15, so write the minimal `Subscriber` or collect through `tracing`'s own test facilities): at the info level the run summary appears and no per-step events; at debug there is one event per step with the fields above, prompt steps marked; at trace there is one per-layer event per layer per step with a most-attended position for every head
+- [x] Also tested: S-8 on the forward pass, with logits and captures bit-identical with no subscriber and at warn, debug and trace, and the trace norms checked against the captured layer outputs; the most-attended position per head on a hand-built case, the earliest winning a tie; the model-load event's fields; top-5 ordering on ties
+- [x] The info run summary uses the throughput definitions that `--stats` will reuse (5.4): time to first token runs from receiving the prompt string to choosing the first token, prompt throughput is prompt tokens over that time, and generation throughput is the tokens after the first over the time after it (none for a single token). Recorded in plan §9 for Spec §12
+- [x] Check: every test names FR-22, FR-23, S-8 or Spec §14
 
 ## 5.4 The command-line tool (FR-19 to FR-21, FR-23, FR-24, FR-20, Spec §9)
 
@@ -57,7 +59,7 @@ Each has a recommendation; none is decided by this to-do. The first two block wo
 - [ ] The prompt is the argument, or all of standard input when there is none, read exactly (decision point 3); invalid UTF-8 is an error
 - [ ] Standard output carries only the generated text, written and flushed as each chunk arrives (FR-17, FR-20); a closed pipe on standard output is an error exit, not a panic message
 - [ ] Errors go to standard error with exit code 1; usage errors (missing `--model`, a non-numeric count, an unknown flag) exit 2 (`clap`'s own usage exit); text already streamed stays printed and the error follows on standard error (Spec §14)
-- [ ] `--stats` prints to standard error: prompt token count, generated token count, time to first token and generation tokens per second (FR-21), using Spec §12's definitions (time to first token from receiving the prompt string; model load reported separately). §12 leaves open whether the first token's cost belongs to prompt time or generation time; choose one, state it in the output's help text, and record it in plan §9 for Phase 6 to reuse
+- [ ] `--stats` prints to standard error: prompt token count, generated token count, time to first token and generation tokens per second (FR-21), using Spec §12's definitions (time to first token from receiving the prompt string; model load reported separately). §12 leaves open whether the first token's cost belongs to prompt time or generation time; choose one, state it in the output's help text, and record it in plan §9 for Phase 6 to reuse. Chosen in 5.3 for the info run summary (the first token's cost is the prompt's, plan §9); `--stats` reports the same figures and states the definition in its help text
 - [ ] `-v`, `-vv`, `-vvv` map to info, debug, trace (more `v`s stay at trace), default warn; `tracing-subscriber` formats events including the span path, to standard error
 - [ ] `--log-file <path>` sends the same events to that file instead of standard error; the file is created before any work, and failing to create it is an error (exit 1) naming the path; standard output is unaffected (FR-24)
 - [ ] Check: `cargo build` has no warnings; the binary's `--help` text is checked by hand
@@ -78,7 +80,7 @@ In `crates/oxygen-cli/tests/`, using `env!("CARGO_BIN_EXE_emberly-oxygen")` and 
 ## 5.6 Logging invariance (S-8)
 
 - [ ] The same prompt at the default level, `-v`, `-vv` and `-vvv`, run through the built binary, gives byte-identical standard output (S-8)
-- [ ] The same runs show what each level promises: nothing on standard error at the default level; a run summary at `-v`; one step event per generated token and per prompt token at `-vv`; per-layer events carrying the span path at `-vvv` (FR-23)
+- [ ] The same runs show what each level promises: nothing on standard error at the default level; a run summary at `-v`; at `-vv` one step event per forward step, every prompt token appearing once as `token` and every generated token once as `next` (5.3); per-layer events carrying the span path at `-vvv` (FR-23)
 - [ ] Check: every test names S-8 or FR-23
 
 ## 5.7 Reproducibility (S-6)

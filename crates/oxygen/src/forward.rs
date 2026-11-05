@@ -3,12 +3,19 @@
 //! the final norm and the tied output projection. The stream `x` is never
 //! normalized in place; only the copies fed to attention, the MLP and the
 //! output are.
+//!
+//! At the trace level each layer reports, inside a `layer{idx}` span, the
+//! residual-stream norm after attention and after the MLP and the position
+//! each head attends to most (Spec §14). They are computed only when trace is
+//! enabled and are never read back, so the result is the same at every level.
 
 use crate::fault::{self, Fault};
 use crate::kv_cache::KvCache;
 use crate::ops::{add_assign, matvec, mul_assign, rms_norm, rope, silu, softmax};
 use crate::weights::Weights;
 use crate::{Capture, Config, Error};
+
+use tracing::Level;
 
 /// Processes `token` at the next position and returns the logits for it.
 ///
@@ -46,8 +53,12 @@ pub(crate) fn step(
     }
 
     // 2. Each layer.
+    let stats = tracing::enabled!(Level::TRACE);
+    let mut most_attended = vec![0usize; if stats { heads } else { 0 }];
     let mut h = vec![0f32; hidden];
     for (index, layer) in weights.layers.iter().enumerate() {
+        let _layer = tracing::trace_span!("layer", idx = index).entered();
+
         // Attention block.
         rms_norm(&x, layer.attn_norm.data(), eps, &mut h);
         let mut q = vec![0f32; heads * head_dim];
@@ -66,10 +77,12 @@ pub(crate) fn step(
         cache.append(index, &k, &v)?;
 
         let mut attended = vec![0f32; heads * head_dim];
-        attention(&q, cache, index, position + 1, heads, kv_heads, head_dim, &mut attended);
+        let record = stats.then_some(&mut most_attended[..]);
+        attention(&q, cache, index, position + 1, heads, kv_heads, head_dim, &mut attended, record);
         let mut projected = vec![0f32; hidden];
         matvec(&layer.o_proj, &attended, &mut projected);
         add_assign(&mut x, &projected);
+        let after_attention = if stats { norm(&x) } else { 0.0 };
 
         // MLP block.
         rms_norm(&x, layer.mlp_norm.data(), eps, &mut h);
@@ -83,6 +96,14 @@ pub(crate) fn step(
         matvec(&layer.down_proj, &gate, &mut down);
         add_assign(&mut x, &down);
 
+        if stats {
+            tracing::trace!(
+                residual_norm_after_attention = after_attention,
+                residual_norm_after_mlp = norm(&x),
+                most_attended = ?most_attended,
+                "layer"
+            );
+        }
         if let Some(c) = capture.as_deref_mut() {
             c.layers.push(x.clone());
         }
@@ -107,7 +128,9 @@ pub(crate) fn step(
 /// positions of one layer. Query head `i` reads key-value head
 /// `i / (heads / kv_heads)`; scores are dot products scaled by
 /// `1/sqrt(head_dim)`, then softmax, then a weighted sum of the values.
-/// The heads' outputs are concatenated into `out`.
+/// The heads' outputs are concatenated into `out`. With `most_attended`, each
+/// head's most heavily weighted position is written there (the earliest on a
+/// tie), for the trace log.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn attention(
     q: &[f32],
@@ -118,6 +141,7 @@ pub(crate) fn attention(
     kv_heads: usize,
     head_dim: usize,
     out: &mut [f32],
+    mut most_attended: Option<&mut [usize]>,
 ) {
     assert_eq!(q.len(), heads * head_dim, "q holds `heads` heads");
     assert_eq!(out.len(), heads * head_dim, "out holds `heads` heads");
@@ -140,6 +164,15 @@ pub(crate) fn attention(
             *score = dot * scale;
         }
         softmax(&mut scores);
+        if let Some(m) = most_attended.as_deref_mut() {
+            let mut best = 0;
+            for (t, &weight) in scores.iter().enumerate() {
+                if weight > scores[best] {
+                    best = t;
+                }
+            }
+            m[head] = best;
+        }
 
         let result = &mut out[head * head_dim..(head + 1) * head_dim];
         result.fill(0.0);
@@ -150,6 +183,15 @@ pub(crate) fn attention(
             }
         }
     }
+}
+
+/// The Euclidean norm of the residual stream, for the trace log.
+fn norm(x: &[f32]) -> f32 {
+    let mut sum = 0f32;
+    for v in x {
+        sum += v * v;
+    }
+    sum.sqrt()
 }
 
 #[cfg(test)]
@@ -179,7 +221,7 @@ mod tests {
         let big = std::f32::consts::SQRT_2 * 3f32.ln(); // after the 1/sqrt(2) scale, a score of ln 3
         let q = [big, 0., 0., 0., 0., big, 0., 0.];
         let mut out = [0f32; 8];
-        attention(&q, &cache, 0, 2, 4, 2, 2, &mut out);
+        attention(&q, &cache, 0, 2, 4, 2, 2, &mut out, None);
         close(&out, &[7.5, 2.5, 5., 5., 5., 15., 10., 10.], 1e-5);
     }
 
@@ -191,10 +233,10 @@ mod tests {
         cache.append(0, &[0., 1.], &[5., 6.]).unwrap();
         cache.append(0, &[100., 100.], &[1e6, 1e6]).unwrap();
         let mut first = [0f32; 2];
-        attention(&[1., 1.], &cache, 0, 1, 1, 1, 2, &mut first);
+        attention(&[1., 1.], &cache, 0, 1, 1, 1, 2, &mut first, None);
         assert_eq!(first, [3., 4.], "one position: the softmax of a single score is 1");
         let mut two = [0f32; 2];
-        attention(&[1., 1.], &cache, 0, 2, 1, 1, 2, &mut two);
+        attention(&[1., 1.], &cache, 0, 2, 1, 1, 2, &mut two, None);
         close(&two, &[4., 5.], 1e-5); // equal scores: the mean of the first two values
     }
 
@@ -356,5 +398,89 @@ mod tests {
         let mut fresh = model.session(false);
         fresh.step(0).unwrap();
         assert_eq!(fresh.step(1).unwrap(), last);
+    }
+
+    // Spec §14: each head's most heavily weighted position, the earliest on a tie, and the
+    // attention output is the same whether it is asked for or not. Three query heads over one
+    // key-value head: keys at positions 0, 1, 2 are [0, 0], [1, 0], [0, 1]; head 0 asks for
+    // [1, 0] (position 1), head 1 for [0, 1] (position 2), head 2 for nothing (all equal: 0).
+    #[test]
+    fn attention_reports_the_most_attended_position_per_head() {
+        let mut cache = KvCache::new(1, 1, 2, 8);
+        for key in [[0., 0.], [1., 0.], [0., 1.]] {
+            cache.append(0, &key, &[1., 2.]).unwrap();
+        }
+        let q = [4., 0., 0., 4., 0., 0.];
+        let (mut out, mut plain) = ([0f32; 6], [0f32; 6]);
+        let mut most = [9usize; 3];
+        attention(&q, &cache, 0, 3, 3, 1, 2, &mut out, Some(&mut most));
+        attention(&q, &cache, 0, 3, 3, 1, 2, &mut plain, None);
+        assert_eq!(most, [1, 2, 0]);
+        assert_eq!(out, plain);
+    }
+
+    // S-8, FR-23, Spec §14: the logits and capture are bit-identical with no subscriber and at
+    // every level, and the trace values are what they claim: one event per layer per step, the
+    // norm after the MLP is the norm of the layer's output, and every head names a position
+    // already processed.
+    #[test]
+    fn trace_statistics_are_right_and_change_nothing() {
+        use crate::test_log::collect;
+        use tracing::Level;
+
+        let model = tiny_model(8);
+        let run = |level| {
+            collect(level, || {
+                let mut session = model.session(true);
+                [2, 0, 3].map(|t| (session.step(t).unwrap(), session.capture().unwrap().clone()))
+            })
+        };
+        let (plain, _) = run(None);
+        for level in [Level::WARN, Level::DEBUG, Level::TRACE] {
+            let (steps, events) = run(Some(level));
+            for ((logits, capture), (want_logits, want_capture)) in steps.iter().zip(&plain) {
+                assert_eq!(logits.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), want_logits.iter().map(|x| x.to_bits()).collect::<Vec<_>>(), "{level}");
+                assert_eq!(capture.layers, want_capture.layers, "{level}");
+            }
+            if level != Level::TRACE {
+                assert!(events.is_empty(), "{level}: {events:?}");
+                continue;
+            }
+            assert_eq!(events.len(), 3 * 2, "one per layer per step");
+            for (n, event) in events.iter().enumerate() {
+                let (pos, layer) = (n / 2, n % 2);
+                assert_eq!(event.path, [format!("layer{{idx={layer}}}")]);
+                let after_mlp: f32 = event.get("residual_norm_after_mlp").unwrap().parse().unwrap();
+                assert_eq!(after_mlp, super::norm(&plain[pos].1.layers[layer]));
+                let after_attention: f32 = event.get("residual_norm_after_attention").unwrap().parse().unwrap();
+                assert!(after_attention > 0.0 && after_attention != after_mlp, "{event:?}");
+                let heads: Vec<usize> = event.get("most_attended").unwrap().trim_matches(['[', ']']).split(", ").map(|h| h.parse().unwrap()).collect();
+                assert_eq!(heads.len(), 2, "one per head");
+                assert!(heads.iter().all(|&h| h <= pos), "{heads:?} at position {pos}");
+            }
+        }
+    }
+
+    // S-8, Spec §14 (measurement, not a check): the real model's time per step, to show that
+    // logging costs nothing visible when no subscriber is listening. Run with
+    //   cargo test -p emberly-oxygen --lib -- --ignored --nocapture step_speed
+    // Five rounds of 128 steps each from a fresh session; prints the median and the range.
+    #[test]
+    #[ignore = "a measurement: run with --ignored --nocapture"]
+    fn step_speed() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/smollm2-135m");
+        let model = Model::load(&dir).unwrap();
+        let mut per_step: Vec<f64> = (0..5)
+            .map(|_| {
+                let mut session = model.session(false);
+                let start = std::time::Instant::now();
+                for token in 0..128u32 {
+                    std::hint::black_box(session.step(1000 + token * 7).unwrap());
+                }
+                start.elapsed().as_secs_f64() * 1000.0 / 128.0
+            })
+            .collect();
+        per_step.sort_by(f64::total_cmp);
+        println!("ms per step over 128 positions: median {:.2}, min {:.2}, max {:.2}", per_step[2], per_step[0], per_step[4]);
     }
 }

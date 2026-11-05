@@ -1,4 +1,8 @@
-use crate::{Error, Model, Tokenizer};
+use std::time::Instant;
+
+use tracing::Level;
+
+use crate::{Error, Model, Session, Tokenizer};
 
 /// Greedy generation (Spec §8): returns the generated token IDs and calls
 /// `on_text` with each completed piece of text as soon as it exists.
@@ -8,6 +12,10 @@ use crate::{Error, Model, Tokenizer};
 /// returned with the others but whose text is not emitted: standard output
 /// carries the generated text, and the end-of-sequence token is a signal,
 /// not text. `on_text` is never called with an empty string.
+///
+/// Logging (Spec §14): everything happens in a `generate` span, each forward
+/// step in a `step{pos}` span inside it. Info gives the prompt's token count
+/// and a run summary; debug gives one event per step.
 pub fn generate(
     model: &Model,
     tokenizer: &Tokenizer,
@@ -15,6 +23,8 @@ pub fn generate(
     max_new_tokens: usize,
     on_text: &mut dyn FnMut(&str),
 ) -> Result<Vec<u32>, Error> {
+    let _generate = tracing::info_span!("generate").entered();
+    let start = Instant::now();
     let config = model.config();
     let prompt_ids = tokenizer.encode(prompt)?;
     if prompt_ids.is_empty() {
@@ -30,20 +40,26 @@ pub fn generate(
             config.context_length
         )));
     }
+    tracing::info!(prompt_tokens = prompt_ids.len(), max_new_tokens, "prompt encoded");
     if max_new_tokens == 0 {
         return Ok(Vec::new());
     }
 
-    let mut session = model.session(false);
-    let mut logits = Vec::new();
-    for &id in &prompt_ids {
-        logits = session.step(id)?;
+    let mut steps = Steps {
+        session: model.session(false),
+        tokenizer,
+        debug: tracing::enabled!(Level::DEBUG),
+    };
+    let last = prompt_ids.len() - 1;
+    let mut next = 0;
+    for (pos, &id) in prompt_ids.iter().enumerate() {
+        next = steps.step(pos, id, "prompt", pos == last)?;
     }
+    let first_token = start.elapsed();
 
     let mut decoder = tokenizer.stream_decoder();
     let mut ids = Vec::with_capacity(max_new_tokens);
     loop {
-        let next = argmax(&logits);
         ids.push(next);
         if next == config.eos_token_id {
             break;
@@ -55,13 +71,83 @@ pub fn generate(
         if ids.len() == max_new_tokens {
             break;
         }
-        logits = session.step(next)?;
+        next = steps.step(prompt_ids.len() + ids.len() - 1, next, "generate", true)?;
     }
     let rest = decoder.finish();
     if !rest.is_empty() {
         on_text(&rest);
     }
+
+    // The first token's cost is the prompt's: time to first token runs from
+    // receiving the prompt string to choosing that token, and generation
+    // throughput counts the tokens after it over the time after it.
+    let generation = start.elapsed() - first_token;
+    let after_first = ids.len() - 1;
+    tracing::info!(
+        prompt_tokens = prompt_ids.len(),
+        generated_tokens = ids.len(),
+        stopped_at_eos = ids.last() == Some(&config.eos_token_id),
+        time_to_first_token_ms = first_token.as_secs_f64() * 1000.0,
+        prompt_tokens_per_s = prompt_ids.len() as f64 / first_token.as_secs_f64(),
+        generation_ms = generation.as_secs_f64() * 1000.0,
+        generation_tokens_per_s = (after_first > 0).then(|| after_first as f64 / generation.as_secs_f64()),
+        "run summary"
+    );
     Ok(ids)
+}
+
+/// The decode loop's forward steps, each in its own span and, at debug
+/// level, described by one event.
+struct Steps<'a> {
+    session: Session<'a>,
+    tokenizer: &'a Tokenizer,
+    debug: bool,
+}
+
+impl Steps<'_> {
+    /// Feeds `token` at position `pos` and returns the highest-scoring next
+    /// token. `chooses` says whether the caller takes it, which the event
+    /// shows as `next`; a prompt step before the last does not.
+    fn step(&mut self, pos: usize, token: u32, phase: &'static str, chooses: bool) -> Result<u32, Error> {
+        let _step = tracing::debug_span!("step", pos).entered();
+        let start = self.debug.then(Instant::now);
+        let logits = self.session.step(token)?;
+        let step_ms = start.map(|s| s.elapsed().as_secs_f64() * 1000.0);
+        let next = argmax(&logits);
+        if let Some(step_ms) = step_ms {
+            let text = self.text(token);
+            let top5 = self.top5(&logits);
+            if chooses {
+                let next_text = self.text(next);
+                tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms, next, next_text = ?next_text, "step");
+            } else {
+                tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms, "step");
+            }
+        }
+        Ok(next)
+    }
+
+    fn text(&self, id: u32) -> String {
+        self.tokenizer.decode(&[id]).unwrap_or_else(|e| e.to_string())
+    }
+
+    /// The five highest logits as `id "text" logit`, highest first; on a tie
+    /// the lower ID comes first, as in [`argmax`].
+    fn top5(&self, logits: &[f32]) -> String {
+        let mut best: Vec<usize> = Vec::with_capacity(6);
+        for (id, &x) in logits.iter().enumerate() {
+            let at = best.iter().position(|&b| x > logits[b]).unwrap_or(best.len());
+            if at < 5 {
+                best.insert(at, id);
+                best.truncate(5);
+            }
+        }
+        let shown: Vec<String> = best
+            .iter()
+            .map(|&id| format!("{id} {:?} {:.3}", self.text(id as u32), logits[id]))
+            .collect();
+        shown.join(", ")
+    }
 }
 
 /// The ID of the highest logit; on an exact tie the lowest ID wins, as the
@@ -83,6 +169,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
+    use crate::test_log::{collect, Logged};
     use crate::tokenizer::byte_map::ByteMap;
     use crate::weights::{LayerWeights, Weights};
     use crate::{Config, Tensor};
@@ -314,5 +401,129 @@ mod tests {
         assert_eq!(ids.unwrap(), [0u32; 0]);
         assert!(chunks.is_empty());
         assert!(run(&model, "", 0).0.is_err(), "the prompt is still checked");
+    }
+
+    /// Every logged event of a run of `generate` at `level`, with the IDs and chunks.
+    fn logged(model: &Model, prompt: &str, max: usize, level: Option<Level>) -> (Vec<u32>, Vec<String>, Vec<Logged>) {
+        let ((ids, chunks), events) = collect(level, || run(model, prompt, max));
+        (ids.unwrap(), chunks, events)
+    }
+
+    fn steps(events: &[Logged]) -> Vec<&Logged> {
+        events.iter().filter(|e| e.message() == "step").collect()
+    }
+
+    /// a -> b -> c -> a ...
+    const CYCLE: [(u32, u32); 3] = [(0x61, 0x62), (0x62, 0x63), (0x63, 0x61)];
+
+    // FR-22, FR-23, Spec §14: at the default level the library logs nothing; at info, the prompt's
+    // token count and a run summary inside the `generate` span, and nothing per step.
+    #[test]
+    fn info_gives_the_prompt_count_and_a_run_summary_only() {
+        let model = bigram_model(&CYCLE, 16);
+        assert!(logged(&model, "ab", 3, Some(Level::WARN)).2.is_empty());
+
+        let (_, _, events) = logged(&model, "ab", 3, Some(Level::INFO));
+        let messages: Vec<&str> = events.iter().map(Logged::message).collect();
+        assert_eq!(messages, ["prompt encoded", "run summary"]);
+        assert!(events.iter().all(|e| e.level == Level::INFO && e.path == ["generate"]), "{events:?}");
+        assert_eq!(events[0].get("prompt_tokens"), Some("2"));
+        let summary = &events[1];
+        assert_eq!(summary.get("prompt_tokens"), Some("2"));
+        assert_eq!(summary.get("generated_tokens"), Some("3"));
+        assert_eq!(summary.get("stopped_at_eos"), Some("false"));
+        for field in ["time_to_first_token_ms", "prompt_tokens_per_s", "generation_ms", "generation_tokens_per_s"] {
+            let value: f64 = summary.get(field).unwrap_or_else(|| panic!("{field} missing")).parse().unwrap();
+            assert!(value.is_finite() && value >= 0.0, "{field} = {value}");
+        }
+    }
+
+    // Spec §14: with a single generated token there are no tokens after the first, so there is
+    // no generation throughput to report, rather than a division by zero.
+    #[test]
+    fn one_token_has_no_generation_throughput() {
+        let (_, _, events) = logged(&bigram_model(&CYCLE, 16), "a", 1, Some(Level::INFO));
+        let summary = events.iter().find(|e| e.message() == "run summary").unwrap();
+        assert_eq!(summary.get("generated_tokens"), Some("1"));
+        assert_eq!(summary.get("generation_tokens_per_s"), None);
+    }
+
+    // FR-23, Spec §14: at debug there is one event per forward step, inside `generate` ->
+    // `step{pos}`, with the token fed, its text, the top 5 candidates and the step time; prompt
+    // steps are marked. Each prompt token appears once as `token` and each generated token once
+    // as `next`. The last generated token is never fed back (plan §9, task 5.1), so a run has
+    // one step fewer than prompt plus generated tokens.
+    #[test]
+    fn debug_gives_one_event_per_step() {
+        let model = bigram_model(&CYCLE, 16);
+        let (ids, _, events) = logged(&model, "ab", 3, Some(Level::DEBUG));
+        assert_eq!(ids, [0x63, 0x61, 0x62]);
+        let steps = steps(&events);
+        assert_eq!(steps.len(), 2 + 3 - 1);
+        assert!(events.iter().all(|e| e.level <= Level::DEBUG), "no trace events at debug");
+
+        let expected = [
+            ("prompt", 0x61, "\"a\"", None),
+            ("prompt", 0x62, "\"b\"", Some(0x63)),
+            ("generate", 0x63, "\"c\"", Some(0x61)),
+            ("generate", 0x61, "\"a\"", Some(0x62)),
+        ];
+        for (pos, (step, (phase, token, text, next))) in steps.iter().zip(expected).enumerate() {
+            assert_eq!(step.path, ["generate".to_string(), format!("step{{pos={pos}}}")]);
+            assert_eq!(step.get("phase"), Some(phase), "{step:?}");
+            assert_eq!(step.get("token"), Some(token.to_string().as_str()));
+            assert_eq!(step.get("text"), Some(text));
+            assert_eq!(step.get("next"), next.map(|n: u32| n.to_string()).as_deref());
+            assert!(step.get("step_ms").unwrap().parse::<f64>().unwrap() >= 0.0);
+            let top5: Vec<&str> = step.get("top5").unwrap().split(", ").collect();
+            assert_eq!(top5.len(), 5, "{top5:?}");
+            let first: u32 = top5[0].split(' ').next().unwrap().parse().unwrap();
+            assert_eq!(Some(first), next.or(Some(0x62)), "the top candidate is the one chosen");
+        }
+        let nexts: Vec<u32> = steps.iter().filter_map(|s| s.get("next")).map(|n| n.parse().unwrap()).collect();
+        assert_eq!(nexts, ids, "every generated token once, as `next`");
+    }
+
+    // Spec §14, FR-16: the top 5 are in descending order and, among equal logits, by ascending ID.
+    #[test]
+    fn top5_orders_ties_by_id() {
+        let (model, tokenizer) = (zero_model(4), tokenizer());
+        let steps = Steps { session: model.session(false), tokenizer: &tokenizer, debug: true };
+        let mut logits = vec![0.0; VOCAB];
+        logits[200] = 2.0;
+        logits[100] = 1.0;
+        logits[7] = 1.0;
+        let ids: Vec<u32> = steps.top5(&logits).split(", ").map(|c| c.split(' ').next().unwrap().parse().unwrap()).collect();
+        assert_eq!(ids, [200, 7, 100, 0, 1]);
+    }
+
+    // FR-23, Spec §14: at trace each step adds one event per layer, inside `generate` ->
+    // `step{pos}` -> `layer{idx}`, with both residual norms and a position for every head.
+    #[test]
+    fn trace_gives_one_event_per_layer_per_step() {
+        let model = bigram_model(&CYCLE, 16);
+        let (_, _, events) = logged(&model, "ab", 3, Some(Level::TRACE));
+        let layers: Vec<&Logged> = events.iter().filter(|e| e.level == Level::TRACE).collect();
+        assert_eq!(layers.len(), steps(&events).len() * model.config().layers);
+        for (pos, event) in layers.iter().enumerate() {
+            assert_eq!(event.path, ["generate".to_string(), format!("step{{pos={pos}}}"), "layer{idx=0}".to_string()]);
+            for field in ["residual_norm_after_attention", "residual_norm_after_mlp"] {
+                assert!(event.get(field).unwrap().parse::<f32>().unwrap() > 0.0, "{field}: {event:?}");
+            }
+            // One head; its query and keys are zero here, so the weights are equal and the
+            // earliest position wins.
+            assert_eq!(event.get("most_attended"), Some("[0]"));
+        }
+    }
+
+    // S-8, FR-23: the IDs and the streamed text are the same with no subscriber and at every level.
+    #[test]
+    fn output_is_the_same_at_every_level() {
+        let model = bigram_model(&THAI_CHAIN, 32);
+        let (ids, chunks, _) = logged(&model, "a", 20, None);
+        for level in [Level::WARN, Level::INFO, Level::DEBUG, Level::TRACE] {
+            let (i, c, _) = logged(&model, "a", 20, Some(level));
+            assert_eq!((&i, &c), (&ids, &chunks), "{level}");
+        }
     }
 }

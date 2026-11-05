@@ -14,6 +14,8 @@ mod model;
 mod ops;
 mod safetensors;
 mod tensor;
+#[cfg(test)]
+mod test_log;
 mod tokenizer;
 mod weights;
 

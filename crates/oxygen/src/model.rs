@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::time::Instant;
 
 use crate::fault::Fault;
 use crate::forward;
@@ -37,9 +38,24 @@ impl Model {
     /// Unsupported configurations and files that do not match them are
     /// rejected by name (FR-12).
     pub fn load(model_dir: &Path) -> Result<Model, Error> {
+        let start = Instant::now();
         let config = Config::load(model_dir)?;
         let file = SafeTensors::open(&model_dir.join("model.safetensors"))?;
         let weights = Weights::bind(&file, &config)?;
+        let c = &config;
+        tracing::info!(
+            dir = %model_dir.display(),
+            layers = c.layers,
+            hidden_size = c.hidden_size,
+            heads = c.heads,
+            kv_heads = c.kv_heads,
+            head_dim = c.head_dim,
+            intermediate_size = c.intermediate_size,
+            vocab_size = c.vocab_size,
+            context_length = c.context_length,
+            load_ms = start.elapsed().as_secs_f64() * 1000.0,
+            "model loaded"
+        );
         Ok(Model { config, weights, fault: None })
     }
 
@@ -90,5 +106,41 @@ impl Session<'_> {
     /// Capture of the last step; `None` when capture is off.
     pub fn capture(&self) -> Option<&Capture> {
         self.capture.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tracing::Level;
+
+    use super::*;
+    use crate::test_log::collect;
+
+    // FR-23, Spec §14: loading logs one info event with the configuration summary and the
+    // load time, and nothing at the default level.
+    #[test]
+    fn load_logs_the_configuration_and_load_time_at_info() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/smollm2-135m");
+        let (model, events) = collect(Some(Level::INFO), || Model::load(&dir).unwrap());
+        assert_eq!(events.len(), 1, "{events:?}");
+        let event = &events[0];
+        assert_eq!((event.level, event.message()), (Level::INFO, "model loaded"));
+        let c = model.config();
+        for (field, value) in [
+            ("layers", c.layers),
+            ("hidden_size", c.hidden_size),
+            ("heads", c.heads),
+            ("kv_heads", c.kv_heads),
+            ("head_dim", c.head_dim),
+            ("intermediate_size", c.intermediate_size),
+            ("vocab_size", c.vocab_size),
+            ("context_length", c.context_length),
+        ] {
+            assert_eq!(event.get(field), Some(value.to_string().as_str()), "{field}");
+        }
+        assert!(event.get("load_ms").unwrap().parse::<f64>().unwrap() > 0.0);
+        assert!(event.get("dir").unwrap().contains("smollm2-135m"));
+
+        assert!(collect(Some(Level::WARN), || Model::load(&dir).unwrap()).1.is_empty());
     }
 }
