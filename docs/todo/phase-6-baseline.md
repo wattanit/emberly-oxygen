@@ -16,12 +16,12 @@ Out of scope: any performance change. This phase measures the engine as it is; t
 
 Each has a recommendation; none is decided by this to-do. The first blocks 6.2 and is asked there.
 
-1. **The two benchmark prompts. (blocks 6.2.)** Spec §12 fixes their lengths (32 and 512 tokens) but not their text. *Recommendation:* two English prose passages committed in `crates/oxygen/benches/prompts.json`, written for the purpose; the harness encodes them with the engine's tokenizer and refuses to run unless they are exactly 32 and 512 tokens, and refuses a run whose continuation stops at EOS before 128 tokens, so every row measures the same work. English prose because it is the model's main language and its continuations are the least likely to end early; the oracle's prompts are not reused, since none is exactly 32 or 512 tokens and changing them would invalidate the fixtures.
-2. **One warm-up run per workload.** The first process to read `model.safetensors` after a while pays the disk, not the engine, which inflates its load time. *Recommendation:* one unrecorded warm-up run per workload before the five recorded ones, stated in each row as `"warmup_runs": 1`. Spec §12 says five runs and this keeps five; it adds one that is not counted.
-3. **How the kernel group reaches the in-house matrix-vector product.** `ops::matvec` is private to the library, and a bench is a separate crate. *Recommendation:* a `bench-kernels` Cargo feature, off by default, that makes a hidden `kernels` module public with `matvec` in it, enabled only through the library's existing self-referencing dev-dependency, as `negative-controls` is (plan §9, task 4.7); a normal build cannot see it. Recorded in plan §9 for Spec §1 and §12.
-4. **Where the kernel results go.** *Recommendation:* in the same `results/benchmarks.jsonl`, one row per matrix size with `"group": "kernels"` and the same conditions as the workload rows (`"group": "workloads"`), so HC-2's baseline is comparable release to release like everything else.
-5. **A dirty tree.** *Recommendation:* the harness always records, with `"dirty": true` when `git status --porcelain` is non-empty, so exploratory runs stay honest; the baseline rows of 6.6 must come from a clean tree at the commit that is tagged, and are rerun otherwise.
-6. **Pushing.** Nothing has been pushed this phase or the last. *Recommendation:* the owner pushes `develop`, `main` and the tag after the 6.8 review, or asks for it then.
+1. **The two benchmark prompts. (blocks 6.2.)** *Resolved by the owner: the recommendation, prompts written for the benchmark.* Spec §12 fixes their lengths (32 and 512 tokens) but not their text. *Recommendation:* two English prose passages committed in `crates/oxygen/benches/prompts.json`, written for the purpose; the harness encodes them with the engine's tokenizer and refuses to run unless they are exactly 32 and 512 tokens, and refuses a run whose continuation stops at EOS before 128 tokens, so every row measures the same work. English prose because it is the model's main language and its continuations are the least likely to end early; the oracle's prompts are not reused, since none is exactly 32 or 512 tokens and changing them would invalidate the fixtures.
+2. **One warm-up run per workload.** *Resolved by the owner: yes.* The first process to read `model.safetensors` after a while pays the disk, not the engine, which inflates its load time. *Recommendation:* one unrecorded warm-up run per workload before the five recorded ones, stated in each row as `"warmup_runs": 1`. Spec §12 says five runs and this keeps five; it adds one that is not counted.
+3. **How the kernel group reaches the in-house matrix-vector product.** *Resolved by the owner: the recommendation, a `bench-kernels` feature (option b of making it public, a test-only feature, or copying it).* `ops::matvec` is private to the library, and a bench is a separate crate. *Recommendation:* a `bench-kernels` Cargo feature, off by default, that makes a hidden `kernels` module public with `matvec` in it, enabled only through the library's existing self-referencing dev-dependency, as `negative-controls` is (plan §9, task 4.7); a normal build cannot see it. Recorded in plan §9 for Spec §1 and §12.
+4. **Where the kernel results go.** *Resolved by the owner: the recommendation, the same record with a `group` field.* *Recommendation:* in the same `results/benchmarks.jsonl`, one row per matrix size with `"group": "kernels"` and the same conditions as the workload rows (`"group": "workloads"`), so HC-2's baseline is comparable release to release like everything else.
+5. **A dirty tree.** *Resolved by the owner: the recommendation.* *Recommendation:* the harness always records, with `"dirty": true` when `git status --porcelain` is non-empty, so exploratory runs stay honest; the baseline rows of 6.6 must come from a clean tree at the commit that is tagged, and are rerun otherwise.
+6. **Pushing and tagging.** *Decided by the owner as a standing rule:* nothing is pushed or tagged, and nothing is merged to `main` for release, without the owner's explicit order at the time. 6.8 stops and asks.
 
 ## 6.1 Benchmark machine (S-7, Requirements §13)
 
@@ -30,16 +30,16 @@ Each has a recommendation; none is decided by this to-do. The first blocks 6.2 a
 
 ## 6.2 Benchmark harness and workloads (FR-7, FR-8, FR-10, S-7, Spec §12)
 
-- [ ] **Resolve decision point 1 with the owner before writing the prompts**
-- [ ] `[[bench]] name = "benchmarks", harness = false` in the library's manifest; `cargo bench` builds with the `bench` profile (optimized, no debug assertions)
-- [ ] The harness refuses to run when `cfg!(debug_assertions)` is true, printing why and exiting non-zero (FR-10); checked by hand with debug assertions forced on (`CARGO_PROFILE_BENCH_DEBUG_ASSERTIONS=true cargo bench`)
-- [ ] Runs offline and without Python: it reads only `models/` and the committed prompts, and if the model is missing it fails naming the download command (FR-7, HC-3)
-- [ ] Workloads `short` (32 prompt tokens) and `long` (512), each generating 128 tokens (Spec §12); the token counts are checked before any timing (decision point 1)
-- [ ] Each repetition is a fresh child process: the bench re-executes itself (`std::env::current_exe`) with `--child <workload>`, the child loads the model, generates, and prints one JSON object of its measurements on standard output; the parent collects them (Spec §12 isolation)
-- [ ] One unrecorded warm-up run, then 5 recorded runs per workload (S-7, decision point 2)
-- [ ] The child runs at the default log level: no subscriber is installed (S-8, Spec §14)
-- [ ] A child that fails or prints something unparseable stops the whole run with its standard error shown; nothing is recorded from a partial run
-- [ ] Check: the whole `cargo bench` is timed and the figure written here (estimate: the long workload is 640 steps at about 50 ms, so about 32 s a run and about 3.5 minutes for six; the short one about 1 minute)
+- [x] **Resolve decision point 1 with the owner before writing the prompts.** Written: `short` is one sentence about a lighthouse keeper (32 tokens), `long` four paragraphs about a coastal town (512 tokens), fitted with the engine's tokenizer through the CLI (`--max-new-tokens 0 -v` logs the count); both generate the full 128 tokens without EOS
+- [x] `[[bench]] name = "benchmarks", harness = false` in the library's manifest; `cargo bench` builds with the `bench` profile (optimized, no debug assertions)
+- [x] The harness refuses to run when `cfg!(debug_assertions)` is true, printing why and exiting non-zero (FR-10); checked by hand with debug assertions forced on (`CARGO_PROFILE_BENCH_DEBUG_ASSERTIONS=true cargo bench`): exit 1 with "refusing to benchmark a build with debug assertions on ... (FR-10)"
+- [x] Runs offline and without Python: it reads only `models/` and the committed prompts, and if the model is missing it fails naming the download command (FR-7, HC-3)
+- [x] Workloads `short` (32 prompt tokens) and `long` (512), each generating 128 tokens (Spec §12); the token counts are checked before any timing (decision point 1)
+- [x] Each repetition is a fresh child process: the bench re-executes itself (`std::env::current_exe`) with `--child <workload>`, the child loads the model, generates, and prints one JSON object of its measurements on standard output; the parent collects them (Spec §12 isolation)
+- [x] One unrecorded warm-up run, then 5 recorded runs per workload (S-7, decision point 2)
+- [x] The child runs at the default log level: no subscriber is installed (S-8, Spec §14)
+- [x] A child that fails or prints something unparseable stops the whole run with its standard error shown; nothing is recorded from a partial run
+- [x] Check: the whole `cargo bench` is timed and the figure written here (estimate: the long workload is 640 steps at about 50 ms, so about 32 s a run and about 3.5 minutes for six; the short one about 1 minute). Measured: 4 min 5 s for both workloads. Runs are within about 1% of each other; the short workload gives about 1.57 s to first token and 20.3 tokens/s generation, the long one about 25.9 s and 18.8 tokens/s, with prompt throughput the same as generation (one token per step, Spec §2). These are not recorded yet: medians and memory are 6.3, the record 6.4
 
 ## 6.3 Metrics (FR-8, Spec §12)
 
@@ -80,7 +80,7 @@ Each has a recommendation; none is decided by this to-do. The first blocks 6.2 a
 ## 6.8 Tag (Spec §16)
 
 - [ ] **The owner reviews the results and the release note first**
-- [ ] Then tag the reviewed commit `v0.1.0` (annotated, message naming the release note); merging to `main` and pushing follow decision point 6
+- [ ] Then, **only on the owner's explicit order**, tag the reviewed commit `v0.1.0` (annotated, message naming the release note); merging to `main` and pushing likewise wait for the owner's order (decision point 6)
 
 ## Phase exit check
 

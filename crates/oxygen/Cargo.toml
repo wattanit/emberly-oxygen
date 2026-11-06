@@ -21,3 +21,8 @@ emberly-oxygen = { path = ".", features = ["negative-controls"] }
 # Deliberate faults for the negative controls (Spec §17). Never enabled by a
 # normal build: only the dev-dependency above turns it on, for tests.
 negative-controls = []
+
+# The benchmark harness (Spec §12): `cargo bench`, its own main, no test harness.
+[[bench]]
+name = "benchmarks"
+harness = false
