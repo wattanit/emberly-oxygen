@@ -8,6 +8,15 @@
 //! offline and without Python (FR-7), and refuses a build with debug
 //! assertions (FR-10). No log subscriber is installed, so the engine runs at
 //! the default log level (S-8).
+//!
+//! Metrics (FR-8): prompt throughput, generation throughput and time to first
+//! token come from `generate`'s `Stats` (the first token counts as prompt
+//! work, plan §9); model load time is measured separately; peak resident
+//! memory is the child's own high-water mark. Each is summarized over the
+//! recorded runs as median, minimum and maximum (S-7).
+
+#[path = "support/stats.rs"]
+mod stats;
 
 use std::path::PathBuf;
 use std::process::{exit, Command};
@@ -18,6 +27,15 @@ use serde_json::{json, Value};
 
 const WARMUP_RUNS: usize = 1;
 const RECORDED_RUNS: usize = 5;
+
+/// The measurements a child reports, in the order they are summarized.
+const METRICS: [&str; 5] = [
+    "time_to_first_token_ms",
+    "prompt_tokens_per_s",
+    "generation_tokens_per_s",
+    "load_ms",
+    "peak_rss_bytes",
+];
 
 struct Workload {
     id: String,
@@ -99,7 +117,22 @@ fn parent() {
                 recorded.push(measured);
             }
         }
+        println!("  {:<24} {:>14} {:>14} {:>14}", "over 5 runs", "median", "min", "max");
+        for metric in METRICS {
+            let s = summarize(&recorded, metric);
+            let places = if metric.ends_with("_bytes") { 0 } else { 3 };
+            println!("  {metric:<24} {:>14.places$} {:>14.places$} {:>14.places$}", s.median, s.min, s.max);
+        }
     }
+}
+
+/// One metric over the recorded runs.
+fn summarize(runs: &[Value], metric: &str) -> stats::Spread {
+    let values: Vec<f64> = runs
+        .iter()
+        .map(|r| r[metric].as_f64().unwrap_or_else(|| fail(&format!("a run did not report {metric}: {r}"))))
+        .collect();
+    stats::spread(&values).unwrap_or_else(|| fail(&format!("{metric}: no usable values")))
 }
 
 /// One run in a fresh process; its measurements, or the benchmark stops.
@@ -143,6 +176,29 @@ fn child(w: &Workload) {
             "time_to_first_token_ms": first.as_secs_f64() * 1000.0,
             "prompt_tokens_per_s": stats.prompt_tokens_per_second(),
             "generation_tokens_per_s": stats.generation_tokens_per_second(),
+            "peak_rss_bytes": peak_rss_bytes(),
         })
     );
+}
+
+/// This process's peak resident memory in bytes, or `None` where the unit of
+/// `ru_maxrss` is not known. It is bytes on macOS and kibibytes on Linux.
+fn peak_rss_bytes() -> Option<u64> {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: getrusage writes a whole `rusage` into the pointer it is given,
+    // which points at one; it is read only when the call reports success.
+    let usage = unsafe {
+        if libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) != 0 {
+            return None;
+        }
+        usage.assume_init()
+    };
+    let max = u64::try_from(usage.ru_maxrss).ok()?;
+    if cfg!(target_os = "macos") {
+        Some(max)
+    } else if cfg!(target_os = "linux") {
+        Some(max * 1024)
+    } else {
+        None
+    }
 }

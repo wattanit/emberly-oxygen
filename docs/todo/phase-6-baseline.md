@@ -43,11 +43,12 @@ Each has a recommendation; none is decided by this to-do. The first blocks 6.2 a
 
 ## 6.3 Metrics (FR-8, Spec §12)
 
-- [ ] From `generate`'s `Stats` (plan §9, tasks 5.3 and 5.4): prompt throughput, generation throughput and time to first token, with the definitions recorded there (the first token counts as prompt work)
-- [ ] Model load time, timed in the child around `Model::load` and `Tokenizer::load`, reported separately (Spec §12)
-- [ ] Peak resident memory: `getrusage(RUSAGE_SELF)` in the child after generation; `ru_maxrss` is bytes on macOS and kibibytes on Linux, so the unit is converted by target and recorded in bytes
-- [ ] Each metric over the 5 runs as median, minimum and maximum (S-7); the median of an odd count is the middle value
-- [ ] Unit tests (from `tests/`, decision on layout above) for the statistics on known lists, including ties and an unsorted input; every test names FR-8 or S-7
+- [x] From `generate`'s `Stats` (plan §9, tasks 5.3 and 5.4): prompt throughput, generation throughput and time to first token, with the definitions recorded there (the first token counts as prompt work)
+- [x] Model load time, timed in the child around `Model::load` and `Tokenizer::load`, reported separately (Spec §12)
+- [x] Peak resident memory: `getrusage(RUSAGE_SELF)` in the child after generation; `ru_maxrss` is bytes on macOS and kibibytes on Linux, so the unit is converted by target and recorded in bytes (`None` on other systems). The call is the harness's one `unsafe` block, commented; the engine's own code stays free of `unsafe`. Measured: 811.5 MB in every run of both workloads, because the peak is set while loading: the bf16 file (269 MB, memory-mapped and resident while it is read) plus its weights widened to f32 (538 MB); the key-value cache grows with the positions used and is small by comparison
+- [x] Each metric over the 5 runs as median, minimum and maximum (S-7); the median of an odd count is the middle value
+- [x] Unit tests (from `tests/`, decision on layout above) for the statistics on known lists, including ties and an unsorted input; every test names FR-8 or S-7. `tests/bench_support.rs` includes `benches/support/stats.rs` by path: 4 tests, also covering an even count (mean of the middle two) and empty or NaN input (no spread)
+- [x] Measured (4 min 4 s): short, median 1.566 s to first token, 20.44 prompt and 20.29 generation tokens/s, load 57 ms; long, 26.0 s, 19.70 and 18.74 tokens/s, load 59 ms; every spread within about 1%. Not yet recorded; the record is 6.4
 
 ## 6.4 The record (FR-9, Spec §12)
 

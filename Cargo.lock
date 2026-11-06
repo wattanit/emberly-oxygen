@@ -115,6 +115,7 @@ name = "emberly-oxygen"
 version = "0.1.0"
 dependencies = [
  "emberly-oxygen",
+ "libc",
  "matrixmultiply",
  "memmap2",
  "serde",
