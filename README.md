@@ -2,7 +2,7 @@
 
 A decoder-only LLM inference engine written from scratch in Rust, to understand every part by building it. It starts naive and improves one version at a time; the first target is SmolLM2-135M on CPU. The foundation documents in `docs/` are the source of truth: [Requirements](docs/emberly-oxygen-requirements.md), [Technical Specification](docs/emberly-oxygen-technical-specification.md), and the [roadmap](docs/high-level-roadmap.md) for direction.
 
-Status: release 0.1.0 is in progress. Phases 1 to 5 are done: the oracle, the correctness harness, model loading and the tokenizer, the forward pass, and generation with the command-line tool. The engine matches the oracle on every check in every prompt category, including greedy continuations token for token, so `cargo test` passes in full. Phase 6, the baseline benchmark, is next. See [`docs/todo/`](docs/todo/) for the current phase.
+Status: release 0.1.0, the baseline. The six phases of its plan are done (the oracle, the correctness harness, model loading and the tokenizer, the forward pass, generation with the command-line tool, and the baseline benchmark) apart from the owner's review and the `v0.1.0` tag. The engine matches the oracle on every check in every prompt category, and its first benchmark rows are in `results/benchmarks.jsonl`. See the [release note](docs/releases/0.1.0.md) for what was built, measured and learned.
 
 ## Setup on a new machine
 
@@ -70,7 +70,7 @@ cargo test --no-fail-fast     # same, but keeps running other test files after o
 cargo build --release         # optimized build; the binary is target/release/emberly-oxygen
 ```
 
-The benchmark harness (`cargo bench`) arrives in Phase 6. The correctness harness never downloads files and never runs Python: if `models/` or `fixtures/` is missing, it fails and names the command that creates it.
+The correctness harness never downloads files and never runs Python: if `models/` or `fixtures/` is missing, it fails and names the command that creates it.
 
 ## Command-line tool
 
@@ -97,6 +97,17 @@ It generates greedily (always the highest-scoring token) and streams the text to
 
 Exit codes: `0` on success; `1` on an error (missing or unsupported model files, an empty prompt, a prompt plus `--max-new-tokens` longer than the model's context, input that is not UTF-8, a log file that cannot be created, or standard output closed early), with the message on standard error and any text already generated left printed; `2` on a usage error such as a missing option or an unknown flag.
 
+## Benchmark
+
+```sh
+cargo bench                   # about 5 minutes; appends to results/benchmarks.jsonl
+cargo bench -- --dry-run      # the same, printing the rows instead of appending them
+```
+
+The harness runs two workloads, a 32-token and a 512-token prompt each followed by 128 generated tokens (texts in `crates/oxygen/benches/prompts.json`), every run in a fresh process: one warm-up and five recorded runs, reported as median, minimum and maximum. It measures time to first token, prompt and generation throughput, model load time and peak memory, and then times the engine's matrix-vector product against `matrixmultiply` at each of the model's matrix shapes. Each row carries its conditions: version, commit, whether the tree was dirty, machine, build profile and time. It refuses a build with debug assertions and needs neither network nor Python.
+
+Recorded results come from the benchmark machine only (an Apple M4 Max), after `cargo test` has passed; rows from anywhere else, or with `"dirty": true`, are not results.
+
 ## Repository layout
 
 ```
@@ -106,7 +117,7 @@ oracle/              Python reference oracle: the only Python in the project
 fixtures/            expected outputs, git-ignored
 models/              downloaded model files, git-ignored
 results/             cumulative benchmark record
-docs/                requirements, specification, plan, roadmap, per-phase to-dos
+docs/                requirements, specification, plan, roadmap, per-phase to-dos, release notes
 ```
 
 ## License

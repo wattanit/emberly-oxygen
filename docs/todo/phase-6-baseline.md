@@ -77,8 +77,9 @@ Each has a recommendation; none is decided by this to-do. The first blocks 6.2 a
 
 ## 6.7 Release note (Requirements §12)
 
-- [ ] `docs/releases/0.1.0.md`: what the release is (a by-the-book f32, single-threaded engine for SmolLM2-135M); why it was expected to work (the oracle and the harness, the measured errors, the negative controls); what was measured (the baseline rows and the kernel comparison); what was learned (the plan §9 findings, including the near-tie and reproducibility figures); negative results; and that, with no earlier release, this one is the baseline
-- [ ] README: status line and a short benchmark section (`cargo bench`, where results go, the benchmark machine)
+- [x] `docs/releases/0.1.0.md`: what the release is (a by-the-book f32, single-threaded engine for SmolLM2-135M); why it was expected to work (the oracle and the harness, the measured errors, the negative controls); what was measured (the baseline rows and the kernel comparison); what was learned (the plan §9 findings, including the near-tie and reproducibility figures); negative results; and that, with no earlier release, this one is the baseline
+- [x] Written, with its figures checked against `results/benchmarks.jsonl`, plan §8 and §9 before committing (three corrections: the test count is 203 with the bench helpers' tests; the partial-sum speed-ups were timed but never run through the harness, so the note says they are expected to stay within tolerance, not that they do; the top-token check "passes" rather than being "equal", since S-3 allows near-ties)
+- [x] README: status line and a short benchmark section (`cargo bench`, where results go, the benchmark machine). The status line says what remains: the owner's review and the tag; the layout lists release notes under `docs/`
 
 ## 6.8 Tag (Spec §16)
 
