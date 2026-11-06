@@ -136,7 +136,8 @@ fn print_stats(load_time: Duration, stats: &Stats) {
         .generation_tokens_per_second()
         .map_or("- (fewer than two tokens)".into(), |r| format!("{r:.2} tokens/s"));
     let report = format!(
-        "\nmodel load:          {}\n\
+        "\n\n---------- stats ----------\n\
+         model load:          {}\n\
          prompt tokens:       {}\n\
          generated tokens:    {}\n\
          time to first token: {first}\n\
