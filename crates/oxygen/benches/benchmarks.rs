@@ -15,12 +15,21 @@
 //! memory is the child's own high-water mark. Each is summarized over the
 //! recorded runs as median, minimum and maximum (S-7).
 
+//!
+//! The record (FR-9): one JSON line per workload is appended to
+//! `results/benchmarks.jsonl` once every workload has finished, each carrying
+//! the version, commit, dirty flag, machine, build and timestamp. With
+//! `cargo bench -- --dry-run` the lines are printed instead of appended.
+
+#[path = "support/record.rs"]
+mod record;
 #[path = "support/stats.rs"]
 mod stats;
 
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::{exit, Command};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use emberly_oxygen::{generate, Model, Tokenizer};
 use serde_json::{json, Value};
@@ -65,8 +74,12 @@ fn fail(message: &str) -> ! {
     exit(1)
 }
 
+fn root() -> PathBuf {
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."))
+}
+
 fn model_dir() -> PathBuf {
-    let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../models/smollm2-135m"));
+    let dir = root().join("models/smollm2-135m");
     if !dir.exists() {
         fail(&format!("{}: missing; run `cd oracle && uv run python download.py`", dir.display()));
     }
@@ -93,8 +106,12 @@ fn workload(id: &str) -> Workload {
         .unwrap_or_else(|| fail(&format!("no workload {id:?} in prompts.json")))
 }
 
-/// Runs every workload in child processes and reports each run.
+/// Runs every workload in child processes, reports each run, and records the
+/// summaries.
 fn parent() {
+    let dry_run = std::env::args().any(|a| a == "--dry-run");
+    // Taken before any run, so the commit and dirty flag describe the code measured.
+    let conditions = conditions();
     let workloads = workloads();
     // The prompts must be exactly the lengths Spec §12 names, or the rows
     // would not measure the same work as the series they join.
@@ -106,6 +123,7 @@ fn parent() {
         }
     }
 
+    let mut rows = Vec::new();
     for w in &workloads {
         println!("workload {}: {} prompt tokens, {} new tokens", w.id, w.prompt_tokens, w.new_tokens);
         let mut recorded = Vec::with_capacity(RECORDED_RUNS);
@@ -118,10 +136,132 @@ fn parent() {
             }
         }
         println!("  {:<24} {:>14} {:>14} {:>14}", "over 5 runs", "median", "min", "max");
+        let mut results = Vec::new();
         for metric in METRICS {
             let s = summarize(&recorded, metric);
             let places = if metric.ends_with("_bytes") { 0 } else { 3 };
             println!("  {metric:<24} {:>14.places$} {:>14.places$} {:>14.places$}", s.median, s.min, s.max);
+            results.push((metric, s));
+        }
+        let fields = json!({
+            "group": "workloads",
+            "workload": w.id,
+            "prompt_tokens": w.prompt_tokens,
+            "new_tokens": w.new_tokens,
+        });
+        rows.push(record::row(&conditions, fields, &results));
+    }
+    write_rows(&rows, dry_run);
+}
+
+/// Appends the rows to the record, one JSON line each, or prints them for a
+/// dry run. Called once at the end, so a run that stops early records nothing.
+fn write_rows(rows: &[Value], dry_run: bool) {
+    let lines: String = rows.iter().map(|r| format!("{r}\n")).collect();
+    let path = root().join("results/benchmarks.jsonl");
+    if dry_run {
+        print!("dry run, not appended to {}:\n{lines}", path.display());
+        return;
+    }
+    let appended = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut file| file.write_all(lines.as_bytes()));
+    if let Err(e) = appended {
+        fail(&format!("{}: {e}", path.display()));
+    }
+    println!("appended {} rows to {}", rows.len(), path.display());
+}
+
+/// The conditions every row of this run shares (FR-9).
+fn conditions() -> record::Conditions {
+    let git = |args: &[&str]| -> Option<String> {
+        let out = Command::new("git").args(args).current_dir(root()).output().ok()?;
+        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).trim().to_owned())
+    };
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).expect("the clock is after 1970");
+    record::Conditions {
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        commit: git(&["rev-parse", "HEAD"]),
+        dirty: git(&["status", "--porcelain"]).map(|s| !s.is_empty()),
+        timestamp: record::rfc3339(now.as_secs()),
+        machine: machine(),
+        // `cargo bench` builds the bench profile, and main has already refused
+        // a build with debug assertions.
+        profile: "bench".to_owned(),
+        debug_assertions: cfg!(debug_assertions),
+        warmup_runs: WARMUP_RUNS,
+        recorded_runs: RECORDED_RUNS,
+    }
+}
+
+/// The machine, from `sysctlbyname` on macOS. Elsewhere only what the
+/// standard library knows is filled in, and the rest is `null`.
+fn machine() -> record::Machine {
+    let cores = std::thread::available_parallelism().ok().map(|n| n.get() as u64);
+    let mut m = record::Machine {
+        cpu: None,
+        cores,
+        performance_cores: None,
+        efficiency_cores: None,
+        memory_bytes: None,
+        os: std::env::consts::OS.to_owned(),
+        os_version: None,
+        arch: std::env::consts::ARCH.to_owned(),
+    };
+    #[cfg(target_os = "macos")]
+    {
+        m.cpu = sysctl::string("machdep.cpu.brand_string");
+        m.cores = sysctl::number("hw.ncpu").or(m.cores);
+        m.performance_cores = sysctl::number("hw.perflevel0.physicalcpu");
+        m.efficiency_cores = sysctl::number("hw.perflevel1.physicalcpu");
+        m.memory_bytes = sysctl::number("hw.memsize");
+        m.os_version = sysctl::string("kern.osproductversion");
+    }
+    m
+}
+
+#[cfg(target_os = "macos")]
+mod sysctl {
+    use std::ffi::{c_void, CString};
+    use std::ptr::null_mut;
+
+    /// The raw value of a `sysctl` entry, or `None` if the system has no such entry.
+    fn raw(name: &str) -> Option<Vec<u8>> {
+        let name = CString::new(name).ok()?;
+        let mut len = 0usize;
+        // SAFETY: with a null buffer, sysctlbyname only writes the value's size
+        // into `len`; the second call writes at most `len` bytes into a buffer
+        // of that size and updates `len` to what it wrote.
+        unsafe {
+            if libc::sysctlbyname(name.as_ptr(), null_mut(), &mut len, null_mut(), 0) != 0 {
+                return None;
+            }
+            let mut buf = vec![0u8; len];
+            if libc::sysctlbyname(name.as_ptr(), buf.as_mut_ptr().cast::<c_void>(), &mut len, null_mut(), 0) != 0 {
+                return None;
+            }
+            buf.truncate(len);
+            Some(buf)
+        }
+    }
+
+    pub fn string(name: &str) -> Option<String> {
+        let mut bytes = raw(name)?;
+        while bytes.last() == Some(&0) {
+            bytes.pop();
+        }
+        String::from_utf8(bytes).ok()
+    }
+
+    /// A 4- or 8-byte little-endian integer entry.
+    pub fn number(name: &str) -> Option<u64> {
+        let bytes = raw(name)?;
+        match bytes.len() {
+            4 => Some(u64::from(u32::from_le_bytes(bytes.try_into().ok()?))),
+            8 => Some(u64::from_le_bytes(bytes.try_into().ok()?)),
+            _ => None,
         }
     }
 }
