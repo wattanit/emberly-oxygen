@@ -25,8 +25,8 @@ Each has a recommendation; none is decided by this to-do. The first blocks 6.2 a
 
 ## 6.1 Benchmark machine (S-7, Requirements §13)
 
-- [ ] Record the owner's decision in plan §10 (both open questions resolved: the machine, and that its fixtures are its own) and in plan §9 for Requirements §13's open item on S-7
-- [ ] Note in plan §9 that Phase 4's measurements are recorded as "Apple M5" while Phase 5's and this phase's machine is an Apple M4 Max; ask the owner whether Phase 4 ran on a different machine or the label is wrong, and correct it only on the owner's word
+- [x] Record the owner's decision in plan §10 (both open questions resolved: the machine, and that its fixtures are its own) and in plan §9 for Requirements §13's open item on S-7
+- [x] Note in plan §9 that Phase 4's measurements are recorded as "Apple M5" while Phase 5's and this phase's machine is an Apple M4 Max; ask the owner whether Phase 4 ran on a different machine or the label is wrong, and correct it only on the owner's word. The owner confirmed Phase 4 ran on an M5 and development moved to the M4 Max before task 5.1, so the label stands; plan §9 records the move and that Phase 4's worst errors reproduced to the last digit on the M4 Max
 
 ## 6.2 Benchmark harness and workloads (FR-7, FR-8, FR-10, S-7, Spec §12)
 
