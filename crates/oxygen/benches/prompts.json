@@ -1,0 +1,17 @@
+{
+  "about": "Benchmark workloads (Spec §12): a 32-token and a 512-token English prompt, each followed by 128 generated tokens. Written for the benchmark; the harness refuses to run unless the engine's tokenizer gives exactly prompt_tokens and generation runs the full new_tokens without stopping at EOS. Changing a text or a count starts a new comparable series in results/benchmarks.jsonl.",
+  "workloads": [
+    {
+      "id": "short",
+      "prompt_tokens": 32,
+      "new_tokens": 128,
+      "text": "The old lighthouse keeper slowly climbed the narrow stone stairs at dusk, as he had done every evening for thirty years, and lit the great lamp above the bay."
+    },
+    {
+      "id": "long",
+      "prompt_tokens": 512,
+      "new_tokens": 128,
+      "text": "The town of Harrow's End sits at the mouth of a cold river, where the water slows and spreads into a wide grey estuary before it meets the sea. For most of its history it was a fishing town, and the oldest streets still bend the way the paths once ran down to the boats. The houses near the harbour are built of dark stone, with small windows set deep in thick walls, because the winter storms come in from the east and can last for days. Further up the hill the buildings change. There the merchants who grew rich on the salt trade built tall brick houses with wide doors and gardens behind iron railings, and some of those families still live in them today.\n\nIn the spring the estuary fills with birds. Long-legged waders walk the mud at low tide, picking at worms and small crabs, and flocks of geese arrive from the north to rest on the marshes before they fly on. The schoolchildren are taken out each year to count them, and the counts are kept in a ledger at the town library that goes back more than a century. Reading it, you can see the slow rise and fall of each species, the years when a hard winter thinned the flocks, and the years when a new kind of bird appeared for the first time and then stayed.\n\nThe library itself is one of the few public buildings in the town that has never been rebuilt. It was paid for by a shipowner who lost two sons at sea and wanted, as he wrote in his will, a warm and quiet room where anyone could sit and read without being asked to leave. The reading room still has the long oak tables he ordered, scarred by generations of elbows and pocket knives, and the iron stove in the corner is lit every morning from October to April. The librarian keeps a kettle on it and does not mind if visitors make themselves a cup of tea.\n\nLife in the town follows the tides more than the clock. The ferry to the island across the bay runs only when the water is deep enough over the sandbar, so its timetable changes every day, and people check it the way others check the weather. When the tide is out, the bar is exposed and it is possible to walk across, but only with a guide, because the channels fill quickly and the sand can shift beneath your feet. Every few years someone ignores the warnings and has to be rescued by the lifeboat crew, who are all volunteers and who train together on Tuesday nights in the boathouse by the old pier."
+    }
+  ]
+}

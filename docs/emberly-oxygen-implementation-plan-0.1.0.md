@@ -1,0 +1,194 @@
+# Emberly Oxygen — Implementation Plan for Release 0.1.0
+
+Oct 27, 2026 · @Wattanit
+
+**Target release:** 0.1.0\
+**Owner:** Wattanit\
+**Built against:** Emberly Oxygen — Requirements 0.1 (upstream), Emberly Oxygen — Technical Specification 0.1 (upstream)
+
+This is a living working document, not part of the SFD suite: it has no document version or status and is edited in place as work proceeds. This document expands the Technical Specification's milestones M1 to M6 into phases with ordered tasks and exit checks. It owns sequencing and task breakdown only; WHAT stays in the Requirements and HOW stays in the Specification, and every task cites the IDs it satisfies. A discovery that changes HOW is recorded in §9 and absorbed by a Specification version bump, never decided here. The foundation versions above are the as-built pin for this release: if either bumps while the release is in progress, the pin is updated and the change recorded in §9.
+
+## 1. Working rules
+
+- **Phase order is fixed.** Each phase ends with its milestone's proof (Specification §18). The next phase does not start until the exit check passes, because later phases build on what earlier ones prove.
+- **Tests before engine code.** The oracle and the harness exist before any engine code (M1, M2), so every engine task is written against a gate that has already been seen to fail. This is the order the Specification's milestones already impose.
+- **One task, one commit.** Each task ends with a passing `cargo test` (or the oracle's own check for Phase 1) and a commit, so a regression is traceable to a single task.
+- **Every test names the HC, FR or S item it verifies** (Specification §17), so coverage can be listed mechanically. Each task below lists the IDs its tests carry.
+- **No dependency outside Specification §15.** Adding one requires a Specification bump first (Specification §15 acceptance policy).
+- **Agents write code; the owner reviews at phase exits.** Rewrites are cheap; the tests are the durable asset, so a phase exit reviews the tests and results, not the implementation's elegance.
+
+## 2. Phase 1 — Oracle (M1)
+
+**Proves:** the reference exists. **Satisfies:** FR-1 to FR-4, FR-11, HC-3.
+
+| # | Task | Cites |
+| --- | --- | --- |
+| 1.1 | Workspace skeleton: root `Cargo.toml` (edition 2024; test profile at full optimization with debug assertions kept), empty `emberly-oxygen` library and `emberly-oxygen-cli` crates, `.gitignore` for `fixtures/`, `models/` and build output, empty `results/`. | Spec §1, §16 |
+| 1.2 | `oracle/` as a `uv` project with a lockfile pinning `torch`, `transformers` and `huggingface_hub`. | HC-3, FR-4, Spec §10 |
+| 1.3 | Download script: fetches SmolLM2-135M at a pinned commit into `models/<model-id>/` (`config.json`, `model.safetensors`, `tokenizer.json`). It is the only step needing network access. | FR-11, FR-4, Spec §10 |
+| 1.4 | `oracle/prompts.json`: at least two prompts per category (`english`, `thai`, `code`, `utf8-split`, `long`), each with an ID and category. The `long` prompts are about 512 tokens; the `utf8-split` prompts are chosen by checking that their tokens split a multi-byte character. | FR-3, Spec §10 |
+| 1.5 | Fixture generator: f32 on CPU, eager attention, no gradients; per prompt saves token IDs, logits `[positions, vocab]`, embeddings `[positions, hidden]`, layer outputs `[layers, positions, hidden]`, and a 32-token greedy continuation from the oracle's own argmax loop recording the top-two gap at every step. | FR-1, FR-2, S-3, S-4, Spec §10 |
+| 1.6 | Last layer-output entry labeled as post-final-norm in the stored data, as the library returns it. | FR-1, Spec §10 honesty note |
+| 1.7 | `fixtures/<model-id>/manifest.json`: model ID and commit, library versions, generating machine, per-prompt records. | FR-1, FR-4, Spec §10 |
+
+**Exit check:** running the generator produces a manifest and one safetensors file per prompt for all five categories; a second run on the same machine reproduces the token IDs and continuations exactly. The `long` fixtures are confirmed to be about 512 tokens. Fixtures are not committed; the prompt set, lockfile and pinned commit are.
+
+## 3. Phase 2 — Harness (M2)
+
+**Proves:** the gate can fail. **Satisfies:** FR-5 to FR-7, S-1 to S-5, HC-4.
+
+| # | Task | Cites |
+| --- | --- | --- |
+| 2.1 | Define the engine surface the harness calls (encode, decode, forward over a token returning logits with optional capture, greedy continuation) as a stub in the library that returns wrong or empty values. The surface is the minimum the harness needs; it is refined by Phases 3 to 5, not designed ahead. | Spec §2, §7, §8 |
+| 2.2 | Fixture reader: parses the manifest and the per-prompt safetensors files for tests. The harness has its own reading code because the engine loader does not exist yet and the oracle's output must not be read by the code under test. | FR-4, FR-7, Spec §11 |
+| 2.3 | Comparison checks as pure functions with their own unit tests: maximum absolute logit error (S-1), intermediate error relative to the tensor's largest magnitude (S-2), top-1 with the near-tie exception (S-3), greedy match stopping at a near-tie (S-4). Each returns the first diverging position. | S-1 to S-4, FR-6 |
+| 2.4 | Per-prompt integration tests over every `fixtures/*/manifest.json`, driven by the manifest so a new model needs no code change. | FR-5, Spec §11, §2.2 of Requirements |
+| 2.5 | First-diverging-layer reporting for intermediates. | FR-6 |
+| 2.6 | Pass/fail table by prompt and by category; any failing category fails the run. | S-5, FR-5 |
+| 2.7 | Missing model files or fixtures fail the run naming the path or the oracle command; the harness never downloads and never runs Python. | FR-7, HC-3, Spec §11 |
+
+**Exit check:** `cargo test` against the stub engine runs offline, prints the table with every category failing, and exits non-zero. Unit tests of the comparison functions pass, including cases at each threshold boundary (just under and just over) and a near-tie case.
+
+## 4. Phase 3 — Loading and tokenization (M3)
+
+**Proves:** the engine reads the model as published. **Satisfies:** FR-11 to FR-15, FR-12, HC-1.
+
+| # | Task | Cites |
+| --- | --- | --- |
+| 3.1 | Error type with the variants listed in Specification §14 (I/O, malformed file, unsupported component, tensor mismatch, request rejected). Later tasks add no variant outside this list without a Specification bump. | FR-12, Spec §14 |
+| 3.2 | `config.json` parsing and the supported-set check; unsupported values rejected naming the field and value. Tests use altered copies of the real configuration. | FR-12, Spec §3 |
+| 3.3 | Tensor type: owned `Vec<f32>` with a row-major shape. | HC-1, Spec §3 |
+| 3.4 | In-house safetensors reader: header length, JSON header, memory map, F32 copy, BF16 widening, rejection of other dtypes and of sharded weights. Unit tests build tiny safetensors files in memory, including a BF16 widening exactness case. | FR-11, FR-12, HC-1, Spec §5 |
+| 3.5 | Weight binding by published names, with missing, mis-shaped and unexpected tensors rejected naming the tensor. | FR-12, Spec §5 |
+| 3.6 | Read SmolLM2's `tokenizer.json` and **record the normalizer, pre-tokenizer, post-processor and decoder types it uses.** This resolves Specification §19's first open item and is recorded in §9 of this document as feedback for the Specification. | Spec §6, §19 |
+| 3.7 | Byte-to-unicode map and its inverse, with round-trip unit tests over all 256 bytes. | FR-13, FR-14, Spec §6, §17 |
+| 3.8 | Hand-written pre-tokenizer splitting. Unit tests on constructed strings covering contractions, digits, punctuation runs, whitespace runs and Thai. | FR-13, Spec §6 |
+| 3.9 | BPE merge application by lowest rank, special-token matching first, and the post-processor's BOS behavior. | FR-13, Spec §6 |
+| 3.10 | Decoding through the inverse byte map. | FR-14, Spec §6 |
+| 3.11 | Streaming decoder holding back up to 3 trailing bytes, emitting U+FFFD for impossible sequences, and flushing at the end. Unit tests split a three-byte Thai character across every possible chunk boundary. | FR-15, Spec §6, §17 |
+| 3.12 | Wire the real loader and tokenizer into the harness for the checks that depend only on them: encoding, decoding and the streaming check for `utf8-split` prompts. | FR-13 to FR-15, Spec §11 |
+
+**Exit check:** for every prompt in every category, the harness's encoding and decoding checks pass and the streaming check passes on `utf8-split` prompts; the logit, intermediate and continuation checks still fail because the forward pass is still the stub. An unsupported-configuration test shows the error names the field.
+
+## 5. Phase 4 — Forward pass (M4)
+
+**Proves:** the math. **Satisfies:** S-1 to S-3, HC-1, HC-4.
+
+Kernels come first and one at a time, because a kernel bug found through the full model costs a layer-by-layer search that a unit test would have settled in seconds.
+
+| # | Task | Cites |
+| --- | --- | --- |
+| 4.1 | Matrix-vector product over the `[out, in]` layout. Unit test against `matrixmultiply` on random inputs at each of the model's matrix shapes (`matrixmultiply` is a dev-dependency only). | HC-1, HC-2, Spec §4, §17 |
+| 4.2 | RMSNorm, softmax (max-subtraction), SiLU, elementwise add and multiply, each with hand-computed small cases (softmax sums to 1, and does not overflow on large scores). | Spec §4, §17 |
+| 4.3 | RoPE with half-split pairing and f32 frequency and angle computation. Unit tests: identity at position 0, and a hand-computed rotation at position 1. | Spec §4, §17 |
+| 4.4 | Key-value cache with the `[position][kv_heads × head_dim]` layout. | Spec §3 |
+| 4.5 | Forward pass for one token through steps 1 to 3 of Specification §7, with grouped-query attention indexing, tied output projection and the optional residual-stream capture (off by default). | Spec §7, FR-1 |
+| 4.6 | Connect to the harness: logits, intermediates, top-1. Work through any failure by the first-diverging-layer report (FR-6), shortest prompts first. | S-1 to S-3, FR-6 |
+| 4.7 | Negative controls behind a test-only switch (interleaved RoPE pairing, a 2e-3 perturbation of one logit, a dropped final norm); a test asserts the harness fails on each. How the switch is compiled (a Cargo feature enabled only by those tests) is an implementation choice recorded in §9 for the Specification, because it touches the engine's public surface. | Spec §17, S-1, S-2 |
+
+**Exit check:** logits, intermediates and top-1 checks pass in every category (S-5); all three negative controls fail the harness as intended. The measured maximum logit error and intermediate error per category are written into §8 of this document, because the roadmap and Requirements treat 1e-3 and 1e-4 as initial values to revisit after the first real measurement.
+
+## 6. Phase 5 — Generation and CLI (M5)
+
+**Proves:** the engine end to end. **Satisfies:** FR-16 to FR-24, S-4, S-6, S-8.
+
+| # | Task | Cites |
+| --- | --- | --- |
+| 5.1 | Greedy generation per Specification §8: request validation before any computation (empty prompt, context exceeded), prompt through the forward pass, lowest-ID tie-break, EOS and maximum-length stop, streaming through a callback, decoder flush. | FR-16, FR-17, FR-18, Spec §8 |
+| 5.2 | Harness greedy-continuation check including the near-tie stop. | S-4, FR-5 |
+| 5.3 | `tracing` events and the `generate` → `step{pos}` → `layer{idx}` spans at the levels in Specification §14. Per-layer statistics computed only when trace is enabled. | FR-22, FR-23, S-8, Spec §14 |
+| 5.4 | CLI: `generate` command, prompt from argument or standard input, text-only standard output, errors to standard error with exit codes 1 and 2, `--stats`, `-v` to `-vvv`, `--log-file`. | FR-19 to FR-21, FR-23, FR-24, FR-20, Spec §9 |
+| 5.5 | CLI tests that run the built binary: stdout contains only generated text, errors reach stderr with a non-zero exit, `--stats` output appears on stderr, a context-exceeded request is rejected, stdin and argument prompts agree. | FR-19 to FR-21, FR-18, Spec §9 |
+| 5.6 | Logging invariance test: the same prompt at default, `-v`, `-vv` and `-vvv` yields identical generated text. | S-8 |
+| 5.7 | Reproducibility test: two runs of the same prompt produce logits within S-1 of each other and identical continuations except at near-ties. | S-6 |
+
+**Exit check:** the full `cargo test` passes in every category, including S-4; the CLI generates a recognizable continuation for an English prompt by hand; `-vvv` on a short prompt can be followed through the decode loop by eye (FR-23).
+
+## 7. Phase 6 — Baseline (M6)
+
+**Proves:** the progression has a starting point. **Satisfies:** FR-8 to FR-10, S-7, HC-4.
+
+| # | Task | Cites |
+| --- | --- | --- |
+| 6.1 | **Owner decision first:** choose the benchmark machine. Nothing in this phase is recorded until it is made. | S-7, Requirements §13 |
+| 6.2 | Benchmark harness in `benches/` with the two workloads (32-token and 512-token prompts, each followed by 128 generated tokens), run in a fresh child process per repetition, 5 repetitions, median, minimum and maximum. Refuses to run with debug assertions enabled. | FR-8, FR-10, S-7, Spec §12 |
+| 6.3 | Metrics: prompt throughput, generation throughput, time to first token, peak resident memory (via `libc`), model load time reported separately. | FR-8, Spec §12 |
+| 6.4 | Record writer appending one JSON line per workload to `results/benchmarks.jsonl` with version, commit, dirty-tree flag, CPU, core count, memory, OS, build profile and timestamp. | FR-9, Spec §12 |
+| 6.5 | Kernel baseline group: in-house matrix-vector product against `matrixmultiply` at the model's matrix sizes. | HC-2, Spec §12 |
+| 6.6 | Run `cargo test`, then `cargo bench` on the benchmark machine, at the default log level. A failing test run stops here. | HC-4, S-7, S-8, Spec §16 |
+| 6.7 | Release note `docs/releases/0.1.0.md`: what the release is, why it was expected to work, what was measured, what was learned, and any negative results. There is no previous release to compare against, so the note records this release as the baseline. | Requirements §12 |
+| 6.8 | Tag `v0.1.0` after the owner's review of the results and the note. | Spec §16 |
+
+**Exit check:** `results/benchmarks.jsonl` holds the baseline rows, every row carrying its conditions; the release note exists; the tag is applied.
+
+## 8. Measurements to record
+
+Filled in during the phases; they are inputs to the Specification's and Requirements' "tune with the first measured comparison" clauses and are not tuned here.
+
+- Maximum logit error and intermediate error per category (Phase 4 exit) — for S-1 and S-2.
+
+  Measured at Phase 4 exit with the harness over all 12 prompts (Apple M5, f32, index-order accumulation; thresholds S-1 1e-3 absolute, S-2 1e-4 relative). Every prompt passed with a wide margin: the worst logit error is under a quarter of S-1's limit and the worst intermediate error under a sixteenth of S-2's.
+
+  | Category | Prompts | Max logit error (S-1) | Max relative intermediate error (S-2) |
+  | --- | --- | --- | --- |
+  | english | 2 | 1.81e-4 | 4.78e-6 |
+  | thai | 2 | 2.36e-4 | 5.38e-6 |
+  | code | 3 | 1.97e-4 | 5.91e-6 |
+  | utf8-split | 2 | 2.16e-4 | 4.59e-6 |
+  | long | 3 | 1.81e-4 | 5.21e-6 |
+
+  The `english` and `long` logit maxima are identical because `english-short` and `long-prose` both start with the token `The`, and the logits at position 0 depend on that token alone. The margins do not suggest changing 1e-3 or 1e-4 yet: the long prompts (about 500 positions) are no worse than the short ones, so the error is not growing with context at this length. A full harness run takes about 125 s.
+- Near-ties encountered in greedy continuations (Phase 5) — for S-3 and S-4.
+
+  Measured at task 5.2: none. All 12 greedy continuations (32 tokens each) match the oracle token for token, and no comparison stopped at a near-tie; the smallest reference top-two gap before any continuation token is 2.16e-3 (`code-rust`), just over twice S-3's 1e-3. With the harness's prompts running in parallel threads (test code only), a full harness run takes about 61 s.
+- Run-to-run logit difference (task 5.7) — for S-6.
+
+  Measured at task 5.7 (`tests/reproducibility.rs`, `english-short`, all 30 positions, 1,474,560 logits): a second run on the same loaded model and a run on a second load of the model are **bit-identical** to the first, largest difference 0, and their 16-token greedy continuations are identical. This is expected of a single-threaded engine that adds in index order; S-6's allowance (differences up to S-1, continuations differing at near-ties) is left for a later version that adds in parallel. Across processes the harness gives the same evidence: its worst errors per category have been identical to the last digit in every run since Phase 4.
+
+- Baseline benchmark (task 6.6) — for FR-8, S-7 and every later release's comparison.
+
+  Recorded in `results/benchmarks.jsonl` (7 rows, commit `0b4a5f3`, clean tree, 2026-11-06T07:29:50Z), on the benchmark machine (Apple M4 Max, 16 cores, 128 GB, macOS 26.3, on AC power), after `cargo test --no-fail-fast` passed in 86 s; `cargo bench` took 306 s. Median over 5 runs after 1 warm-up, minimum to maximum in brackets:
+
+  | Workload | Time to first token (s) | Prompt (tokens/s) | Generation (tokens/s) | Model load (ms) | Peak memory (MB) |
+  | --- | --- | --- | --- | --- | --- |
+  | short (32 + 128) | 1.682 (1.665 to 1.712) | 19.03 (18.69 to 19.22) | 18.97 (18.65 to 19.10) | 60.3 (60.1 to 60.7) | 811.6 |
+  | long (512 + 128) | 26.493 (26.331 to 26.848) | 19.33 (19.07 to 19.45) | 18.48 (18.30 to 18.59) | 59.7 (59.3 to 60.3) | 811.6 |
+
+  | Matrix | Role | In-house (GFLOP/s) | matrixmultiply (GFLOP/s) |
+  | --- | --- | --- | --- |
+  | 576×576 | query and attention output | 5.74 (5.73 to 5.75) | 7.21 (7.20 to 7.24) |
+  | 192×576 | key and value | 5.77 (5.75 to 5.77) | 7.04 (7.03 to 7.05) |
+  | 1536×576 | MLP gate and up | 5.77 (5.75 to 5.78) | 7.23 (7.22 to 7.24) |
+  | 576×1536 | MLP down | 4.64 (4.63 to 4.64) | 7.18 (7.02 to 7.20) |
+  | 49152×576 | tied output projection | 5.35 (5.33 to 5.66) | 4.30 (4.29 to 4.32) |
+
+  The bench ran straight after the test suite, as Spec §16 orders, and the machine was still warm from it: the workload figures are about 6% below those of earlier runs on an idle machine (short workload 18.97 against 20.2 to 20.3 generation tokens/s; the largest kernel 5.35 against 5.82 GFLOP/s), while the small kernels, timed last, matched them. The owner kept these rows as the baseline. Later releases follow the same order, so their rows are comparable with these; a fixed cool-down between tests and bench was considered and not adopted.
+
+## 9. Upstream feedback
+
+Recorded here and absorbed by the upstream owner at the next bump; the upstream documents are not edited from this one. This section is a permanent record.
+
+| Raised | Upstream item | What and why |
+| --- | --- | --- |
+| Before Phase 1 | Requirements S-3 | The text of S-3 was corrupted after "there". **Resolved:** the owner supplied the wording ("there either token passes") and corrected the Requirements file in place without a version bump, since the intended meaning was unchanged. |
+| Task 1.6 | Specification §10 honesty note | The library's hidden states replace the last layer's output with the final-norm output, so the last layer's raw output is not returned. The oracle captures every layer's output with forward hooks (checked equal to the library's own hidden states for all other layers) and stores the final-norm output under its own name, `final_norm_output`. This is stricter than the note: all layer outputs are raw, and the harness compares `final_norm_output` against the engine's normalized output. |
+| Task 1.5 | Specification §10 | Per-position top-two gaps are stored for the prompt positions as well as for the continuation, because S-3 needs the near-tie test at every position. |
+| Task 2.3 | Requirements S-2; Specification §11 | "Tensor" in S-2 is read as one stored intermediate for one prompt, meaning one layer's `[positions, hidden]` matrix; the largest magnitude is taken over all its positions. A per-position maximum would be stricter. An all-zero reference tensor fails, because a relative error is undefined. |
+| Task 2.3 | Requirements S-3, S-4 | A near-tie is a reference gap strictly less than 1e-3 (a gap of exactly 1e-3 is not one). In the greedy comparison the gap before each continuation token decides: the first near-tie stops the comparison, tokens before it must match, and the token at it may be either. |
+| Task 3.6 | Specification §6, §19 | SmolLM2's `tokenizer.json` uses: model `BPE` with no dropout, unknown token, subword prefix or suffix, byte fallback or `ignore_merges`; normalizer **none**; pre-tokenizer `Sequence` of `Digits{individual_digits: true}` then `ByteLevel{add_prefix_space: false, use_regex: true}`; post-processor **none**, so no beginning-of-sequence token is added and the reference's encoding of a prompt carries none; decoder `ByteLevel` (its other options are ignored, as the reference library does); no truncation or padding. Vocabulary has 49152 entries and 48900 merges, written as `"a b"` strings. 17 added tokens at IDs 0 to 16 (`<|endoftext|>` first, which is also the end-of-sequence ID), all `special`, none with `lstrip`, `rstrip`, `single_word` or `normalized`, and all also present in the vocabulary. This narrows §6: the only component types to implement are those above, the digit stage and the byte-level stage in that order, and the engine rejects anything else (including a post-processor of any type or an option outside these values) as an unsupported tokenizer component naming it. §19's first open item is resolved. A test pins these facts against the real file. |
+| Task 3.8 | Specification §6, §10 | Character classes for the byte-level splitting pattern are not taken from Rust's standard library: `char::is_alphabetic` is not Unicode `\p{L}` (it counts some Thai vowel signs as letters, which the reference does not), and a different Unicode version would shift piece boundaries silently. Instead `oracle/unicode_classes.py` runs every Unicode scalar value through the reference pre-tokenizer and writes the letter, number and white-space ranges as committed Rust source (`tokenizer/unicode_classes.rs`). A second oracle output, `oracle/tokenizer_corpus.py`, stores the reference's pre-tokenizer pieces and token IDs for about 4,000 strings (the prompts, edge cases and seeded random mixtures) in `fixtures/<model-id>/tokenizer-corpus.json`; the engine's tokenizer tests compare against it. Suggest §10 list both outputs. A deliberate substitution of `is_alphabetic` made 557 of 3,979 corpus cases fail, so the corpus does detect the class of error it is there for. |
+| Task 3.9 | Requirements FR-13; Specification §6 | SmolLM2's vocabulary has no entry for 21 of the 256 byte-level characters: the bytes 4, 6, 19, 20, 22 and 29 (ASCII control characters), 192, 193, 241, 242 and 245 to 255. The reference tokenizer silently drops a byte it cannot find, so `"a\x04b"` encodes to the IDs of `a` and `b` only. Bytes 192, 193 and 245 to 255 cannot occur in valid UTF-8; 241 and 242 begin the rarest 4-byte characters (planes 4 to 7), and the control characters are ordinary text. FR-13 requires exact agreement, so the engine drops the same bytes, and the loss is silent in both. Suggest §6 state this, and the Requirements consider whether a silent loss is what is wanted for a later version (the engine could reject such input or warn through `tracing`). The differential corpus includes these characters. |
+| Task 3.10 | Specification §6 | Decoding as the oracle does it (transformers 5.21 `AutoTokenizer.decode` with default options): special tokens are **kept** and print as their text (`<|im_start|>`), no tokenization-space cleanup is applied, the bytes of all tokens are joined **before** being read as UTF-8 so a character split across tokens decodes whole, and bytes that form no valid sequence become U+FFFD, one per maximal invalid subsequence (the same rule as Rust's `String::from_utf8_lossy`). A character outside the byte-level alphabet stands for no byte and is skipped. An ID outside the vocabulary is a rejected request. The engine also requires vocabulary IDs to be exactly 0 to n-1 and added tokens to appear in the vocabulary under the same ID, as SmolLM2's do. Suggest §6 state the keep-special-tokens reading, since a `skip_special_tokens` option would change decoded text. |
+| Task 4.3 | Specification §4 | Confirms §4's f32 requirement with a measurement: at position 5000 and frequency index 1 the reference's f32 cosine differs from the f64 value by 8.4e-5, so an f64 angle would be a different rotation; the engine's f32 angles agree with transformers' `LlamaRotaryEmbedding` (float32) to within 1e-6 for all 32 frequencies at positions 1 and 5000, close but not bit-identical (Rust's `powf`, `cos` and `sin` differ from torch's by about one unit in the last place in some elements). The reference values are checked into the RoPE test and regenerated by `oracle/rope_reference.py`. No change to §4 is needed; suggest §10 list that script as an oracle output. |
+| Task 4.7 | Specification §17 | The negative-control switch is a Cargo feature, `negative-controls`, off by default. Public surface it adds, only with the feature: the enum `Fault` (`InterleavedRope`, `PerturbedLogit { position }`, `NoFinalNorm`) and `Model::inject_fault`. In a normal build `Fault` is an enum with **no values**, so no faulty arithmetic is compiled in and nothing can switch a fault on; the hooks in the forward pass compile to nothing. The tests enable the feature through a self-referencing dev-dependency (`emberly-oxygen = { path = ".", features = ["negative-controls"] }`), so plain `cargo test` always runs the controls and none is skipped for a missing flag, while `cargo build`, which ignores dev-dependencies, never contains them. With no fault injected the feature changes no result. A generated-documentation check showed `Fault` and `inject_fault` absent from a normal build and present with the feature. Suggest §17 name the feature and these three faults. |
+| Task 5.1 | Specification §8, §3 | Decision point 1, resolved by the owner: the end-of-sequence token is **returned** among the generated IDs (the oracle's continuation includes it and S-4 compares IDs) but its text is **not** passed to the streaming callback, because standard output is the generated text and EOS is a control signal. Read literally, §8 step 4 would print `<|endoftext|>` before step 5 stops; suggest §8 move the EOS check before the decoder. Two further readings of §8: the last generated token is not fed back through the forward pass, since nothing uses its logits (the FR-18 context check still counts it, as §8 states); and a maximum of zero new tokens is allowed, checking the prompt and computing nothing. `eos_token_id` must be a single whole number, as SmolLM2's is (some models list several); any other form is rejected as unsupported naming the field, and an ID outside the vocabulary as malformed. Suggest §3's supported set list it. |
+| Task 5.3 | Specification §12, §14 | **Throughput definitions** (§12 leaves the first token's cost open): the first generated token's cost is the prompt's. Time to first token runs from receiving the prompt string (so it includes encoding) to choosing the first token; prompt throughput is prompt tokens over that time; generation throughput is the tokens after the first over the time after it, and is absent for a single token. The info run summary uses these, `--stats` (task 5.4) reports the same, and Phase 6 should reuse them. **Debug step events** (§14 says one per decode step): one event per forward step, with the token fed, its text, the top 5 candidates and the step time; a step whose result is taken also names the chosen token as `next`. Since the last generated token is never fed (task 5.1), a run has prompt + generated − 1 step events, and every token appears exactly once. **Cost when off**: the real model's step time was 49.25 ms before logging and 49.29 to 49.32 ms after, within noise (`forward::tests::step_speed`). `tracing` is used without its default `attributes` feature, so it adds no proc-macro crates. |
+| Task 5.4 | Specification §1, §8, §9, §14 | **Public API:** `generate` returns `Generation { ids, stats }` instead of the bare IDs, with `Stats` (prompt and generated token counts, time to first token, generation time, and the two throughputs as methods, defined as in the task 5.3 row). The CLI may use only the public API (§1), and time to first token cannot be observed through the text callback (the first token may complete no text, or be EOS), so the library must report it. Suggest §8 name the return value. **Closed pipe:** the CLI's text callback exits with code 1 on a write error, so a reader closing the pipe stops generation at once instead of letting it run to the maximum; the callback's type is unchanged. **Dependencies:** the CLI uses `clap` 4 and `tracing-subscriber` 0.3 (only its `fmt` and `std` features, so no `log` bridge and no colour codes in log files); it needs no direct `tracing` dependency. **`--stats`** prints model load time (timed by the CLI around both loads) before §9's four figures. |
+| Task 6.1 | Requirements §13 (S-7) | The owner named the benchmark machine: an Apple M4 Max (16 cores: 12 performance, 4 efficiency; 128 GB; macOS 26.3; arm64), which Requirements §13 leaves to the owner before the first result is recorded. Development moved to it from an Apple M5 between the Phase 5 to-do and task 5.1, so Phase 4's measurements (plan §8) are the M5's and every Phase 5 and 6 figure is the M4 Max's. The fixtures were regenerated on the M4 Max with the same pinned oracle, and the engine's worst logit and intermediate errors per category came out identical to the last digit to Phase 4's on the M5: neither the reference's nor the engine's arithmetic changed between the two machines. Suggest Requirements §13 close the item, naming the machine. |
+| Task 6.5 | Specification §1, §12, §17; Requirements HC-2 | **Kernel switch:** a Cargo feature, `bench-kernels`, off by default, adds the public module `emberly_oxygen::kernels` with `matvec`, a thin call to the engine's own. As with `negative-controls`, only the library's self-referencing dev-dependency enables it, so tests and benches see it and a normal build does not (shown by generated documentation). Suggest §12 name it. **The baseline is weak for this kernel:** `matrixmultiply` 0.3.11 `sgemm` with one column, single-threaded, runs at about 7.2 GFLOP/s at most of the model's sizes and 4.6 at the 49152×576 output projection, where the in-house loop (5.8) beats it; it is built for matrix-matrix products and pays to pack the matrix. HC-2's comparison is kept as specified, but it does not show how fast a matrix-vector product can be here: the Phase 4 partial-sum variants are already faster than it. Suggest §12 consider a baseline that is a good matrix-vector routine, or adding the measured partial-sum variants as reference points. |
+| Phase 4 exit | Requirements S-1, S-2; Specification §11 | To be filled with measured errors if they suggest changing the thresholds. |
+
+## 10. Open Questions
+
+- ~~**Which machine is the benchmark machine.**~~ **Resolved by the owner at task 6.1 (2026-11-06):** the machine Phase 5 and Phase 6 run on, an Apple M4 Max (16 cores: 12 performance, 4 efficiency; 128 GB; macOS 26.3, Darwin 25.3.0; arm64).
+- ~~**Whether the oracle fixtures generated on the development machine are also the ones used on the benchmark machine, or regenerated there.**~~ **Resolved at task 6.1:** the development machine and the benchmark machine are now the same, and the fixtures in use were generated on it (manifest `generated_at` 2026-11-05, `cpu` Apple M4 Max).

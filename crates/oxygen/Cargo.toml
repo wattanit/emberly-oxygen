@@ -1,0 +1,34 @@
+[package]
+name = "emberly-oxygen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+memmap2 = "0.9.12"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+matrixmultiply = "0.3.11"
+# Peak resident memory and the machine description, for the benchmark harness only.
+libc = "0.2"
+# The library enabling its own fault feature for its tests, so plain `cargo test`
+# always runs the negative controls; a normal build ignores dev-dependencies.
+emberly-oxygen = { path = ".", features = ["negative-controls", "bench-kernels"] }
+
+[features]
+# Deliberate faults for the negative controls (Spec §17). Never enabled by a
+# normal build: only the dev-dependency above turns it on, for tests.
+negative-controls = []
+# The in-house kernels as a public module, for the benchmark's kernel group
+# (HC-2, Spec §12). Like negative-controls, only the dev-dependency above
+# turns it on, so a normal build does not contain the module.
+bench-kernels = []
+
+# The benchmark harness (Spec §12): `cargo bench`, its own main, no test harness.
+[[bench]]
+name = "benchmarks"
+harness = false
