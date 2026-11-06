@@ -69,11 +69,11 @@ Each has a recommendation; none is decided by this to-do. The first blocks 6.2 a
 
 ## 6.6 The baseline run (HC-4, S-7, S-8, Spec §16)
 
-- [ ] On this machine, on AC power, with no other heavy work running; from a clean tree at the commit that will be tagged
-- [ ] `cargo test --no-fail-fast` first; a failure stops here and nothing is benchmarked (HC-4, Spec §16 step 1)
-- [ ] Then `cargo bench` at the default log level (S-8), appending the workload and kernel rows (Spec §16 step 2)
-- [ ] The rows are committed; plan §8 gets a short table of the baseline medians with their spread
-- [ ] Check: every row has every condition field, the dirty flag is false and the commit is the one to be tagged
+- [x] On this machine, on AC power, with no other heavy work running; from a clean tree at the commit that will be tagged. Measured at `0b4a5f3`; the commits after it change only `results/` and `docs/`, so the code tagged in 6.8 is the code measured
+- [x] `cargo test --no-fail-fast` first; a failure stops here and nothing is benchmarked (HC-4, Spec §16 step 1). Passed in 86 s. A first attempt piped the test output through `grep`, whose exit status would have hidden a failure; it was stopped during the tests, before any benchmark, and rerun gated on `cargo test`'s own exit status
+- [x] Then `cargo bench` at the default log level (S-8), appending the workload and kernel rows (Spec §16 step 2). 306 s, 7 rows. The machine was still warm from the tests, which put the workloads about 6% below idle-machine runs; the owner kept the rows as the baseline (plan §8)
+- [x] The rows are committed; plan §8 gets a short table of the baseline medians with their spread. Short: 1.68 s to first token, 18.97 generation tokens/s; long: 26.5 s, 18.48 tokens/s; 811.6 MB peak; in-house matvec 4.6 to 5.8 GFLOP/s against matrixmultiply's 4.3 to 7.2
+- [x] Check: every row has every condition field, the dirty flag is false and the commit is the one to be tagged
 
 ## 6.7 Release note (Requirements §12)
 

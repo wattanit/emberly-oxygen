@@ -145,6 +145,25 @@ Filled in during the phases; they are inputs to the Specification's and Requirem
 
   Measured at task 5.7 (`tests/reproducibility.rs`, `english-short`, all 30 positions, 1,474,560 logits): a second run on the same loaded model and a run on a second load of the model are **bit-identical** to the first, largest difference 0, and their 16-token greedy continuations are identical. This is expected of a single-threaded engine that adds in index order; S-6's allowance (differences up to S-1, continuations differing at near-ties) is left for a later version that adds in parallel. Across processes the harness gives the same evidence: its worst errors per category have been identical to the last digit in every run since Phase 4.
 
+- Baseline benchmark (task 6.6) — for FR-8, S-7 and every later release's comparison.
+
+  Recorded in `results/benchmarks.jsonl` (7 rows, commit `0b4a5f3`, clean tree, 2026-11-06T07:29:50Z), on the benchmark machine (Apple M4 Max, 16 cores, 128 GB, macOS 26.3, on AC power), after `cargo test --no-fail-fast` passed in 86 s; `cargo bench` took 306 s. Median over 5 runs after 1 warm-up, minimum to maximum in brackets:
+
+  | Workload | Time to first token (s) | Prompt (tokens/s) | Generation (tokens/s) | Model load (ms) | Peak memory (MB) |
+  | --- | --- | --- | --- | --- | --- |
+  | short (32 + 128) | 1.682 (1.665 to 1.712) | 19.03 (18.69 to 19.22) | 18.97 (18.65 to 19.10) | 60.3 (60.1 to 60.7) | 811.6 |
+  | long (512 + 128) | 26.493 (26.331 to 26.848) | 19.33 (19.07 to 19.45) | 18.48 (18.30 to 18.59) | 59.7 (59.3 to 60.3) | 811.6 |
+
+  | Matrix | Role | In-house (GFLOP/s) | matrixmultiply (GFLOP/s) |
+  | --- | --- | --- | --- |
+  | 576×576 | query and attention output | 5.74 (5.73 to 5.75) | 7.21 (7.20 to 7.24) |
+  | 192×576 | key and value | 5.77 (5.75 to 5.77) | 7.04 (7.03 to 7.05) |
+  | 1536×576 | MLP gate and up | 5.77 (5.75 to 5.78) | 7.23 (7.22 to 7.24) |
+  | 576×1536 | MLP down | 4.64 (4.63 to 4.64) | 7.18 (7.02 to 7.20) |
+  | 49152×576 | tied output projection | 5.35 (5.33 to 5.66) | 4.30 (4.29 to 4.32) |
+
+  The bench ran straight after the test suite, as Spec §16 orders, and the machine was still warm from it: the workload figures are about 6% below those of earlier runs on an idle machine (short workload 18.97 against 20.2 to 20.3 generation tokens/s; the largest kernel 5.35 against 5.82 GFLOP/s), while the small kernels, timed last, matched them. The owner kept these rows as the baseline. Later releases follow the same order, so their rows are comparable with these; a fixed cool-down between tests and bench was considered and not adopted.
+
 ## 9. Upstream feedback
 
 Recorded here and absorbed by the upstream owner at the next bump; the upstream documents are not edited from this one. This section is a permanent record.
