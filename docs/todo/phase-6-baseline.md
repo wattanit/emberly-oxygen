@@ -83,8 +83,8 @@ Each has a recommendation; none is decided by this to-do. The first blocks 6.2 a
 
 ## 6.8 Tag (Spec §16)
 
-- [ ] **The owner reviews the results and the release note first**
-- [ ] Then, **only on the owner's explicit order**, tag the reviewed commit `v0.1.0` (annotated, message naming the release note); merging to `main` and pushing likewise wait for the owner's order (decision point 6)
+- [x] **The owner reviews the results and the release note first.** Reviewed and accepted 2026-11-06
+- [x] Then, **only on the owner's explicit order**, tag the reviewed commit `v0.1.0` (annotated, message naming the release note); merging to `main` and pushing likewise wait for the owner's order (decision point 6). The owner ordered the tag and a `--no-ff` merge of `develop` into `main`; the tag is on this commit. Nothing is pushed
 
 ## Phase exit check
 
@@ -93,4 +93,4 @@ Each has a recommendation; none is decided by this to-do. The first blocks 6.2 a
 - [x] Every test added in this phase names the item it verifies (checked mechanically, as in Phase 5): 7 new tests, none without an ID
 - [x] Full test time recorded, `cargo build` has no warnings, and the summary of every test binary was read: 203 tests across 14 binaries in about 86 s, exit 0; no warnings in the normal build, the bench build or with both test features
 - [x] The release note exists and the README is updated (task 6.7)
-- [ ] The owner has reviewed the results and the note, and `v0.1.0` is tagged
+- [x] The owner has reviewed the results and the note, and `v0.1.0` is tagged

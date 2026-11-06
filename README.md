@@ -2,7 +2,7 @@
 
 A decoder-only LLM inference engine written from scratch in Rust, to understand every part by building it. It starts naive and improves one version at a time; the first target is SmolLM2-135M on CPU. The foundation documents in `docs/` are the source of truth: [Requirements](docs/emberly-oxygen-requirements.md), [Technical Specification](docs/emberly-oxygen-technical-specification.md), and the [roadmap](docs/high-level-roadmap.md) for direction.
 
-Status: release 0.1.0, the baseline. The six phases of its plan are done (the oracle, the correctness harness, model loading and the tokenizer, the forward pass, generation with the command-line tool, and the baseline benchmark) apart from the owner's review and the `v0.1.0` tag. The engine matches the oracle on every check in every prompt category, and its first benchmark rows are in `results/benchmarks.jsonl`. See the [release note](docs/releases/0.1.0.md) for what was built, measured and learned.
+Status: release 0.1.0, the baseline, tagged `v0.1.0`. The six phases of its plan are done (the oracle, the correctness harness, model loading and the tokenizer, the forward pass, generation with the command-line tool, and the baseline benchmark). The engine matches the oracle on every check in every prompt category, and its first benchmark rows are in `results/benchmarks.jsonl`. See the [release note](docs/releases/0.1.0.md) for what was built, measured and learned.
 
 ## Setup on a new machine
 
