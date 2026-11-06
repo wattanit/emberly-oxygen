@@ -88,9 +88,9 @@ Each has a recommendation; none is decided by this to-do. The first blocks 6.2 a
 
 ## Phase exit check
 
-- [ ] `results/benchmarks.jsonl` holds the baseline rows from a clean tree, every row carrying its conditions (FR-9, S-7)
-- [ ] The harness refused to run with debug assertions on (FR-10), checked by hand
-- [ ] Every test added in this phase names the item it verifies (checked mechanically, as in Phase 5)
-- [ ] Full test time recorded, `cargo build` has no warnings, and the summary of every test binary was read
-- [ ] The release note exists and the README is updated
+- [x] `results/benchmarks.jsonl` holds the baseline rows from a clean tree, every row carrying its conditions (FR-9, S-7): 7 rows at `0b4a5f3`, `dirty: false`
+- [x] The harness refused to run with debug assertions on (FR-10), checked by hand (task 6.2)
+- [x] Every test added in this phase names the item it verifies (checked mechanically, as in Phase 5): 7 new tests, none without an ID
+- [x] Full test time recorded, `cargo build` has no warnings, and the summary of every test binary was read: 203 tests across 14 binaries in about 86 s, exit 0; no warnings in the normal build, the bench build or with both test features
+- [x] The release note exists and the README is updated (task 6.7)
 - [ ] The owner has reviewed the results and the note, and `v0.1.0` is tagged
