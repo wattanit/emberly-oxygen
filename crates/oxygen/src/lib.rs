@@ -27,3 +27,17 @@ pub use generate::{generate, Generation, Stats};
 pub use model::{Capture, Model, Session};
 pub use tensor::Tensor;
 pub use tokenizer::{StreamDecoder, Tokenizer};
+
+/// The engine's own kernels, reachable for the benchmark's kernel group, which
+/// times them against a mature implementation (HC-2, Spec §12). Only exists
+/// with the `bench-kernels` feature, which a normal build never enables.
+#[cfg(feature = "bench-kernels")]
+pub mod kernels {
+    use crate::Tensor;
+
+    /// The matrix-vector product every projection in the forward pass uses:
+    /// `output[i]` is the dot product of weight row `i` with `input`.
+    pub fn matvec(weight: &Tensor, input: &[f32], output: &mut [f32]) {
+        crate::ops::matvec(weight, input, output);
+    }
+}

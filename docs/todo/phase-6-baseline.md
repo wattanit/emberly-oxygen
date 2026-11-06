@@ -60,11 +60,12 @@ Each has a recommendation; none is decided by this to-do. The first blocks 6.2 a
 
 ## 6.5 Kernel baseline (HC-2, Spec §12)
 
-- [ ] **Decision points 3 and 4** applied: the `bench-kernels` feature and its hidden module, and `"group": "kernels"` rows
-- [ ] The in-house `matvec` against `matrixmultiply::sgemm` with one column, at every matrix size in the model: 576×576 (query and output projections), 192×576 (key and value), 1536×576 (gate and up), 576×1536 (down) and 49152×576 (the tied output projection)
-- [ ] Same inputs for both, and their outputs compared within a tolerance before timing, so a broken baseline is never timed
-- [ ] Repetitions sized to about a second per measurement, 5 measurements each, median, minimum and maximum of nanoseconds per call and of GFLOP/s
-- [ ] Check: a normal `cargo build` does not contain the `kernels` module (generated-documentation check, as for `negative-controls`); recorded in plan §9
+- [x] **Decision points 3 and 4** applied: the `bench-kernels` feature and its hidden module, and `"group": "kernels"` rows. The module `emberly_oxygen::kernels` holds a `matvec` that calls the engine's own; it is feature-gated but not `#[doc(hidden)]`, so the documentation check below can show it absent and present
+- [x] The in-house `matvec` against `matrixmultiply::sgemm` with one column, at every matrix size in the model: 576×576 (query and output projections), 192×576 (key and value), 1536×576 (gate and up), 576×1536 (down) and 49152×576 (the tied output projection)
+- [x] Same inputs for both, and their outputs compared within a tolerance before timing, so a broken baseline is never timed
+- [x] Repetitions sized to about a second per measurement, 5 measurements each, median, minimum and maximum of nanoseconds per call and of GFLOP/s
+- [x] Check: a normal `cargo build` does not contain the `kernels` module (generated-documentation check, as for `negative-controls`); recorded in plan §9. `cargo doc --no-deps` lists no `kernels`; with `--features bench-kernels` it lists `kernels::matvec`. No warnings with and without the features
+- [x] Dry run (the whole bench now takes about 5 minutes; the kernel group about 1). Medians, ns per call and GFLOP/s, in-house then `matrixmultiply`: 576×576 115 µs 5.77 / 92 µs 7.20; 192×576 38 µs 5.81 / 31 µs 7.05; 1536×576 304 µs 5.82 / 243 µs 7.28; 576×1536 382 µs 4.64 / 244 µs 7.25; 49152×576 9.72 ms 5.82 / 12.29 ms 4.61. Findings for the release note: (1) per token these add up to about 48.6 ms of the 49.3 ms step, so the matrix-vector product is about 98.6% of the work; (2) `matrixmultiply` is a general matrix-matrix routine, and with one column it is only about 1.25× faster at most sizes and slower at the 49152×576 output projection, so it is a weak yardstick for this kernel: the Phase 4 partial-sum variants (14 to 16 G multiply-adds/s with 8 sums) already beat it; (3) 5.8 GFLOP/s is 2.9 G multiply-adds/s, matching Phase 4's 2.3 to 3.0 G, which counted multiply-adds
 
 ## 6.6 The baseline run (HC-4, S-7, S-8, Spec §16)
 

@@ -20,6 +20,10 @@
 //! `results/benchmarks.jsonl` once every workload has finished, each carrying
 //! the version, commit, dirty flag, machine, build and timestamp. With
 //! `cargo bench -- --dry-run` the lines are printed instead of appended.
+//!
+//! The kernel group (HC-2) times the in-house matrix-vector product against
+//! `matrixmultiply`'s at every matrix size in the model, in this process, and
+//! records one line per size with `"group": "kernels"`.
 
 #[path = "support/record.rs"]
 mod record;
@@ -31,7 +35,10 @@ use std::path::PathBuf;
 use std::process::{exit, Command};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use emberly_oxygen::{generate, Model, Tokenizer};
+use std::hint::black_box;
+use std::time::Duration;
+
+use emberly_oxygen::{generate, kernels, Model, Tensor, Tokenizer};
 use serde_json::{json, Value};
 
 const WARMUP_RUNS: usize = 1;
@@ -151,7 +158,119 @@ fn parent() {
         });
         rows.push(record::row(&conditions, fields, &results));
     }
+    rows.extend(kernel_rows(&conditions));
     write_rows(&rows, dry_run);
+}
+
+/// Every matrix shape in the forward pass of SmolLM2-135M, as `[rows, columns]`
+/// with the projections that use it.
+const KERNEL_SIZES: [(usize, usize, &str); 5] = [
+    (576, 576, "query and attention output"),
+    (192, 576, "key and value"),
+    (1536, 576, "MLP gate and up"),
+    (576, 1536, "MLP down"),
+    (49152, 576, "tied output projection"),
+];
+
+/// The kernel group (HC-2): the in-house `matvec` against `matrixmultiply`'s
+/// `sgemm` with one column, both single-threaded, on the same inputs.
+fn kernel_rows(conditions: &record::Conditions) -> Vec<Value> {
+    println!("kernels: matrix-vector product, in-house against matrixmultiply sgemm (both single-threaded)");
+    println!("  {:>12} {:>10} {:>10} {:>10} {:>10}  (medians over 5 runs)", "shape", "ours ns", "ours GF/s", "base ns", "base GF/s");
+    let mut rows = Vec::new();
+    for (seed, (m, k, role)) in KERNEL_SIZES.into_iter().enumerate() {
+        let weight = Tensor::new(vec![m, k], pseudo_random(m * k, 2 * seed as u64 + 1)).expect("shape matches data");
+        let input = pseudo_random(k, 2 * seed as u64 + 2);
+        let mut ours = vec![0f32; m];
+        let mut baseline = vec![0f32; m];
+        let sgemm = |out: &mut [f32]| {
+            // SAFETY: out (m x 1) = weight (m x k, row-major) * input (k x 1); every
+            // pointer covers exactly the elements those strides reach.
+            unsafe {
+                matrixmultiply::sgemm(
+                    m, k, 1, 1.0,
+                    weight.data().as_ptr(), k as isize, 1,
+                    input.as_ptr(), 1, 1,
+                    0.0,
+                    out.as_mut_ptr(), 1, 1,
+                );
+            }
+        };
+
+        // A baseline that computes something else is not timed.
+        kernels::matvec(&weight, &input, &mut ours);
+        sgemm(&mut baseline);
+        for (i, (a, b)) in ours.iter().zip(&baseline).enumerate() {
+            if (a - b).abs() > 1e-4 * (1.0 + b.abs()) {
+                fail(&format!("kernels {m}x{k}: row {i} is {a} in-house and {b} in matrixmultiply"));
+            }
+        }
+
+        let ours_ns = time_calls(|| kernels::matvec(&weight, black_box(&input), black_box(&mut ours)));
+        let base_ns = time_calls(|| sgemm(black_box(&mut baseline)));
+        let flops = 2.0 * (m * k) as f64;
+        let gflops = |ns: &[f64]| ns.iter().map(|t| flops / t).collect::<Vec<f64>>();
+        let spread = |values: &[f64]| stats::spread(values).unwrap_or_else(|| fail("kernels: no usable timings"));
+        let results = [
+            ("in_house_ns_per_call", spread(&ours_ns)),
+            ("in_house_gflops", spread(&gflops(&ours_ns))),
+            ("matrixmultiply_ns_per_call", spread(&base_ns)),
+            ("matrixmultiply_gflops", spread(&gflops(&base_ns))),
+        ];
+        println!(
+            "  {:>12} {:>10.0} {:>10.2} {:>10.0} {:>10.2}",
+            format!("{m}x{k}"),
+            results[0].1.median,
+            results[1].1.median,
+            results[2].1.median,
+            results[3].1.median
+        );
+        let fields = json!({
+            "group": "kernels",
+            "kernel": "matvec",
+            "rows": m,
+            "cols": k,
+            "role": role,
+            "baseline": "matrixmultiply sgemm with one column, single-threaded",
+        });
+        rows.push(record::row(conditions, fields, &results));
+    }
+    rows
+}
+
+/// Nanoseconds per call of `f`, once per recorded run. The number of calls per
+/// run is calibrated first (doubling until a batch takes 50 ms), which also
+/// warms caches, and then set so that each run takes about a second.
+fn time_calls(mut f: impl FnMut()) -> Vec<f64> {
+    let mut calls = 1u64;
+    loop {
+        let start = Instant::now();
+        (0..calls).for_each(|_| f());
+        let took = start.elapsed();
+        if took >= Duration::from_millis(50) {
+            calls = ((calls as f64) * Duration::from_secs(1).as_secs_f64() / took.as_secs_f64()).ceil() as u64;
+            break;
+        }
+        calls *= 2;
+    }
+    (0..RECORDED_RUNS)
+        .map(|_| {
+            let start = Instant::now();
+            (0..calls).for_each(|_| f());
+            start.elapsed().as_nanos() as f64 / calls as f64
+        })
+        .collect()
+}
+
+/// Deterministic values in [-1, 1), so every run times the same inputs.
+fn pseudo_random(len: usize, seed: u64) -> Vec<f32> {
+    let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+    (0..len)
+        .map(|_| {
+            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            ((state >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+        })
+        .collect()
 }
 
 /// Appends the rows to the record, one JSON line each, or prints them for a
