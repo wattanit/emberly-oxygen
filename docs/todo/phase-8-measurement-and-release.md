@@ -74,14 +74,16 @@ Each has a recommendation; none is decided by this to-do. Point 1 blocks 8.2; it
 
 ## 8.7 Review, merge and tag (Spec §16)
 
-- [ ] **The owner reviews the rows and the release note first.**
-- [ ] Then, **only on the owner's explicit order**, merge `release/0.1.1` into `develop` and into `main` the way 0.1.0 was (no fast-forward) and tag `v0.1.1` (annotated, message naming the release note, **no attribution line**). Pushing likewise waits for the owner's order (decision point 7)
+- [x] **The owner reviews the rows and the release note first.** Reviewed and accepted 2026-11-07
+- [x] Then, **only on the owner's explicit order** (given 2026-11-07: merge into `develop`, tag, then merge `--no-ff` into `main`; no push), merge `release/0.1.1` into `develop` and into `main` the way 0.1.0 was (no fast-forward) and tag `v0.1.1` (annotated, message naming the release note, **no attribution line**). Pushing likewise waits for the owner's order (decision point 7)
 
 ## Phase exit check
 
-- [ ] `results/benchmarks.jsonl` holds the 0.1.1 rows from a clean tree at the measured commit, every row carrying its conditions (FR-9, S-7)
-- [ ] The correctness gate passed immediately before the benchmark, with the whole summary read (HC-4)
-- [ ] The width choice follows the rule written before the sweep, with both dry-run tables recorded (decision point 1)
-- [ ] The comparison with 0.1.0 is in plan §4, including the share of a step the matrix-vector product now takes
-- [ ] The release note exists, is accurate against the record, and the README is updated
-- [ ] The owner has reviewed the results and the note; merge and tag are done only on the owner's order
+All items below hold as of the merge; nothing is pushed (the owner's order has not been given).
+
+- [x] `results/benchmarks.jsonl` holds the 0.1.1 rows from a clean tree at the measured commit, every row carrying its conditions (FR-9, S-7)
+- [x] The correctness gate passed immediately before the benchmark, with the whole summary read (HC-4)
+- [x] The width choice follows the rule written before the sweep, with both dry-run tables recorded (decision point 1)
+- [x] The comparison with 0.1.0 is in plan §4, including the share of a step the matrix-vector product now takes
+- [x] The release note exists, is accurate against the record, and the README is updated
+- [x] The owner has reviewed the results and the note; merge and tag are done only on the owner's order
