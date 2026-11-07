@@ -44,9 +44,9 @@ Each has a recommendation; none is decided by this to-do. Point 1 blocks 8.2; it
 
 ## 8.3 Prepare the measurement (FR-9, Spec §16)
 
-- [ ] **Apply decision point 3.** The workspace version becomes 0.1.1 in its own commit; `Cargo.lock` follows
-- [ ] The tree is clean (`git status --porcelain` empty) and the commit is the one to be measured; its hash is written here. Everything after it may change only `results/` and `docs/`, so the code measured is the code released (as in 0.1.0)
-- [ ] The machine is on AC power with no other heavy work running (S-7, as in 0.1.0)
+- [x] **Apply decision point 3.** The workspace version becomes 0.1.1 in its own commit; `Cargo.lock` follows. Done in `1693fcb` (`Cargo.toml` and `Cargo.lock` only)
+- [x] The tree is clean (`git status --porcelain` empty) and the commit is the one to be measured; its hash is written here. Everything after it may change only `results/` and `docs/`, so the code measured is the code released (as in 0.1.0). Tree clean; the commit to be measured is `1693fcb`
+- [x] The machine is on AC power with no other heavy work running (S-7, as in 0.1.0). Checked 2026-11-07: AC power, battery 100%, load average about 1.5 (a browser and the window server are the only visible users, none heavy)
 
 ## 8.4 The release measurement (HC-4, S-7, S-8, Spec §16)
 
