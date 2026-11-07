@@ -35,6 +35,18 @@ pub struct Conditions {
     pub recorded_runs: usize,
 }
 
+/// The kernel variants the kernel group times besides the engine's own kernel
+/// (`in_house`) and the library baseline (`matrixmultiply`): the 0.1.0 loop and
+/// the partial-sum kernel at each width the release tries (FR-25).
+pub const KERNEL_VARIANTS: [&str; 5] = ["index_order", "lanes_4", "lanes_8", "lanes_16", "lanes_32"];
+
+/// The two metric names of one kernel in a kernel row. `in_house` and
+/// `matrixmultiply` give the four names release 0.1.0's rows already have, so
+/// the series stays comparable (FR-9); each variant adds two.
+pub fn kernel_metrics(kernel: &str) -> [String; 2] {
+    [format!("{kernel}_ns_per_call"), format!("{kernel}_gflops")]
+}
+
 /// A row: the shared conditions, the row's own `fields` (its group and what
 /// it measured), and each metric's spread over the recorded runs.
 pub fn row(conditions: &Conditions, fields: Value, results: &[(&str, Spread)]) -> Value {

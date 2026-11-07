@@ -1,25 +1,61 @@
 //! The tensor operations the forward pass needs (Spec §4). Each is a plain
-//! loop over slices with f32 accumulation in index order: no `unsafe`, SIMD
-//! or threading (HC-1). The reference sums in a different order, so results
-//! differ in the last bits; S-1 and S-2 bound that difference.
+//! loop over slices with f32 accumulation in index order, except the
+//! matrix-vector product, which keeps independent partial sums (FR-25); none
+//! uses `unsafe`, SIMD intrinsics or threads (HC-1). The reference sums in a
+//! different order, so results differ in the last bits; S-1 and S-2 bound
+//! that difference.
 
 use crate::Tensor;
 
+/// How many independent partial sums the engine's matrix-vector product keeps
+/// (Spec §4). 16, chosen by the width sweep of release 0.1.1 (plan §4): of 4,
+/// 8, 16 and 32 it had the lowest estimated kernel time per token in two runs,
+/// 20% under 8 sums. Tune with use; `tests/kernel.rs` pins the value.
+pub(crate) const LANES: usize = 16;
+
 /// `output[i]` = dot product of weight row `i` with `input`, for a weight in
 /// the published `[out, in]` layout (Spec §3), so each row is contiguous.
+/// Computed with [`LANES`] partial sums, see [`matvec_lanes`].
 ///
 /// Panics if the weight is not 2-D or the lengths disagree: the engine builds
 /// every call from the configuration, so a mismatch is an internal bug and
 /// never the effect of user input (Spec §14).
 pub(crate) fn matvec(weight: &Tensor, input: &[f32], output: &mut [f32]) {
+    matvec_lanes::<LANES>(weight, input, output);
+}
+
+/// The matrix-vector product with `N` independent f32 partial sums per output
+/// element (FR-25, Spec §4). In index order, every add waits for the one
+/// before it; `N` separate sums have no such chain, so the processor can work
+/// on them at once and the compiler can keep them in vector registers.
+///
+/// Sum `j` adds the products whose index is `j` modulo `N`, each in index
+/// order. The sums are then combined sequentially, lane 0 first
+/// (`((l0 + l1) + l2) + ...`), and the last `len mod N` products are added in
+/// index order after them. The order is fixed, so a call is bit-identical to
+/// the next (S-6), and `tests/kernel.rs` pins it with hand-worked cases.
+///
+/// Panics as [`matvec`] does.
+pub(crate) fn matvec_lanes<const N: usize>(weight: &Tensor, input: &[f32], output: &mut [f32]) {
     let &[rows, cols] = weight.shape() else {
         panic!("matvec needs a 2-D weight, got shape {:?}", weight.shape());
     };
     assert_eq!(input.len(), cols, "input length must equal the weight's columns");
     assert_eq!(output.len(), rows, "output length must equal the weight's rows");
     for (i, out) in output.iter_mut().enumerate() {
+        let mut sums = [0f32; N];
+        let mut row = weight.row(i).chunks_exact(N);
+        let mut x = input.chunks_exact(N);
+        for (w, x) in row.by_ref().zip(x.by_ref()) {
+            for j in 0..N {
+                sums[j] += w[j] * x[j];
+            }
+        }
         let mut sum = 0f32;
-        for (w, x) in weight.row(i).iter().zip(input) {
+        for lane in sums {
+            sum += lane;
+        }
+        for (w, x) in row.remainder().iter().zip(x.remainder()) {
             sum += w * x;
         }
         *out = sum;

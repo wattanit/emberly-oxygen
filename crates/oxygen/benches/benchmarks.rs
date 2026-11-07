@@ -172,11 +172,29 @@ const KERNEL_SIZES: [(usize, usize, &str); 5] = [
     (49152, 576, "tied output projection"),
 ];
 
-/// The kernel group (HC-2): the in-house `matvec` against `matrixmultiply`'s
-/// `sgemm` with one column, both single-threaded, on the same inputs.
+/// The kernel group (HC-2, FR-25): at every matrix size in the model, the
+/// engine's own `matvec` against `matrixmultiply`'s `sgemm` with one column and
+/// against the 0.1.0 index-order loop and the partial-sum kernel at widths 4,
+/// 8, 16 and 32, all single-threaded and on the same inputs. A row keeps the
+/// four field names 0.1.0's rows have (`in_house_*` is the engine's kernel,
+/// `matrixmultiply_*` the library) and adds two per variant (FR-9).
 fn kernel_rows(conditions: &record::Conditions) -> Vec<Value> {
-    println!("kernels: matrix-vector product, in-house against matrixmultiply sgemm (both single-threaded)");
-    println!("  {:>12} {:>10} {:>10} {:>10} {:>10}  (medians over 5 runs)", "shape", "ours ns", "ours GF/s", "base ns", "base GF/s");
+    type Kernel = fn(&Tensor, &[f32], &mut [f32]);
+    let variants: [(&str, Kernel); 5] = [
+        ("index_order", kernels::matvec_index_order),
+        ("lanes_4", kernels::matvec_lanes::<4>),
+        ("lanes_8", kernels::matvec_lanes::<8>),
+        ("lanes_16", kernels::matvec_lanes::<16>),
+        ("lanes_32", kernels::matvec_lanes::<32>),
+    ];
+    assert!(variants.iter().map(|v| v.0).eq(record::KERNEL_VARIANTS), "variants and their record names must agree");
+
+    println!("kernels: matrix-vector product, median GFLOP/s over 5 runs (single-threaded)");
+    print!("  {:>12} {:>8} {:>8}", "shape", "engine", "matmul");
+    for (name, _) in &variants {
+        print!(" {name:>11}");
+    }
+    println!();
     let mut rows = Vec::new();
     for (seed, (m, k, role)) in KERNEL_SIZES.into_iter().enumerate() {
         let weight = Tensor::new(vec![m, k], pseudo_random(m * k, 2 * seed as u64 + 1)).expect("shape matches data");
@@ -197,34 +215,49 @@ fn kernel_rows(conditions: &record::Conditions) -> Vec<Value> {
             }
         };
 
-        // A baseline that computes something else is not timed.
+        // A baseline or a variant that computes something else is not timed.
         kernels::matvec(&weight, &input, &mut ours);
-        sgemm(&mut baseline);
-        for (i, (a, b)) in ours.iter().zip(&baseline).enumerate() {
-            if (a - b).abs() > 1e-4 * (1.0 + b.abs()) {
-                fail(&format!("kernels {m}x{k}: row {i} is {a} in-house and {b} in matrixmultiply"));
+        let agrees = |what: &str, other: &[f32]| {
+            for (i, (a, b)) in ours.iter().zip(other).enumerate() {
+                if (a - b).abs() > 1e-4 * (1.0 + b.abs()) {
+                    fail(&format!("kernels {m}x{k}: row {i} is {a} in the engine and {b} in {what}"));
+                }
             }
+        };
+        sgemm(&mut baseline);
+        agrees("matrixmultiply", &baseline);
+        let mut outputs: Vec<Vec<f32>> = Vec::new();
+        for (name, kernel) in &variants {
+            let mut out = vec![0f32; m];
+            kernel(&weight, &input, &mut out);
+            agrees(name, &out);
+            outputs.push(out);
         }
 
-        let ours_ns = time_calls(|| kernels::matvec(&weight, black_box(&input), black_box(&mut ours)));
-        let base_ns = time_calls(|| sgemm(black_box(&mut baseline)));
         let flops = 2.0 * (m * k) as f64;
-        let gflops = |ns: &[f64]| ns.iter().map(|t| flops / t).collect::<Vec<f64>>();
         let spread = |values: &[f64]| stats::spread(values).unwrap_or_else(|| fail("kernels: no usable timings"));
-        let results = [
-            ("in_house_ns_per_call", spread(&ours_ns)),
-            ("in_house_gflops", spread(&gflops(&ours_ns))),
-            ("matrixmultiply_ns_per_call", spread(&base_ns)),
-            ("matrixmultiply_gflops", spread(&gflops(&base_ns))),
-        ];
-        println!(
-            "  {:>12} {:>10.0} {:>10.2} {:>10.0} {:>10.2}",
-            format!("{m}x{k}"),
-            results[0].1.median,
-            results[1].1.median,
-            results[2].1.median,
-            results[3].1.median
-        );
+        let mut measured: Vec<(String, stats::Spread)> = Vec::new();
+        let mut median_gflops = Vec::new();
+        let mut record_kernel = |name: &str, ns: &[f64]| {
+            let gflops: Vec<f64> = ns.iter().map(|t| flops / t).collect();
+            let [ns_name, gflops_name] = record::kernel_metrics(name);
+            median_gflops.push(spread(&gflops).median);
+            measured.push((ns_name, spread(ns)));
+            measured.push((gflops_name, spread(&gflops)));
+        };
+        record_kernel("in_house", &time_calls(|| kernels::matvec(&weight, black_box(&input), black_box(&mut ours))));
+        record_kernel("matrixmultiply", &time_calls(|| sgemm(black_box(&mut baseline))));
+        for ((name, kernel), out) in variants.iter().zip(outputs.iter_mut()) {
+            record_kernel(name, &time_calls(|| kernel(&weight, black_box(&input), black_box(&mut out[..]))));
+        }
+
+        print!("  {:>12}", format!("{m}x{k}"));
+        for (n, gflops) in median_gflops.iter().enumerate() {
+            print!(" {gflops:>w$.2}", w = if n < 2 { 8 } else { 11 });
+        }
+        println!();
+
+        let results: Vec<(&str, stats::Spread)> = measured.iter().map(|(n, s)| (n.as_str(), *s)).collect();
         let fields = json!({
             "group": "kernels",
             "kernel": "matvec",
@@ -232,6 +265,7 @@ fn kernel_rows(conditions: &record::Conditions) -> Vec<Value> {
             "cols": k,
             "role": role,
             "baseline": "matrixmultiply sgemm with one column, single-threaded",
+            "variants": record::KERNEL_VARIANTS,
         });
         rows.push(record::row(conditions, fields, &results));
     }

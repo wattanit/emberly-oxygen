@@ -1,0 +1,140 @@
+# Emberly Oxygen — Implementation Plan for Release 0.1.1
+
+Nov 7, 2026 · @Wattanit
+
+**Target release:** 0.1.1\
+**Owner:** Wattanit\
+**Built against:** Emberly Oxygen — Requirements 0.2 (upstream, approved), Emberly Oxygen — Technical Specification 0.2 (upstream, draft when this plan was written)
+
+This is a living working document, not part of the SFD suite: it has no document version or status and is edited in place as work proceeds. It expands the Technical Specification's milestone M7 into two phases with ordered tasks and exit checks. It owns sequencing and task breakdown only; WHAT stays in the Requirements and HOW stays in the Specification, and every task cites the IDs it satisfies. A discovery that changes HOW is recorded in §5 and absorbed by a Specification version bump, never decided here. The foundation versions above are the as-built pin for this release: if either bumps while the release is in progress, the pin is updated and the change recorded in §5. The previous release's plan is [0.1.0](emberly-oxygen-implementation-plan-0.1.0.md); its §8 rows are the figures this release is compared with.
+
+Phases are numbered on from 0.1.0's (Phases 1 to 6), so their to-do files in `docs/todo/` keep unique names.
+
+## 1. Working rules
+
+All of 0.1.0's rules hold. The ones this release leans on, and what it adds:
+
+- **Phase order is fixed.** Phase 8 does not start until Phase 7's exit check passes, because a speed number from an engine that has not passed the gate is not a result (HC-4).
+- **Tests before engine code.** The kernel's tests are written first and the order-pinning test (task 7.2) is seen to fail against the 0.1.0 kernel, so the new tests are known to be able to fail.
+- **One task, one commit.** Each task ends with a passing `cargo test --no-fail-fast` whose whole summary is read, and a commit.
+- **Every test names the HC, FR or S item it verifies** (Specification §17).
+- **One technique only.** The change is the matrix-vector product's partial sums (FR-25). No threads, no `unsafe`, no intrinsics, no tiling, no change to any other kernel (Specification §4). If safe code does not give the expected speed-up, the task stops and the issue goes to the owner; it is not worked around.
+- **No dependency outside Specification §15.** This release adds none.
+- **Work happens on `release/0.1.1`.** Nothing is pushed, tagged or merged to `develop` or `main` without the owner's explicit order at that moment (standing rule, 2026-11-06).
+- **The 0.1.0 loop is kept as a reference,** under the `bench-kernels` feature (task 7.1), so tests and the benchmark can always compare the new kernel with the engine's own history.
+
+## 2. Phase 7 — Kernel (first half of M7)
+
+**Proves:** the partial-sum kernel is correct: it passes the unchanged harness in every category and leaves the negative controls failing. **Satisfies:** FR-25, HC-1, HC-4, S-1 to S-6, S-8.
+
+| # | Task | Cites |
+| --- | --- | --- |
+| 7.1 | Keep 0.1.0's index-order loop as `kernels::matvec_index_order`, available only with the `bench-kernels` feature. The engine's own `matvec` is unchanged in this task. Existing matrix-vector tests keep passing against it. | FR-25, HC-2, Spec §12, §17 |
+| 7.2 | Kernel tests first, against a not-yet-written kernel (`kernels::matvec_lanes`, generic over the number of sums so Phase 8 can sweep 4, 8 and 16). They cover: agreement with the index-order reference and with `matrixmultiply` on seeded random inputs at the model's five shapes, within an absolute tolerance far below S-1; every length from 0 to 40, so lengths below the number of sums (the tail) and not divisible by it are covered; exact equality on small-integer inputs, where every sum is exact; two runs bit-identical (S-6); and an **order-pinning test**: an input built so that index-order and partial-sum addition give different last bits (large values cancelling small ones), checked against the value hand-computed from Spec §4's combining order. The structure pin fails when run against the 0.1.0 loop; the combining-order pin cannot (with one element per lane the two orders coincide) and is shown able to fail in task 7.3 instead. | FR-25, S-6, Spec §4, §17 |
+| 7.3 | Implement `matvec_lanes` in safe Rust per Spec §4: independent partial sums over `chunks_exact`, one fixed combining order, the tail added in index order. The engine's `matvec` becomes `matvec_lanes` at 8 sums (initial, Spec §4). Callers and the forward pass are untouched. The combining order chosen is written in the function's doc comment and matches the pinning test. | FR-25, HC-1, Spec §4 |
+| 7.4 | Check that the compiler vectorized it: emit the release assembly of the kernel and look for vector multiply-add instructions in its inner loop; record what was found. **If it did not vectorize, stop and raise it with the owner** (Spec §4: no `unsafe` as a workaround). Also confirm by `grep` that the engine contains no `unsafe` and no new dependency. A quick `--stats` run on the short prompt gives a first speed estimate, not recorded as a result. | FR-25, HC-1, Spec §4, §15 |
+| 7.5 | The full gate: `cargo test --no-fail-fast`, whole summary read. Record per category the worst logit and intermediate errors next to 0.1.0's (§4 below). Confirm the three negative controls still fail the harness, and that run-to-run reproducibility (S-6) and output at every verbosity level (S-8) still hold. A test that asserted a bit-exact 0.1.0 value and now fails for that reason is not loosened silently: the failure and the reason go to the owner. | HC-4, S-1 to S-6, S-8, Spec §11, §17 |
+
+**Exit check:** the harness passes every prompt in every category with the worst errors recorded and, if they moved noticeably from 0.1.0's, explained; all three negative controls fail as before; the kernel tests (including the order pin) pass; the vectorization evidence is recorded; there is no `unsafe` and no new dependency in the engine; the owner has reviewed the tests and the evidence.
+
+## 3. Phase 8 — Measurement and release (second half of M7)
+
+**Proves:** the speed-up is real, measured against 0.1.0, and costs nothing in correctness. **Satisfies:** FR-8, FR-9, FR-25, S-7, HC-2, HC-4.
+
+| # | Task | Cites |
+| --- | --- | --- |
+| 8.1 | Extend the benchmark's kernel group (Spec §12): at each of the five shapes it times `matrixmultiply`, the 0.1.0 index-order loop and partial-sum widths 4, 8, 16 and 32 (32 added by the owner's decision of 2026-11-07), each row naming its variant; the engine's own kernel keeps its row name so the series stays comparable. It first checks that all variants agree. Workloads and procedure stay as in 0.1.0. | FR-25, HC-2, FR-9, Spec §12 |
+| 8.2 | Width sweep: run the kernel group as a dry run (nothing recorded) and choose the width by the rule fixed in decision point 1 of the to-do list, written before the numbers are seen. Set the engine's width to the winner and rerun the full gate (task 7.5). A width other than 8 is a change to Spec §4's initial value, recorded in §5 for a bump. | FR-25, S-1 to S-5, Spec §4 |
+| 8.3 | Prepare the measurement: bump the workspace version to 0.1.1 so the record carries it, and confirm a clean tree. | FR-9, Spec §16 |
+| 8.4 | Run `cargo test --no-fail-fast`, then `cargo bench` straight after on the benchmark machine at the default log level, as in 0.1.0 (Spec §16; the warm-machine bias is the same on both sides of the comparison). A failing test run stops here. | HC-4, S-7, S-8, Spec §16 |
+| 8.5 | Record the comparison with 0.1.0 in §4 below: workloads (time to first token, prompt and generation tokens/s, peak memory) and kernel shapes. Include what the speed-up is worth for a step and how much of a step the matrix-vector product is now (the share of everything else has grown by the same factor). | FR-8, FR-25, Requirements §12 |
+| 8.6 | Release note `docs/releases/0.1.1.md`: what changed, why it was expected to help, what was measured against 0.1.0, what was learned, and negative results (a width that did not help, a gap between expectation and result, anything that did not vectorize or stopped scaling). README status line and benchmark section updated to match. | Requirements §12 |
+| 8.7 | Owner's review of the rows and the note. Then **stop and ask** before merging or tagging `v0.1.1`: neither happens without the owner's explicit order. | Spec §16 |
+
+**Exit check:** `results/benchmarks.jsonl` holds the 0.1.1 rows from a clean tree at the measured commit, every row carrying its conditions; the comparison with 0.1.0 is recorded; the release note exists and is accurate against the record; the owner has reviewed; the merge and tag are done only on the owner's order.
+
+## 4. Measurements to record
+
+Filled in during the phases. Nothing here is tuned; thresholds change only by a foundation bump.
+
+- Worst logit and intermediate error per category (task 7.5), next to 0.1.0's: english 1.81e-4 and 4.78e-6, thai 2.36e-4 and 5.38e-6, code 1.97e-4 and 5.91e-6, utf8-split 2.16e-4 and 4.59e-6, long 1.81e-4 and 5.21e-6 (plan 0.1.0 §8, Apple M5; the M4 Max reproduced the worst values).
+- Worst errors with the 8-sum kernel (task 7.5, harness on the M4 Max, every prompt passes), next to 0.1.0's, which a one-sum run (`LANES = 1`) reproduced to the last digit:
+
+  | Category | Logit error, 0.1.0 | Logit error, 8 sums | × | Intermediate error, 0.1.0 | Intermediate error, 8 sums | × |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | english | 1.81e-4 | 2.61e-4 | 1.4 | 4.78e-6 | 3.63e-5 | 7.6 |
+  | thai | 2.36e-4 | 6.31e-4 | 2.7 | 5.38e-6 | 2.13e-5 | 4.0 |
+  | code | 1.97e-4 | 3.86e-4 | 2.0 | 5.91e-6 | 3.96e-5 | 6.7 |
+  | utf8-split | 2.16e-4 | 9.59e-4 | 4.4 | 4.59e-6 | 3.86e-5 | 8.4 |
+  | long | 1.81e-4 | 3.49e-4 | 1.9 | 5.21e-6 | 1.95e-5 | 3.7 |
+
+  The limits are 1e-3 (S-1) and 1e-4 (S-2): `utf8-split` uses 96% of S-1's. Diagnostic runs, largest errors over all prompts (logit, intermediate), changing only the width: 1 sum 2.36e-4 and 5.91e-6; 4 sums 8.62e-4 and 5.11e-5; 8 sums 9.59e-4 and 3.96e-5; 16 sums 9.90e-4 and 4.02e-5; 32 sums 9.78e-4 and 4.14e-5. Fused multiply-add (`f32::mul_add`) with 1 sum: 2.23e-4 and 8.16e-6; with 8 sums: 9.78e-4 and 3.72e-5. So the change is not one width's noise and not the lack of fusing: any partial-sum order moves the engine about the same distance from the reference, and the index-order loop is much closer to it. A float64 forward pass of the same weights, run once as a diagnostic (its script and dumps are not kept in the repository), gives the worst logit error against that ground truth over the 12 prompts: f32 reference 7.12e-4 (`utf8-split-cjk`), 0.1.0 loop 5.14e-4, 8-sum kernel 3.31e-4. The 8-sum kernel is closer to the truth than the 0.1.0 loop on 11 of 12 prompts (the two Thai prompts are about equal, near 3e-4). The reference is itself 71% of S-1's limit away from the truth, and the 0.1.0 loop's errors are correlated with it (both sum in a near-sequential order), which is why it looked close. `utf8-split-cjk`'s 9.59e-4 against the reference is essentially the reference's own 7.1e-4 plus the engine's 2.7e-4. Caveats: logits only, not intermediates; one machine and one set of fixtures; the float64 run still uses f32 RoPE angles, as the reference and the engine do, a common offset that does not affect the comparison between kernels.
+- Vectorization evidence (task 7.4): the 8-sum kernel's inner loop in the release assembly (plain flags, aarch64) loads 8 weights and 8 inputs, then does 2 × `fmul.4s` and 2 × `fadd.4s` into two 4-lane accumulators per 8 elements, then a scalar lane-order combine and an unrolled tail. It is vectorized; the multiply and add are not fused. First informal speed reading (two runs, short prompt, 128 tokens, not a result): 102.9 and 103.2 generation tokens/s and 0.30 s to first token, against 0.1.0's about 19 and 1.68 s.
+- Run-to-run logit difference (task 7.5) for S-6, expected bit-identical.
+- Width sweep (task 8.2), two fresh dry runs of the kernel group (234 s and 236 s for the whole bench, 0.1.0's took 306 s), widths 4, 8, 16 and 32, the 0.1.0 loop and `matrixmultiply`. Median ns per call, run 1:
+
+  | Shape | calls per token | engine (8 sums) | 0.1.0 loop | 4 sums | 8 sums | 16 sums | 32 sums | `matrixmultiply` |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 576×576 | 60 | 21,959 | 114,703 | 36,186 | 22,250 | 18,160 | 22,631 | 92,498 |
+  | 192×576 | 60 | 7,316 | 38,169 | 12,068 | 7,468 | 6,157 | 7,588 | 31,435 |
+  | 1536×576 | 60 | 58,585 | 305,657 | 96,439 | 59,628 | 49,113 | 60,583 | 244,184 |
+  | 576×1536 | 30 | 70,105 | 383,576 | 116,607 | 66,049 | 46,874 | 52,688 | 245,362 |
+  | 49152×576 | 1 | 1,901,042 | 9,796,509 | 3,141,127 | 1,924,834 | 1,653,063 | 2,173,349 | 12,792,137 |
+
+  Estimated kernel time per token (decision point 1's weighted sum), run 1 then run 2, in ms: 0.1.0 loop 48.82 and 49.29 (0.1.0 measured 48.6), 4 sums 15.32 and 15.52, **8 sums 9.27 and 9.30**, **16 sums 7.47 and 7.42**, 32 sums 9.20 and 9.02, `matrixmultiply` 42.24 and 42.67. Both runs pick **16 sums** by the rule (the only width within 2% of the best): 20% less kernel time per token than 8 sums, 6.5× less than the 0.1.0 loop. 32 sums is worse than 16 and about level with 8, as the register limit predicted; 4 sums is much worse. Gate with 16 sums (task 8.2, harness, every prompt passes; 214 tests in 14 binaries, 26 s): worst logit and intermediate error english 3.14e-4 and 3.66e-5, thai 2.79e-4 and 1.51e-5, code 3.18e-4 and 4.02e-5, utf8-split 9.90e-4 and 2.70e-5, long 3.18e-4 and 2.99e-5. **`utf8-split` is at 99% of S-1** (96% with 8 sums; 0.1.0 22%); the other categories are under 32%. S-2's worst is 40% of its limit. Run-to-run difference 0, bit-identical on one load and on a second.
+
+- Benchmark comparison (task 8.5). 0.1.0 rows: clean tree, commit `0b4a5f3`; 0.1.1 rows: clean tree, commit `b1a3214` (the code of `1693fcb`), recorded 2026-11-07; both on the Apple M4 Max, median of 5 after one warm-up, range in brackets, `cargo bench` straight after `cargo test` in both (the same warm-machine bias on both sides).
+
+  | Workload | Measure | 0.1.0 | 0.1.1 | Ratio |
+  | --- | --- | --- | --- | --- |
+  | short | time to first token | 1.682 s (1.665 to 1.712) | 0.257 s (0.257 to 0.257) | 0.153 (6.5× faster) |
+  | short | prompt tokens/s | 19.03 (18.69 to 19.22) | 124.60 (124.43 to 124.65) | 6.55× |
+  | short | generation tokens/s | 18.97 (18.65 to 19.10) | 117.48 (117.18 to 117.55) | 6.19× |
+  | short | peak memory | 811.57 MB (811.53 to 811.57) | 811.57 MB (811.55 to 811.58) | 1.00 |
+  | long | time to first token | 26.493 s (26.331 to 26.848) | 5.178 s (4.954 to 5.198) | 0.195 (5.1× faster) |
+  | long | prompt tokens/s | 19.33 (19.07 to 19.45) | 98.87 (98.50 to 103.36) | 5.12× |
+  | long | generation tokens/s | 18.48 (18.30 to 18.59) | 79.76 (79.66 to 83.12) | 4.32× |
+  | long | peak memory | 811.57 MB (811.53 to 811.57) | 811.55 MB (811.52 to 811.57) | 1.00 |
+
+  The engine's kernel per shape, median GFLOP/s (ns per call), with the chosen width's neighbours and the baselines from the same 0.1.1 rows (`lanes_N` are the widths timed in the same run; `index_order` is the 0.1.0 loop, timed again):
+
+  | Shape | 0.1.0 | 0.1.1 (16 sums) | Ratio | 4 sums | 8 sums | 32 sums | `index_order` | `matrixmultiply` |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 576×576 | 5.74 (115,685) | 37.34 (17,768) | 6.5× | 18.36 | 30.08 | 29.38 | 5.78 | 7.17 |
+  | 192×576 | 5.77 (38,352) | 36.76 (6,017) | 6.4× | 18.29 | 29.59 | 29.26 | 5.79 | 7.03 |
+  | 1536×576 | 5.77 (306,542) | 36.73 (48,173) | 6.4× | 18.31 | 29.74 | 29.46 | 5.80 | 7.25 |
+  | 576×1536 | 4.64 (381,634) | 38.30 (46,196) | 8.3× | 15.13 | 26.85 | 33.79 | 4.61 | 7.24 |
+  | 49152×576 | 5.35 (10,582,701) | 35.35 (1,601,846) | 6.6× | 18.10 | 29.57 | 29.32 | 5.79 | 4.49 |
+
+  The engine's column and the `lanes_16` column are the same kernel timed twice in one process (36.3 to 37.9 GFLOP/s), so the 1% gap between them is the measurement's own noise. Against `matrixmultiply` the engine is 5.2× faster at the four small shapes and 7.9× faster at the output projection.
+
+  What it is worth for a step. Step time is 1 / generation tokens per second; the kernel time per token is decision point 1's sum (60, 60, 60, 30 and 1 calls) of the median ns per call of the kernel rows, an estimate from timings of the product alone:
+
+  | | Step | Kernel per token | Kernel's share | Everything else |
+  | --- | --- | --- | --- | --- |
+  | 0.1.0, short | 52.71 ms | 49.67 ms | 94% | 3.04 ms |
+  | 0.1.0, long | 54.10 ms | 49.67 ms | 92% | 4.43 ms |
+  | 0.1.1, short | 8.51 ms | 7.31 ms | 86% | 1.20 ms |
+  | 0.1.1, long | 12.54 ms | 7.31 ms | 58% | 5.23 ms |
+
+  Notes on the table. (a) The 0.1.0 release note's 48.6 of 49.3 ms (98.6%) came from a dry run on a cooler machine; the recorded 0.1.0 rows give 49.67 ms of 52.7 ms (94%) for the same kernel, because the recorded rows carry the warm-machine bias (about 6%). The 0.1.1 shares are computed from the recorded rows, so they are comparable with the 94% and not with the 98.6%. (b) The share is an estimate: the products are timed alone on a hot cache, in the engine they run between other work, and "everything else" is a difference of two measurements (its 0.1.0 values are the same order as 0.1.1's, although the work outside the product did not change; that 1.8 ms gap is the estimate's own uncertainty). (c) The matrix-vector product is no longer nearly everything: on the long workload, where attention scans 512 to 640 cached positions per head, the work outside the product is about 5.2 ms, 42% of a step, and it has become the next thing to measure before any further kernel work (Requirements §2.2's further kernel optimization). (d) Peak memory did not move (811.57 MB), as expected: it is set by loading, and the kernel changes no allocation.
+
+  Against Phase 4's expectation of about 5× for the kernel: 6.4× to 8.3× per shape, above it; the engine as a whole: 6.2× (short) and 4.3× (long) on generation, 6.5× and 5.1× on prompts. The long workload's generation is below 5× because of the work outside the product (note c), which the kernel change does not touch; that is a hypothesis from the table above, not a profile. The widths behaved as the register limit predicted: 4 sums reaches 18 GFLOP/s, 8 sums 27 to 30, 16 sums 35 to 38, 32 sums 29 to 34 (below 16 at every shape, and at the four shapes other than 576×1536 level with 8 sums). Nothing was tuned after the sweep.
+
+## 5. Upstream feedback
+
+Recorded here and absorbed by the upstream owner at the next bump; the upstream documents are not edited from this one. This section is a permanent record.
+
+| Raised | Upstream item | What and why |
+| --- | --- | --- |
+| Before Phase 7 | Specification 0.2 status | The Specification was `draft` when this plan was written and pinned; the owner approved its content and the status is the owner's to set. The pin stands, and is updated here if the status or version changes. |
+| Task 7.2 | Specification §4 | Decision of the owner (2026-11-07): the eight sums are combined sequentially, lane 0 first, then the tail added in index order; the agreement tests use a per-element bound of 64 · `f32::EPSILON` · Σ\|w·x\|. Suggest §4 name the combining order, which it now leaves as "one fixed order". |
+| Task 7.4 | 0.1.0 release note and README | Both say the engine has "no `unsafe`". The kernels have none, but `safetensors.rs` has one `unsafe` call, `Mmap::map`, with a SAFETY comment, as it did in 0.1.0. Spec §4 prohibits `unsafe` in the kernels and is accurate. Suggest the 0.1.1 release note and README say "no `unsafe` in the kernels" and name the memory map; the released 0.1.0 note is not edited without the owner's word. |
+| Task 7.5 | Requirements S-1, S-2, FR-1, FR-2; Specification §10, §11 | **Decision of the owner (2026-11-07): S-1 and S-2 are kept for 0.1.1 and the finding is recorded** (§4; the release note carries it). **Recommendation for the next Requirements bump, owner's choice between two:** (1) *add a float64 reference to the oracle*: the oracle also runs the model in float64 (`dtype=torch.float64`, same weights, exact widening from bf16) for at least the prompts that matter most, stores its logits as a further fixture, and S-1 gains a second criterion, the engine's distance to that ground truth, so an engine more accurate than the f32 reference is judged against the truth and not against PyTorch's rounding. This is the stronger remedy: it measures correctness directly. FR-1 and Specification §10 would list the new output, and FR-2 would no longer say the oracle computes only in 32-bit; fixtures for the long prompts grow (float64 logits are twice the size, about 100 MB to 200 MB each, so a subset is likely wanted). (2) *loosen S-1*, for example to 2e-3, on this evidence (the reference alone is up to 7.1e-4 from the truth and a correct engine came within 4% of 1e-3). It is the cheap remedy and loses strictness; the negative control that perturbs one logit by 2e-3 (Spec §17) would then have to be raised above the new limit so that it still fails the harness. Either way, the trigger to act is a correct engine failing S-1 on fixtures regenerated on another machine; with 0.1.1 at 96% of S-1 on `utf8-split-cjk`, that is plausible. S-2 has more room (the worst intermediate error is 40% of its limit) and no change is suggested. |
+| Task 8.2 | Specification §4, §12 | The sweep chose **16 sums**, not §4's initial 8, by the rule fixed beforehand (plan §4; owner's decision point 4: no Specification bump mid-release). §4 anticipated the tuning and is not contradicted. Suggest the next bump name 16 as the width and §12 name the widths swept (4, 8, 16 and 32, the owner having added 32). The gate with 16 sums passes with `utf8-split` at 99% of S-1, which strengthens the recommendation of the Task 7.5 row. |
+
+## 6. Open Questions
+
+- **Which partial-sum width the engine uses (Specification §19).** Resolver: task 8.2 sweep, by the rule set before measuring.
+- ~~**Why partial sums sit 2 to 8 times further from the reference than index order does, and whether S-1 and S-2 still describe a real bug (Requirements §11).**~~ **Resolved by the owner at task 7.5 (2026-11-07):** the float64 diagnostic (§4) shows the partial sums are not less accurate and the reference is the noisy side; S-1 and S-2 are kept for 0.1.1, and §5 records the recommendation for the next Requirements bump.
+- **Whether the engine's non-matrix-vector operations matter after the speed-up.** In 0.1.0 they were 1.4% of a step; a several-fold faster kernel makes them a larger share. Resolver: task 8.5's figure; any change is a later release's decision.
