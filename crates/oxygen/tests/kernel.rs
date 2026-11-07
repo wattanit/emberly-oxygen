@@ -199,6 +199,7 @@ fn fr25_lanes_rejects_a_weight_that_is_not_2d() {
     kernels::matvec_lanes::<8>(&weight, &[0.0; 6], &mut [0.0; 1]);
 }
 
+// FR-25, Spec §14: an input whose length is not the weight's columns is an internal bug and panics.
 #[test]
 #[should_panic(expected = "input length")]
 fn fr25_lanes_rejects_a_wrong_input_length() {
@@ -206,6 +207,7 @@ fn fr25_lanes_rejects_a_wrong_input_length() {
     kernels::matvec_lanes::<8>(&weight, &[0.0; 4], &mut [0.0; 2]);
 }
 
+// FR-25, Spec §14: an output whose length is not the weight's rows is an internal bug and panics.
 #[test]
 #[should_panic(expected = "output length")]
 fn fr25_lanes_rejects_a_wrong_output_length() {
