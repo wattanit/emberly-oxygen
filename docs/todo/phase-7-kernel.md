@@ -59,12 +59,12 @@ Each has a recommendation; none is decided by this to-do. Points 1 and 2 blocked
 
 ## 7.5 The full gate (HC-4, S-1 to S-6, S-8, Spec §11, §17)
 
-- [ ] `cargo test --no-fail-fast`, the whole summary read: every test binary, the number of tests, and the time
-- [ ] Per category, the worst logit error (S-1) and worst intermediate error (S-2) recorded in plan §4 next to 0.1.0's; apply decision point 5 to any category more than twice 0.1.0's
-- [ ] The top-token and greedy checks (S-3, S-4) pass in every category; record whether any near-tie was reached (none was in 0.1.0)
-- [ ] The three negative controls still fail the harness where they should (Spec §17); the test that asserts it passes
-- [ ] Run-to-run logits (S-6) are still bit-identical on one load and on a second load of the model (the existing reproducibility test); the largest difference is recorded
-- [ ] Output is identical at every verbosity level (S-8, the existing test passes) and the step time with logging off is unchanged by the kernel's presence in the logging path (no change to the logging code in this phase)
+- [x] `cargo test --no-fail-fast`, the whole summary read: every test binary, the number of tests, and the time Run after 7.3: 204 tests, 14 binaries, all `ok`, 30 s
+- [ ] Per category, the worst logit error (S-1) and worst intermediate error (S-2) recorded in plan §4 next to 0.1.0's; apply decision point 5 to any category more than twice 0.1.0's Recorded in plan §4. **Decision point 5 triggers:** thai (logit 2.7×) and utf8-split (4.4×) exceed twice 0.1.0's, and every category's intermediate error is 3.7 to 8.4× 0.1.0's. utf8-split's logit error is 9.59e-4, 96% of S-1's 1e-3. Stopped here for the owner
+- [x] The top-token and greedy checks (S-3, S-4) pass in every category; record whether any near-tie was reached (none was in 0.1.0) Both pass in every category (the table's `top-1` and `greedy` columns); no near-tie stopped a comparison
+- [x] The three negative controls still fail the harness where they should (Spec §17); the test that asserts it passes `negative_controls` passes (4 tests, in the full run)
+- [x] Run-to-run logits (S-6) are still bit-identical on one load and on a second load of the model (the existing reproducibility test); the largest difference is recorded The reproducibility test passes: bit-identical on one load and on a second
+- [x] Output is identical at every verbosity level (S-8, the existing test passes) and the step time with logging off is unchanged by the kernel's presence in the logging path (no change to the logging code in this phase) The CLI `logging` tests pass (2), and `negative_controls` and `streaming` too; the logging code is untouched
 - [ ] A test that failed only because it asserted a bit-exact 0.1.0 value is not edited to pass: the test, the old and new values and the reason go to the owner, who decides whether it asserts the right thing (S-6 permits last-bit differences; the harness thresholds do not change)
 - [ ] `cargo build` has no warnings in any configuration; every test added in this phase names the HC, FR or S item it verifies (checked mechanically, as in Phase 6)
 

@@ -58,6 +58,17 @@ All of 0.1.0's rules hold. The ones this release leans on, and what it adds:
 Filled in during the phases. Nothing here is tuned; thresholds change only by a foundation bump.
 
 - Worst logit and intermediate error per category (task 7.5), next to 0.1.0's: english 1.81e-4 and 4.78e-6, thai 2.36e-4 and 5.38e-6, code 1.97e-4 and 5.91e-6, utf8-split 2.16e-4 and 4.59e-6, long 1.81e-4 and 5.21e-6 (plan 0.1.0 §8, Apple M5; the M4 Max reproduced the worst values).
+- Worst errors with the 8-sum kernel (task 7.5, harness on the M4 Max, every prompt passes), next to 0.1.0's, which a one-sum run (`LANES = 1`) reproduced to the last digit:
+
+  | Category | Logit error, 0.1.0 | Logit error, 8 sums | × | Intermediate error, 0.1.0 | Intermediate error, 8 sums | × |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | english | 1.81e-4 | 2.61e-4 | 1.4 | 4.78e-6 | 3.63e-5 | 7.6 |
+  | thai | 2.36e-4 | 6.31e-4 | 2.7 | 5.38e-6 | 2.13e-5 | 4.0 |
+  | code | 1.97e-4 | 3.86e-4 | 2.0 | 5.91e-6 | 3.96e-5 | 6.7 |
+  | utf8-split | 2.16e-4 | 9.59e-4 | 4.4 | 4.59e-6 | 3.86e-5 | 8.4 |
+  | long | 1.81e-4 | 3.49e-4 | 1.9 | 5.21e-6 | 1.95e-5 | 3.7 |
+
+  The limits are 1e-3 (S-1) and 1e-4 (S-2): `utf8-split` uses 96% of S-1's. Diagnostic runs, largest errors over all prompts (logit, intermediate), changing only the width: 1 sum 2.36e-4 and 5.91e-6; 4 sums 8.62e-4 and 5.11e-5; 8 sums 9.59e-4 and 3.96e-5; 16 sums 9.90e-4 and 4.02e-5; 32 sums 9.78e-4 and 4.14e-5. Fused multiply-add (`f32::mul_add`) with 1 sum: 2.23e-4 and 8.16e-6; with 8 sums: 9.78e-4 and 3.72e-5. So the change is not one width's noise and not the lack of fusing: any partial-sum order moves the engine about the same distance from the reference, and the index-order loop is much closer to it. What it means is not yet known (see §6).
 - Vectorization evidence (task 7.4): the 8-sum kernel's inner loop in the release assembly (plain flags, aarch64) loads 8 weights and 8 inputs, then does 2 × `fmul.4s` and 2 × `fadd.4s` into two 4-lane accumulators per 8 elements, then a scalar lane-order combine and an unrolled tail. It is vectorized; the multiply and add are not fused. First informal speed reading (two runs, short prompt, 128 tokens, not a result): 102.9 and 103.2 generation tokens/s and 0.30 s to first token, against 0.1.0's about 19 and 1.68 s.
 - Run-to-run logit difference (task 7.5) for S-6, expected bit-identical.
 - Width sweep (task 8.2): GFLOP/s per shape for widths 4, 8 and 16, the index-order loop and `matrixmultiply`.
@@ -76,4 +87,5 @@ Recorded here and absorbed by the upstream owner at the next bump; the upstream 
 ## 6. Open Questions
 
 - **Which partial-sum width the engine uses (Specification §19).** Resolver: task 8.2 sweep, by the rule set before measuring.
+- **Why partial sums sit 2 to 8 times further from the reference than index order does, and whether S-1 and S-2 still describe a real bug (Requirements §11).** Found at task 7.5; the owner decides, as thresholds are Requirements'. Resolver: owner, after the diagnostic proposed in the to-do (task 7.5).
 - **Whether the engine's non-matrix-vector operations matter after the speed-up.** In 0.1.0 they were 1.4% of a step; a several-fold faster kernel makes them a larger share. Resolver: task 8.5's figure; any change is a later release's decision.
