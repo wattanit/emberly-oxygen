@@ -2,11 +2,11 @@
 
 Oct 27, 2026 · @Wattanit
 
-**Version:** 0.1\
-**Status:** approved\
-**Date:** 2026-10-27\
+**Version:** 0.2\
+**Status:** draft\
+**Date:** 2026-11-07\
 **Owner:** Wattanit\
-**Upstream:** Emberly Oxygen — Requirements 0.1
+**Upstream:** Emberly Oxygen — Requirements 0.2
 
 This document owns HOW Emberly Oxygen is built: layout, data models, subsystems, dependencies, testing strategy and milestones. It defers WHAT and WHY to the Requirements, whose IDs it cites for every choice that satisfies one.
 
@@ -21,11 +21,18 @@ emberly-oxygen/             workspace root
     oxygen/                 package `emberly-oxygen` (library)
       src/
         lib.rs
-        tensor.rs           tensor type and math kernels (§4)
-        loader.rs           safetensors and config reading (§5)
-        tokenizer.rs        byte-level BPE encode/decode (§6)
-        model.rs            transformer forward pass (§7)
+        tensor.rs           tensor type (§3)
+        ops.rs              math kernels (§4)
+        config.rs           model configuration (§3)
+        safetensors.rs      safetensors reading (§5)
+        weights.rs          named weights and their checks (§5)
+        model.rs            a loaded model (§3)
+        tokenizer/          byte-level BPE encode/decode and streaming (§6)
+        forward.rs          transformer forward pass (§7)
+        kv_cache.rs         key-value cache (§3)
         generate.rs         greedy generation and streaming (§8)
+        error.rs            the error type (§14)
+        fault.rs            negative-control faults (§17)
       tests/                correctness harness (§11)
       benches/              benchmark harness (§12)
     oxygen-cli/             package `emberly-oxygen-cli` (binary `emberly-oxygen`)
@@ -46,7 +53,7 @@ emberly-oxygen/             workspace root
 
 ## 2. Execution model
 
-- **Single-threaded and synchronous.** One request, one sequence, one thread, no async runtime. This is the simplest correct model and the baseline later releases measure against; S-6 already permits parallel arithmetic when a release introduces it.
+- **Single-threaded and synchronous.** One request, one sequence, one thread, no async runtime. This is the simplest correct model and the baseline later releases measure against. It stays single-threaded in 0.2 so that the kernel change (§4) is measured alone (FR-25); S-6 already permits parallel arithmetic when a release introduces it.
 - **Prompt tokens go through the generation path.** The prompt is fed one token at a time through the same forward pass used for generation; batched prompt processing is out of scope (Requirements §2.3). One code path means one thing to verify.
 - **Past keys and values are cached.** Each layer stores the key and value vectors of every processed position, so each new token computes only its own row. Recomputing the whole prefix per token would make the 512-token benchmark prompt (§12) quadratically slow and teaches nothing the cache does not; the cache is part of the baseline, not an optimization.
 - **Streaming by callback.** Generation calls a caller-supplied function with each completed piece of text (FR-17), so the CLI prints as tokens arrive and the harnesses collect output without a separate code path.
@@ -66,6 +73,7 @@ emberly-oxygen/             workspace root
 | `rope_interleaved` | `false` or absent (half-split pairing) |
 | `tie_word_embeddings` | `true` |
 | `pretraining_tp` | `1` or absent |
+| `eos_token_id` | one whole number inside the vocabulary (some models list several; any other form is rejected as unsupported naming the field, an ID outside the vocabulary as malformed) |
 
 Sizes (hidden size, layers, heads, key-value heads, head dimension, intermediate size, vocabulary, context length), `rope_theta` and `rms_norm_eps` are read from the file, not hard-coded, so a model with the same architecture but different sizes needs no code change.
 
@@ -77,14 +85,15 @@ Sizes (hidden size, layers, heads, key-value heads, head dimension, intermediate
 
 ## 4. Tensor operations and kernels
 
-The operation set is exactly what the forward pass needs: matrix-vector product, RMSNorm, softmax, rotary position embedding (RoPE), SiLU, elementwise add and multiply. Each is a plain loop over slices with f32 accumulation in index order, and no `unsafe`, SIMD or threading (HC-1; optimization is out of scope, Requirements §2.3).
+The operation set is exactly what the forward pass needs: matrix-vector product, RMSNorm, softmax, rotary position embedding (RoPE), SiLU, elementwise add and multiply. Each is a plain loop over slices with f32 accumulation in index order, except the matrix-vector product (below). None uses `unsafe`, SIMD intrinsics or threading (HC-1, FR-25). The other operations stay plain because the matrix-vector product is about 98.6% of a step (release note 0.1.0), so speeding them would add risk for no measurable gain.
 
-- **Matrix-vector product.** Output element `i` is the dot product of weight row `i` with the input, matching the `[out, in]` layout (§3).
+- **Matrix-vector product.** Output element `i` is the dot product of weight row `i` with the input, matching the `[out, in]` layout (§3). The dot product keeps 8 independent f32 partial sums (FR-25): sum `j` adds the elements whose index is `j` modulo 8, each in index order; the 8 sums are then combined in one fixed order, and the final `in mod 8` elements are added in index order after them. The count of 8 is initial; tune with use: 4, 8 and 16 are measured and the choice is recorded in the release note. Index-order addition was a chain of dependent adds, each waiting for the last, so the processor could not overlap them; independent sums remove the wait and let the compiler use vector registers, from safe code alone. Phase 4 of release 0.1.0 measured the plain-loop variants at about 2× (4 sums) and 5× (8 sums) on the benchmark machine; that is an expectation for this release, not a guarantee.
+- **Prohibited in the kernel, for now.** `unsafe`, SIMD intrinsics, threads and tiling stay out (Requirements §2.2): each is its own technique and is measured as its own release. If safe code does not vectorize as expected, the implementation raises the issue with the owner instead of reaching for `unsafe`.
 - **RMSNorm.** `x · w / sqrt(mean(x²) + eps)`, with `eps` from the configuration.
 - **Softmax.** Subtracts the maximum before exponentiating, so large scores cannot overflow.
 - **RoPE.** Half-split pairing: dimension `i` rotates with dimension `i + d/2`, at frequency `theta^(-2i/d)`. Frequencies, angles, sines and cosines are computed in f32, not f64, because the reference computes them in f32 and a more precise angle is a different angle.
 
-The reference sums in a different order, so results differ in the last bits; S-1 and S-2 bound that difference.
+The reference sums in a different order, so results differ in the last bits; S-1 and S-2 bound that difference. The partial sums also make the engine's logits differ in the last bits from release 0.1.0's, which were summed in index order; they are still bit-identical from run to run on one machine, because the number of sums and the combining order are fixed (S-6). Release 0.2 is therefore compared with 0.1.0 by the harness thresholds and by speed, never by exact equality. Decoded argmax tokens are protected only by S-3 and S-4, whose near-tie rule exists for exactly this reason.
 
 ## 5. Model loading
 
@@ -100,8 +109,10 @@ A model is a directory holding `config.json`, a single `model.safetensors` and `
 The tokenizer is byte-level BPE, read from `tokenizer.json` and implemented in-house (HC-1).
 
 - **Encoding.** Special tokens are matched first. The remaining text is split by the pre-tokenizer that `tokenizer.json` declares, each piece's bytes are mapped to the byte-level alphabet, and BPE merges are applied lowest rank first until no ranked pair remains. Pieces then map to IDs. The splitting pattern is hand-written rather than run through a regex crate: the standard byte-level pattern uses lookahead, which Rust's `regex` crate does not support, and hand-writing it is part of the point.
-- **Components.** Only the normalizer, pre-tokenizer, post-processor and decoder types SmolLM2's `tokenizer.json` actually uses are implemented; any other type is rejected naming it. Whether a beginning-of-sequence token is added follows the file's post-processor, so the engine and reference agree by construction (FR-13).
-- **Decoding.** IDs map to piece strings, then back to bytes through the inverse byte map (FR-14).
+- **Components.** Only the types SmolLM2's `tokenizer.json` actually uses are implemented, and anything else is rejected as an unsupported component naming it (plan 0.1.0 task 3.6). The file declares: model `BPE` with no dropout, unknown token, subword prefix or suffix, byte fallback or `ignore_merges`; normalizer none; pre-tokenizer a sequence of `Digits{individual_digits: true}` then `ByteLevel{add_prefix_space: false, use_regex: true}`; post-processor none, so no beginning-of-sequence token is added and the reference's encoding carries none; decoder `ByteLevel`; no truncation or padding. The vocabulary has 49152 entries and 48900 merges, and 17 added tokens at IDs 0 to 16, all special and all also in the vocabulary (`<|endoftext|>` is ID 0, also the end-of-sequence ID). The engine requires vocabulary IDs to be exactly 0 to n-1 and added tokens to appear in the vocabulary under the same ID. A test pins these facts against the real file (FR-13).
+- **Character classes are measured, not borrowed.** Letter, number and white-space ranges for the splitting pattern come from `oracle/unicode_classes.py`, which runs every Unicode scalar value through the reference pre-tokenizer and writes `tokenizer/unicode_classes.rs`, a committed file. Rust's `char::is_alphabetic` is not Unicode `\p{L}` (it counts some Thai vowel signs as letters), and a different Unicode version would shift piece boundaries silently; swapping it in made 557 of 3,979 corpus cases fail. A second oracle output, `oracle/tokenizer_corpus.py`, stores the reference's pieces and token IDs for about 4,000 strings, and the tokenizer tests compare against it.
+- **Bytes with no vocabulary entry are dropped silently.** SmolLM2's vocabulary has no entry for 21 of the 256 byte-level characters (bytes 4, 6, 19, 20, 22, 29, 192, 193, 241, 242 and 245 to 255), and the reference drops them, so `"a\x04b"` encodes as `a` and `b` only. The engine does the same because FR-13 requires exact agreement. This is a known loss, not a guarantee of fidelity; whether it should warn or reject is an Open Question of the Requirements.
+- **Decoding.** IDs map to piece strings, then back to bytes through the inverse byte map (FR-14). As the oracle decodes (`AutoTokenizer.decode`, default options): special tokens are kept and print as their text, no tokenization-space cleanup is applied, the bytes of all tokens are joined before being read as UTF-8 (so a character split across tokens decodes whole), and bytes forming no valid sequence become U+FFFD, one per maximal invalid subsequence, the same rule as `String::from_utf8_lossy`. A character outside the byte-level alphabet stands for no byte and is skipped. An ID outside the vocabulary is a rejected request.
 - **Streaming decoder.** Decoded bytes accumulate in a buffer. After each token, the longest valid UTF-8 prefix is emitted and a trailing incomplete sequence of up to 3 bytes is held back (FR-15). Bytes that cannot begin or continue a valid sequence become U+FFFD, as the reference's decode does; at end of generation the held bytes are flushed the same way.
 
 ## 7. Forward pass
@@ -125,8 +136,11 @@ The residual stream `x` is never normalized in place; only the copies fed into a
 1. Encode the prompt. Reject it before any computation if the prompt is empty or prompt length plus maximum new tokens exceeds `max_position_embeddings` (FR-18).
 2. Feed the prompt tokens through the forward pass in order (§2).
 3. Take the highest logit as the next token; on an exact tie, the lowest ID wins, as the reference's argmax does (FR-16).
-4. Pass the token to the streaming decoder and emit any completed text to the callback (FR-17).
-5. Stop after the maximum number of new tokens or when the token is the configuration's `eos_token_id`; flush the decoder.
+4. If the token is the configuration's `eos_token_id`, stop; the token is returned among the generated IDs, because the oracle's continuation includes it and S-4 compares IDs, but its text is not passed to the callback, since standard output is generated text and the end-of-sequence token is a control signal (FR-17, FR-20).
+5. Otherwise pass the token to the streaming decoder and emit any completed text to the callback (FR-17). Stop after the maximum number of new tokens; flush the decoder.
+
+- The last generated token is not fed back through the forward pass, since nothing would use its logits; the context check in step 1 still counts it (FR-18). A maximum of zero new tokens is allowed: the prompt is checked and nothing is computed.
+- `generate` returns `Generation { ids, stats }`. `Stats` holds the prompt and generated token counts, time to first token and generation time, with the two throughputs as methods. The CLI may use only the public API (§1), and time to first token cannot be seen through the text callback (the first token may complete no text, or be end-of-sequence), so the library reports it. Time to first token runs from receiving the prompt string, so it includes encoding, to choosing the first token. The first generated token's cost counts as prompt work: prompt throughput is prompt tokens over that time, and generation throughput is the tokens after the first over the time after it, absent for a single token (FR-8, FR-21).
 
 ## 9. Command-line interface
 
@@ -136,7 +150,8 @@ emberly-oxygen generate --model <dir> --max-new-tokens <n> [--stats] [-v|-vv|-vv
 
 - The prompt is read from standard input when no argument is given (FR-19).
 - Generated text goes to standard output and nothing else; errors go to standard error with a non-zero exit code (FR-20).
-- `--stats` prints prompt token count, generated token count, time to first token and generation tokens per second to standard error (FR-21). The CLI package's own tests run the built binary and check FR-19 to FR-21.
+- `--stats` prints, to standard error, the model load time (timed by the CLI around both loads) followed by prompt token count, generated token count, time to first token and generation tokens per second, defined as in §8 (FR-21).
+- A write error on standard output, such as a reader closing the pipe, makes the text callback exit with code 1, so generation stops at once instead of running to the maximum (FR-20). The CLI package's own tests run the built binary and check FR-19 to FR-21.
 
 ## 10. Reference oracle
 
@@ -147,7 +162,9 @@ The oracle lives in `oracle/`, a Python project managed by `uv` with a lockfile 
 - **Prompt set.** `oracle/prompts.json` lists each prompt with an ID and a category: `english`, `thai`, `code`, `utf8-split` (prompts whose tokens split multi-byte characters) and `long` (about 512 tokens, the longest benchmark prompt, §12). Each category has at least two prompts (FR-3).
 - **Greedy continuation.** 32 tokens, produced by the oracle's own argmax loop rather than a library generate call, so it can record the gap between the two highest logits at every step for near-tie detection (S-3, S-4).
 - **Output.** `fixtures/<model-id>/manifest.json` records the model ID and commit, library versions, the generating machine, and per prompt: ID, category, text, token IDs, continuation IDs and text, and top-two gaps. One safetensors file per prompt holds logits `[positions, vocab]`, embeddings `[positions, hidden]` and layer outputs `[layers, positions, hidden]` (FR-1). Fixtures are model-agnostic in shape, so adding a model adds a folder (Requirements §2.2).
-- **Honesty note.** In the reference library, the last entry of the per-layer outputs is taken after the final norm, not straight from the last layer. The oracle stores what the library returns and labels that entry, and the harness compares it against the engine's normalized output.
+- **Honesty note.** In the reference library, the last entry of the library's hidden states is taken after the final norm, not straight from the last layer. The oracle therefore captures every layer's raw output with forward hooks (checked equal to the library's own hidden states for all other layers) and stores the final-norm output separately as `final_norm_output`; the harness compares that against the engine's normalized output.
+- **Top-two gaps** are stored for the prompt positions as well as for the continuation, because the near-tie test of S-3 applies at every position.
+- **Further outputs.** `oracle/tokenizer_corpus.py` writes `fixtures/<model-id>/tokenizer-corpus.json` (§6), `oracle/unicode_classes.py` writes the committed character classes (§6), and `oracle/rope_reference.py` prints the reference's rotary cosines and sines at positions 1 and 5000 as Rust constants for the RoPE test, because f32 angles must agree with the reference's (§4): at position 5000 an f64 cosine differs from the reference's by 8.4e-5.
 
 Logits dominate fixture size: about 200 KB per position, so the long prompts are about 100 MB each. Fixtures are therefore kept out of git: \`fixtures/\` is git-ignored and filled by running the oracle locally. What regenerates them is committed instead: the prompt set, the oracle's lockfile and the pinned model commit. Fixtures generated on a different machine may differ from another machine's in the last bits of the reference's own arithmetic; that stays far inside S-1, and the manifest records which machine produced them.
 
@@ -158,6 +175,7 @@ Rust integration tests in `tests/`, run with `cargo test`; the test profile is c
 - The harness reads every `fixtures/*/manifest.json`, so a new model's fixtures are picked up without code changes.
 - Per prompt it checks encoding (FR-13), decoding (FR-14), logits (S-1), intermediates (S-2), top-1 token (S-3) and greedy continuation (S-4).
 - For `utf8-split` prompts it streams the expected continuation through the streaming decoder and checks that the concatenated chunks equal the full decode and that no chunk contains a replacement character the full decode lacks (FR-15).
+- A tensor, for S-2, is one layer's `[positions, hidden]` output for one prompt, and its largest magnitude is taken over all positions; a per-position maximum would be stricter. An all-zero reference tensor fails. A near-tie is a reference gap strictly less than 1e-3, and in the greedy comparison the gap before each continuation token decides: the first near-tie stops the comparison, tokens before it must match, and the token at it may be either (S-3, S-4).
 - It prints a pass/fail table by prompt and by category; any failing category fails the run (S-5). Each failure reports the first diverging position and, for intermediates, the first diverging layer (FR-6).
 - Model files are found in `models/<model-id>/` (git-ignored, filled by the oracle's download script). If they are missing, the run fails naming the path; it never downloads (FR-7). Missing fixtures fail the run the same way, naming the oracle command that generates them.
 
@@ -176,7 +194,10 @@ A custom harness in `benches/`, run with `cargo bench`, which builds with the op
 - **Isolation.** Each workload runs in a fresh child process, because peak resident memory is a per-process high-water mark and would otherwise carry over.
 - **Repetition.** Each workload runs 5 times; median, minimum and maximum are recorded (S-7).
 - **Record (FR-9).** One JSON line per workload is appended to `results/benchmarks.jsonl`: package version, commit and whether the tree was dirty, CPU model, core count, memory, OS, build profile, timestamp, and results.
-- **Kernel baseline (HC-2).** A separate group times the in-house matrix-vector product against the test-only linear algebra crate at the model's matrix sizes.
+- **Kernel baseline (HC-2).** A separate group times the in-house matrix-vector product against the test-only linear algebra crate (`matrixmultiply`, single-threaded) at the model's five matrix shapes. It agrees with both before timing and records one row per shape with ns per call and GFLOP/s. The group is reached through the `bench-kernels` Cargo feature, off by default, which adds the public module `emberly_oxygen::kernels`; only the library's self-referencing dev-dependency enables it, so a normal build never contains it.
+- **Reference points for the kernel.** `matrixmultiply` is a weak yardstick for a matrix-vector product: built for matrix-matrix work, it is only about 1.25× faster than the 0.1.0 loop at most shapes and slower at the 49152×576 output projection, because it repacks the matrix on every call. The kernel group therefore also times the 0.1.0 index-order loop and the partial-sum widths tried (FR-25), so the speed-up is shown against the engine's own history. A dedicated matrix-vector library is not added as a baseline in 0.2: it would be a new dependency (§15) and the earlier loop already shows the ceiling.
+- **Comparability.** The workloads and procedure are unchanged from 0.1.0, so 0.1.0's rows are the previous release's in the record (FR-9, FR-25).
+- **Definitions.** Throughput and time to first token are as defined in §8.
 
 ## 13. Configuration
 
@@ -194,12 +215,13 @@ There is no configuration file. Run settings come from command-line flags (§9) 
 | --- | --- | --- |
 | none | warn | warnings and errors |
 | `-v` | info | model and configuration summary, load time, prompt token count, run summary with throughput |
-| `-vv` | debug | one event per decode step: position, token ID, decoded text, top 5 candidates with logits, step time; prompt-feeding steps are marked as such |
+| `-vv` | debug | one event per forward step: position, the token fed, its text, top 5 candidates with logits, step time; a step whose result is taken also names the chosen token as `next`; prompt-feeding steps are marked as such. Since the last generated token is never fed (§8), a run has prompt tokens plus generated tokens minus one step events |
 | `-vvv` | trace | per layer within each step: residual-stream norm after attention and after the MLP, and for each head the position receiving the most attention weight |
 
 - Generation, steps and layers are nested spans (`generate` → `step{pos}` → `layer{idx}`), so every event carries its place in the decode loop.
 - `--log-file <path>` sends the same events to a file instead of standard error (FR-24). Standard output stays generated text only (FR-20).
 - Per-layer statistics are computed only when the trace level is enabled, so lower levels do no extra arithmetic. No statistic feeds back into the computation, so output is identical at every level (S-8). The benchmark harness runs at the default level.
+- Logging costs nothing measurable when no subscriber is installed: the real model's step time was 49.25 ms before logging was added and 49.29 to 49.32 ms after.
 - At trace level a 512-token prompt produces tens of thousands of events. It is meant for short prompts, or with `--log-file`.
 
 ## 15. Dependencies
@@ -208,10 +230,10 @@ Locked initial set:
 
 | Crate | Used by | Purpose |
 | --- | --- | --- |
-| `clap` | CLI package only | command-line parsing |
-| `tracing-subscriber` | CLI package only | formatting and routing log events |
+| `clap` 4 | CLI package only | command-line parsing |
+| `tracing-subscriber` 0.3, features `fmt` and `std` only | CLI package only | formatting and routing log events, with no `log` bridge and no colour codes in log files |
 | `thiserror` | library | error type |
-| `tracing` | library | emitting log events and spans |
+| `tracing`, without its default `attributes` feature | library | emitting log events and spans, with no proc-macro crates |
 | `serde`, `serde_json` | library | reading `config.json`, `tokenizer.json` and the safetensors header |
 | `memmap2` | library | memory-mapping the weights file |
 | `matrixmultiply` | library tests, benches only | kernel oracle and baseline (HC-2) |
@@ -231,19 +253,20 @@ Acceptance policy: an engine dependency must be general plumbing under HC-1; any
   3. The release note is written to `docs/releases/<version>.md`.
   4. The commit is tagged `v<version>`.
 
-  Benchmarks follow the correctness run, so no result from a failing build enters the record (HC-4).
+  Benchmarks follow the correctness run, so no result from a failing build enters the record (HC-4). Running straight after the tests leaves the machine warm: in 0.1.0 it made the workloads about 6% slower than on an idle machine. The procedure is kept as written so that every release's rows are taken the same way and stay comparable (S-7); the effect is a known bias, not a correction.
 
 ## 17. Testing strategy
 
 - **Unit tests per kernel.** Each kernel is checked against hand-computed small cases (softmax sums to 1, RoPE at position 0 is the identity) and, for matrix-vector product, against the test-only linear algebra crate on random inputs (HC-2).
 - **Unit tests for the tokenizer.** Byte-map round trips, merge order on known pieces, and the streaming decoder's hold-back on split three-byte characters (FR-15).
 - **Correctness harness.** End-to-end comparison against the oracle's fixtures (§11), the gate every release must pass (HC-4).
-- **Negative controls.** The harness must be seen to fail. Test-only switches deliberately break the engine (interleaved RoPE pairing, a 2e-3 perturbation of one logit, a dropped final norm), and a test asserts that the harness fails on each. A check that has never failed has not been shown to work.
+- **Negative controls.** The harness must be seen to fail. A Cargo feature, `negative-controls`, off by default, adds the enum `Fault` (`InterleavedRope`, `PerturbedLogit { position }`, `NoFinalNorm`) and `Model::inject_fault`; in a normal build `Fault` has no values, so no faulty arithmetic is compiled in. The library's self-referencing dev-dependency enables the feature, so plain `cargo test` always runs the controls and none is skipped for a missing flag, while `cargo build` never contains them. A test asserts that the harness fails on each fault. With no fault injected the feature changes no result. A check that has never failed has not been shown to work. The new kernel (§4) must leave all three controls failing as before.
+- **Kernel tests.** The new matrix-vector product is checked against the 0.1.0 index-order loop and against `matrixmultiply` on random inputs at the model's shapes and at lengths that are not a multiple of 8, including lengths below 8 (the tail), within an absolute tolerance far below S-1 (HC-2, FR-25).
 - Every test names the HC, FR or S item it verifies, so coverage of the Requirements can be listed mechanically.
 
 ## 18. Milestones
 
-&#91;embedded content: milestones · M1 to M6, ending in release 0.1.0\]
+&#91;embedded content: milestones · M1 to M7, ending in release 0.1.1\]
 
 - **M1 — Oracle.** The oracle generates fixtures for every prompt category from the committed prompt set. *Proves the reference exists.*
 - **M2 — Harness.** The harness runs against a stub engine, reports per category, and fails cleanly. *Proves the gate can fail.*
@@ -251,8 +274,34 @@ Acceptance policy: an engine dependency must be general plumbing under HC-1; any
 - **M4 — Forward.** Logits, intermediates and top-1 tokens pass S-1 to S-3 in every category, and the negative controls fail as intended. *Proves the math.*
 - **M5 — Generation.** Greedy continuations pass S-4, and the CLI meets FR-16 to FR-21. *Proves the engine end to end.*
 - **M6 — Baseline.** First benchmark record on the benchmark machine, release note written, tagged 0.1.0. *Proves the progression has a starting point.*
+- **M7 — Faster kernel.** The matrix-vector product with independent partial sums (§4) passes the unchanged harness in every category and leaves the negative controls failing; the kernel group and both workloads are recorded against 0.1.0's rows; release note written, tagged 0.1.1 (FR-25). *Proves the speed-up is real and costs nothing in correctness.*
 
 ## 19. Open Items
 
-- **Tokenizer components.** The exact normalizer, pre-tokenizer and decoder types are confirmed from SmolLM2's `tokenizer.json` at M3; §6 is narrowed to match. Resolver: M3 implementation.
-- **Benchmark platform.** Peak memory and machine description (§12) assume Linux or macOS. If the benchmark machine runs another OS, §12 changes. Resolver: owner, with the benchmark machine choice (Requirements §13).
+- **Which partial-sum width is best (§4).** Resolver: M7 measurement; the choice and the numbers go in the release note.
+
+### Resolved since 0.1
+
+- **Tokenizer components.** SmolLM2's `tokenizer.json` was read at M3; §6 states what it uses.
+- **Benchmark platform.** The benchmark machine is an Apple M4 Max on macOS 26.3 (Requirements §13), so §12's Linux-or-macOS assumption holds.
+
+### Feedback absorbed in 0.2
+
+From plan 0.1.0 §9 (G-25). Every row addressed to this document, absorbed or rejected:
+
+| Plan row | Disposition |
+| --- | --- |
+| Task 1.5, §10 | Absorbed into §10 (top-two gaps at every position). |
+| Task 1.6, §10 | Absorbed into §10 (hooks, `final_norm_output`). |
+| Task 2.3, §11 | Absorbed into §11 (tensor reading, all-zero fails, near-tie rule). |
+| Task 3.6, §6 and §19 | Absorbed into §6; the §19 item is resolved. |
+| Task 3.8, §6 and §10 | Absorbed into §6 and §10. |
+| Task 3.9, §6 | Absorbed into §6 (the silent drop is stated); the warn-or-reject question belongs to Requirements. |
+| Task 3.10, §6 and §10 | Absorbed into §6 (special tokens kept, decode rules). |
+| Task 4.3, §4 | Absorbed into §4 and §10; no change to the f32 rule. |
+| Task 4.7, §17 | Absorbed into §17. |
+| Task 5.1, §8 and §3 | Absorbed into §8 (EOS, last token, zero tokens) and §3 (`eos_token_id`). |
+| Task 5.3, §12 and §14 | Absorbed into §8 (definitions) and §14 (step events, cost when off). |
+| Task 5.4, §1, §8, §9, §14, §15 | Absorbed into §8, §9 and §15. |
+| Task 6.5, §1, §12, §17 | Absorbed into §12 and §17 (`bench-kernels`, reference points). The suggestion of a dedicated matrix-vector baseline is rejected for 0.2 with the reason in §12. |
+| Task 6.1 | Resolved (§19 ledger). |

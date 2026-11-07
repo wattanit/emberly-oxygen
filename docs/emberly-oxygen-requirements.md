@@ -2,11 +2,11 @@
 
 Oct 27, 2026 · @Wattanit
 
-**Version:** 0.1\
+**Version:** 0.2\
 **Status:** approved\
-**Date:** 2026-10-27\
+**Date:** 2026-11-07\
 **Owner:** Wattanit\
-**Companion documents:** Emberly Oxygen — Technical Specification 0.1 (downstream)
+**Companion documents:** Emberly Oxygen — Technical Specification 0.2 (downstream)
 
 This document owns WHAT Emberly Oxygen must do and WHY it exists. It defers HOW it is built (architecture, algorithms, data layouts, dependencies, testing strategy, milestones) to the Technical Specification. There is no Design Guideline: the only human-facing surface is a command-line interface, so naming and output wording are decided here.
 
@@ -29,10 +29,12 @@ Emberly Oxygen is a decoder-only LLM inference engine written from scratch in Ru
 - A reference oracle that produces expected outputs from an independent implementation of the same model.
 - A correctness harness that compares engine output against the oracle's expected outputs.
 - A benchmark harness that measures speed and memory the same way for every release.
+- A faster matrix-vector product, in safe single-threaded code (FR-25). It dominates a decode step, so it is the first place a speed-up can matter.
 
 ### 2.2 Explicitly deferred
 
 - **Additional models.** The oracle, its expected outputs and both harnesses must not be specific to SmolLM2-135M: adding a model adds expected outputs, not changes to the harnesses. This door is kept because it costs nothing now and every future model needs it.
+- **Further kernel optimization.** Threads, SIMD intrinsics and `unsafe` code, tiling, and reading weights at lower precision inside the kernel. Each enters as its own release by replacing the body of the matrix-vector function, so neither its callers nor the harnesses change. FR-25 takes only the first step, because each technique is measured on its own (§1, purpose 2).
 
 ### 2.3 Out of scope
 
@@ -40,7 +42,6 @@ The engine is built naive-first: nothing is designed ahead for a capability unti
 
 - Sampling strategies other than greedy, and chat or instruction-following conversation.
 - Processing a prompt's tokens in one batched pass.
-- Performance optimization of the math kernels.
 - Quantized weights or quantized cached state.
 - Model families other than the one in scope.
 - Speculative decoding and constrained decoding.
@@ -89,7 +90,7 @@ A release that violates any of these is defective by definition.
 
 ## 8. Tokenization
 
-- **FR-13 — Exact encoding.** Text encodes to exactly the token IDs the model's reference tokenizer produces, for every prompt in the prompt set.
+- **FR-13 — Exact encoding.** Text encodes to exactly the token IDs the model's reference tokenizer produces, for every prompt in the prompt set. The reference tokenizer silently drops the 21 byte values SmolLM2's vocabulary has no entry for, so the engine drops them too: exact agreement is the requirement, and the loss is silent on both sides (§13).
 - **FR-14 — Exact decoding.** Token IDs decode to exactly the text the reference tokenizer produces.
 - **FR-15 — No broken characters while streaming.** Streamed output never contains an incomplete UTF-8 sequence: bytes of a partially decoded character are held until the character completes. Thai characters are three bytes and are routinely split across tokens.
 
@@ -98,6 +99,7 @@ A release that violates any of these is defective by definition.
 - **FR-16 — Greedy generation.** Given a prompt and a maximum number of new tokens, the engine generates by always selecting the highest-scoring token, and stops at the maximum or at the model's end-of-sequence token.
 - **FR-17 — Streamed output.** Each generated token's text is emitted as soon as it is produced, subject to FR-15.
 - **FR-18 — Context limit enforced.** A request whose prompt plus maximum new tokens exceeds the model's context length is rejected with an error. Silent truncation would change the output without telling the user.
+- **FR-25 — Faster matrix-vector product.** The matrix-vector product, about 98.6% of a decode step in 0.1.0, runs faster than in the previous release, in safe single-threaded in-house code (HC-1). The release note reports the kernel's and the engine's speed against the previous release's recorded rows (FR-9) and what the change was worth; there is no numeric target, so a disappointing result is a recorded negative result (§12), not a defect. Output must still pass §11 (HC-4). It stays single-threaded and free of `unsafe` so that this release measures one technique alone.
 
 ## 10. Command-line interface and logging
 
@@ -113,7 +115,7 @@ A release that violates any of these is defective by definition.
 The thresholds below are initial values; tune with the first measured comparison and record any change by version bump.
 
 - **S-1 — Logit agreement.** At every position of every prompt, the largest absolute difference between engine and reference logits is at most 1e-3. With identical weights and precision (FR-2), only arithmetic order differs, which stays well below this; a real bug exceeds it.
-- **S-2 — Intermediate agreement.** Every stored intermediate value matches within 1e-4 relative to the largest magnitude in its tensor. A relative bound is used because values grow across layers.
+- **S-2 — Intermediate agreement.** Every stored intermediate value matches within 1e-4 relative to the largest magnitude in its tensor. A relative bound is used because values grow across layers. A tensor is one layer's output for one prompt, and its largest magnitude is taken over all positions; an all-zero reference tensor fails, because a relative error is undefined.
 - **S-3 — Top-token agreement.** The highest-scoring token matches the reference at every position, except near-ties where the reference's two highest logits differ by less than 1e-3; there either token passes.
 - **S-4 — Greedy agreement.** The greedy continuation matches the reference token for token. If a near-tie (S-3) occurs during the continuation, comparison stops at that position and the harness reports it, because the two sequences may legitimately diverge from there.
 - **S-5 — Judged per category.** A release passes only if every prompt category (FR-3) passes. Averages are never used, because an aggregate can stay flat while one category fails.
@@ -133,6 +135,23 @@ These are requirements because the project's second purpose (§1), a measured an
 
 ## 13. Open Questions
 
-- **Which machine is the benchmark machine (S-7).** Resolver: owner, before the first benchmark result is recorded.
-- **Whether the initial thresholds in S-1 to S-4 hold.** Resolver: tune with the first measured comparison; any change lands by version bump.
-- **Exact prompt set, generation lengths and context lengths (FR-3, FR-8).** Resolver: Technical Specification.
+- **Whether a byte the vocabulary cannot represent should be warned about or rejected instead of silently dropped (FR-13).** Resolver: owner, when a release changes tokenization behavior; the engine and the reference agree today.
+
+### Resolved since 0.1
+
+- **Which machine is the benchmark machine (S-7).** An Apple M4 Max (16 cores: 12 performance, 4 efficiency; 128 GB; macOS 26.3), named by the owner at plan 0.1.0 task 6.1 (plan §9, §10).
+- **Whether the initial thresholds in S-1 to S-4 hold.** They hold and are kept: release 0.1.0 measured a worst logit error of 2.36e-4 against 1e-3 and a worst intermediate error of 5.91e-6 against 1e-4 (release note 0.1.0). Any later change lands by version bump.
+- **Exact prompt set, generation lengths and context lengths (FR-3, FR-8).** Technical Specification §10 and §12.
+
+### Feedback absorbed in 0.2
+
+From plan 0.1.0 §9 (G-25). Every row addressed to this document, absorbed or rejected:
+
+| Plan row | Disposition |
+| --- | --- |
+| Before Phase 1, S-3 | Already resolved in place by the owner in 0.1 (the corrupted sentence was restored; meaning unchanged). |
+| Task 2.3, S-2 and S-3 | S-2 absorbed (what a tensor is, all-zero fails). The S-3 and S-4 readings were already the text here ("less than 1e-3", comparison stops at the first near-tie). |
+| Task 3.9, FR-13 | Absorbed into FR-13; whether to warn or reject is an Open Question. |
+| Task 6.1, §13 machine | Absorbed: resolved ledger above. |
+| Task 6.5, HC-2 | Rejected as a requirement change: HC-2 stays as written. The weak baseline is a Specification matter (§12). |
+| Phase 4 exit, S-1 and S-2 | Absorbed: thresholds kept, measured errors recorded in the resolved ledger above. |
