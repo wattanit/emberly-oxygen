@@ -50,10 +50,10 @@ Each has a recommendation; none is decided by this to-do. Point 1 blocks 8.2; it
 
 ## 8.4 The release measurement (HC-4, S-7, S-8, Spec §16)
 
-- [ ] **Apply decision point 6.** `cargo test --no-fail-fast` first; a failure stops here and nothing is benchmarked (HC-4). Gate the bench on the test command's own exit status, not on a pipeline that could hide a failure (the 0.1.0 lesson, plan §9 task 6.6). Write the test time
-- [ ] Then `cargo bench` straight after, at the default log level (S-8), appending the workload and kernel rows (Spec §16 step 2). Write the bench time and the number of rows (2 workload rows and 5 kernel rows, as in 0.1.0)
-- [ ] The rows are committed (only `results/` changes in that commit)
-- [ ] Check: every new row has every condition field, `version` is 0.1.1, `dirty` is false and the commit is the one from 8.3
+- [x] **Apply decision point 6.** `cargo test --no-fail-fast` first; a failure stops here and nothing is benchmarked (HC-4). Gate the bench on the test command's own exit status, not on a pipeline that could hide a failure (the 0.1.0 lesson, plan §9 task 6.6). Write the test time. Test run: exit 0, 214 tests in 14 binaries, all `ok`, 28 s; the bench ran only after that exit status
+- [x] Then `cargo bench` straight after, at the default log level (S-8), appending the workload and kernel rows (Spec §16 step 2). Write the bench time and the number of rows (2 workload rows and 5 kernel rows, as in 0.1.0). `cargo bench` exit 0 in 233 s (0.1.0: 306 s); 7 rows appended (2 workload, 5 kernel), 14 lines in the file now
+- [x] The rows are committed (only `results/` changes in that commit). Committed alone (`results/benchmarks.jsonl` only)
+- [x] Check: every new row has every condition field, `version` is 0.1.1, `dirty` is false and the commit is the one from 8.3. All 7 rows carry `version` 0.1.1, `dirty` false and commit `b1a3214`: the version bump `1693fcb` plus the to-do note of 8.3, which changes `docs/` only (`git diff --stat 1693fcb b1a3214` shows that one file), so the code measured is the code of `1693fcb`. No condition field is empty
 
 ## 8.5 The comparison with 0.1.0 (FR-8, FR-25, Requirements §12)
 
