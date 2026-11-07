@@ -1,0 +1,87 @@
+# Phase 8 — Measurement and release: To-do
+
+Working checklist for Phase 8 of the [implementation plan](../emberly-oxygen-implementation-plan-0.1.1.md) (the second half of milestone M7: the speed-up is real, measured against 0.1.0, and costs nothing in correctness). Tick items as they land; one task is one commit with a body paragraph, each ending with a passing `cargo test --no-fail-fast` whose **whole summary is read** (the measurement tasks end with the benchmark instead, see 8.4). IDs cite the Requirements 0.2 and Technical Specification 0.2.
+
+Proves: the kernel and both workloads are measured against 0.1.0's rows on the benchmark machine, from a clean tree, with the correctness gate passed first; the release is described. Satisfies FR-8, FR-9, FR-25, S-7, HC-2, HC-4.
+
+Layout: the benchmark is `crates/oxygen/benches/benchmarks.rs` (`harness = false`), its helpers `crates/oxygen/benches/support/`, their tests `crates/oxygen/tests/bench_support.rs`; the record is `results/benchmarks.jsonl`. The kernel variants it times are reached through `emberly_oxygen::kernels` (`matvec` the engine's own, `matvec_index_order` the 0.1.0 loop, `matvec_lanes::<N>`), behind the `bench-kernels` feature. The release note is `docs/releases/0.1.1.md`. The 0.1.0 rows this phase compares with are the seven in `results/benchmarks.jsonl` at commit `0b4a5f3`.
+
+Dependencies: none new. `git` is run as a program, as in 0.1.0.
+
+Out of scope: any change to the engine other than the one constant the sweep may change (`ops::LANES`). No other kernel, no threads, no `unsafe`, no build flags. A result below expectation is recorded as a negative result (FR-25), not worked around.
+
+The benchmark machine is the owner's Apple M4 Max (Requirements §13).
+
+## Decision points for the owner
+
+Each has a recommendation; none is decided by this to-do. Point 1 blocks 8.2; it must be settled before any sweep number is seen.
+
+1. **How the width is chosen, written before the numbers. (blocks 8.2.)** *Recommendation:* sweep widths 4, 8, 16 and 32 (Spec §4 names 4, 8 and 16; 32 costs nothing to add and the 16-wide loop may still be climbing, since the 8-wide loop has only two independent vector accumulators). Choose the width with the **lowest estimated kernel time per token**: the sum over the five shapes of (calls per token × median ns per call), with SmolLM2-135M's 30 layers giving 60 calls of 576×576, 60 of 192×576, 60 of 1536×576, 30 of 576×1536 and 1 of 49152×576 per token. **A tie (within 2%) goes to the smaller width**, because a wider kernel costs registers and tail work for nothing. This weights each shape by what a token really spends on it, so a gain at the 49152×576 projection that every token pays once is not over-counted and one on the 576×576 shapes that every token pays 60 times is not under-counted. It replaces the plan's earlier sketch (the two largest shapes), which would have ignored the shapes that dominate by call count.
+2. **How the new variants enter the record. (applies to 8.1.)** *Recommendation:* one row per shape as in 0.1.0, keeping its four fields (`in_house_*` is still the engine's own kernel, `matrixmultiply_*` the library) so the series stays comparable, and adding fields per variant (`index_order_*`, `lanes_4_*`, `lanes_8_*`, `lanes_16_*`, `lanes_32_*`, each ns per call and GFLOP/s as median, minimum and maximum). A row per variant would break the one-row-per-shape shape the record already has.
+3. **When the version number changes. (applies to 8.3.)** *Recommendation:* the workspace version becomes 0.1.1 in its own commit just before the measurement, so every row of this release carries `"version": "0.1.1"` and none of the development runs before it can be mistaken for the release's (those use `--dry-run`).
+4. **What happens if the sweep chooses a width other than 8. (applies to 8.2.)** Spec §4 says 8 is initial and that the choice is recorded in the release note. *Recommendation:* no Specification bump mid-release: change the constant, record the choice and the reason in the release note and plan §5, and let the next Specification bump update §4's text. The Specification anticipated the tuning, so it is not contradicted.
+5. **Correcting "no `unsafe`" in the released 0.1.0 note and README. (applies to 8.6.)** Both say the engine has none; the loader has the memory-map call (plan §5, task 7.4). *Recommendation:* leave the released 0.1.0 note untouched, make the 0.1.1 note and the README's current text accurate ("no `unsafe` in the kernels; the only other is the memory map in the loader"), and say in the 0.1.1 note that 0.1.0's wording was imprecise. A released note is a record.
+6. **Warm-machine bias. (applies to 8.4.)** *Recommendation:* follow the 0.1.0 procedure exactly (tests, then the bench straight after), with no cool-down and no idle-machine rerun in the record, so the rows stay comparable with 0.1.0's. The 0.1.1 note states that both sides carry the same bias (Spec §16); with the test suite now taking 30 s instead of 86 s, the machine should be warmer for less time, and the note says that is untested.
+7. **Merging, tagging, pushing.** *Standing rule of the owner:* none happens without the owner's explicit order at the time. 8.7 stops and asks.
+
+## 8.1 The kernel group's variants (FR-25, HC-2, FR-9, Spec §12)
+
+- [ ] **Apply decision points 1 and 2.** Extend `kernels::matvec_lanes` tests' `lanes(n)` helper to include width 32 (the agreement, every-length, exactness and reproducibility tests then cover it); the structure pin gains a hand-worked width-32 value, or a comment saying why it adds nothing (with 16 columns a 32-wide kernel is all tail: it should give 7, the index-order value)
+- [ ] The kernel group times, at each of the five shapes (`KERNEL_SIZES`): the engine's kernel (`in_house_*`, the 0.1.0 field name), `matrixmultiply` (`matrixmultiply_*`), the 0.1.0 index-order loop and widths 4, 8, 16 and 32, on the same inputs
+- [ ] Every variant's output is checked against the engine's before it is timed, as the baseline's is today (a broken variant is never timed)
+- [ ] A test (from `tests/`, names FR-9) that a kernel row keeps the four 0.1.0 field names and gains the variants' fields
+- [ ] The printed table shows one line per shape with every variant's median GFLOP/s, so a dry run can be read at a glance
+- [ ] Check: `cargo bench -- --dry-run` completes, the table shows plausible numbers (the width-1-equivalent index-order loop near 5.8 GFLOP/s as in 0.1.0), and `results/` is untouched. Write here the time the whole bench took (estimate: the workloads about a minute now, the kernel group about 3 to 4 minutes with 7 variants; 0.1.0's whole bench took 306 s)
+
+## 8.2 The width sweep (FR-25, S-1 to S-5, Spec §4)
+
+- [ ] **Decision point 1 is settled and written into this file before the first sweep run.** Rule as agreed: lowest estimated kernel time per token (calls per token × median ns, summed over the five shapes), ties within 2% to the smaller width
+- [ ] Run the kernel group as a dry run (nothing recorded), twice, and compute each width's estimated time per token; write both runs' table here (median ns per call per shape and variant, and the weighted sum). If the two runs pick different widths, take the smaller one's worse case into account: the rule's 2% tie clause decides, and the disagreement is written down
+- [ ] Apply the rule: the chosen width is the one written here
+- [ ] If it is not 8, change `ops::LANES` (one line), update the comment above it, and note decision point 4's handling in plan §5; if it is 8, say so and why the sweep did not move it
+- [ ] Rerun the full gate (task 7.5's checks): `cargo test --no-fail-fast`, whole summary read, the worst errors per category recorded next to Phase 7's (plan §4). Thresholds are unchanged (the owner kept S-1 and S-2); a result that fails S-1 stops the phase and goes to the owner
+- [ ] The order-pin test for the engine's kernel (`kernels::matvec`) is updated to the chosen width's hand-worked value, or the engine's assertion in it is dropped in favour of the per-width assertions, whichever keeps it true; no test is loosened to pass
+
+## 8.3 Prepare the measurement (FR-9, Spec §16)
+
+- [ ] **Apply decision point 3.** The workspace version becomes 0.1.1 in its own commit; `Cargo.lock` follows
+- [ ] The tree is clean (`git status --porcelain` empty) and the commit is the one to be measured; its hash is written here. Everything after it may change only `results/` and `docs/`, so the code measured is the code released (as in 0.1.0)
+- [ ] The machine is on AC power with no other heavy work running (S-7, as in 0.1.0)
+
+## 8.4 The release measurement (HC-4, S-7, S-8, Spec §16)
+
+- [ ] **Apply decision point 6.** `cargo test --no-fail-fast` first; a failure stops here and nothing is benchmarked (HC-4). Gate the bench on the test command's own exit status, not on a pipeline that could hide a failure (the 0.1.0 lesson, plan §9 task 6.6). Write the test time
+- [ ] Then `cargo bench` straight after, at the default log level (S-8), appending the workload and kernel rows (Spec §16 step 2). Write the bench time and the number of rows (2 workload rows and 5 kernel rows, as in 0.1.0)
+- [ ] The rows are committed (only `results/` changes in that commit)
+- [ ] Check: every new row has every condition field, `version` is 0.1.1, `dirty` is false and the commit is the one from 8.3
+
+## 8.5 The comparison with 0.1.0 (FR-8, FR-25, Requirements §12)
+
+- [ ] Plan §4 gets a table: for each workload, time to first token, prompt tokens/s, generation tokens/s and peak memory, median and range, 0.1.0 next to 0.1.1 with the ratio; and for each shape, the engine's kernel in GFLOP/s, 0.1.0 next to 0.1.1 with the ratio, plus the chosen width's neighbours
+- [ ] What the speed-up is worth for a step: the step time (1 / generation tokens per second) before and after, and the kernel time per token computed from the kernel rows (decision point 1's sum) against the step time, so the share of a step the matrix-vector product now takes is a number and not a guess (0.1.0: 48.6 of 49.3 ms, 98.6%)
+- [ ] Memory: peak memory should be unchanged (811.6 MB in 0.1.0, set by loading); say if it moved and why
+- [ ] If the measured speed-up is below Phase 4's expectation (about 5×), or the 16- and 32-wide kernels did not help, write down what the rows show and the most plausible reason as a hypothesis, labelled as one; do not tune further in this release
+
+## 8.6 Release note and README (Requirements §12)
+
+- [ ] **Apply decision point 5.** `docs/releases/0.1.1.md`, in the shape of 0.1.0's: what changed (one idea: the matrix-vector product's partial sums), why it was expected to help, what was measured against 0.1.0 (the 8.5 tables), what was learned, negative results, and what comes next
+- [ ] What was learned includes, with their evidence: the dependency chain explanation; the assembly (two vector accumulators at 8 sums, `fmul`/`fadd` not fused) and what it suggests for the width; that the harness errors moved 1.4 to 8× against the reference while the float64 diagnostic showed the new kernel is closer to the truth than the old loop on 11 of 12 prompts and the f32 reference itself is up to 7.1e-4 from it; the S-1 margin (96% on `utf8-split-cjk`) and the two recommendations of plan §5 (add a float64 reference, or loosen S-1) as the next Requirements bump's business; the test suite getting 3× faster
+- [ ] Negative results kept: the combining-order pin cannot fail against the 0.1.0 loop (corrected in the plan during Phase 7); `matrixmultiply` as a yardstick (still weak, now far behind); anything the sweep did not give
+- [ ] The kernel group's finding that a more accurate kernel can look worse to the harness is stated plainly: S-1 measures distance to PyTorch's rounding
+- [ ] Its figures are checked against `results/benchmarks.jsonl` and plan §4, §8 and §5 before committing, as for 0.1.0 (three corrections were found then)
+- [ ] README: status line (release 0.1.1, what changed, and what remains: the owner's review and the tag), the Benchmark section's timing (`cargo bench` takes about N minutes; update from 8.1's measurement) and its description of the kernel group, the Engine section's test time (about 30 s, of which the harness about 15), and the "no `unsafe`" wording per decision point 5
+- [ ] Plan §8 (measurements) gets a short pointer to §4's new rows, so the figures are findable from the same place as 0.1.0's
+
+## 8.7 Review, merge and tag (Spec §16)
+
+- [ ] **The owner reviews the rows and the release note first.**
+- [ ] Then, **only on the owner's explicit order**, merge `release/0.1.1` into `develop` and into `main` the way 0.1.0 was (no fast-forward) and tag `v0.1.1` (annotated, message naming the release note, **no attribution line**). Pushing likewise waits for the owner's order (decision point 7)
+
+## Phase exit check
+
+- [ ] `results/benchmarks.jsonl` holds the 0.1.1 rows from a clean tree at the measured commit, every row carrying its conditions (FR-9, S-7)
+- [ ] The correctness gate passed immediately before the benchmark, with the whole summary read (HC-4)
+- [ ] The width choice follows the rule written before the sweep, with both dry-run tables recorded (decision point 1)
+- [ ] The comparison with 0.1.0 is in plan §4, including the share of a step the matrix-vector product now takes
+- [ ] The release note exists, is accurate against the record, and the README is updated
+- [ ] The owner has reviewed the results and the note; merge and tag are done only on the owner's order

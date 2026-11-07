@@ -76,4 +76,4 @@ Each has a recommendation; none is decided by this to-do. Points 1 and 2 blocked
 - [x] The vectorization evidence is recorded (task 7.4), and the engine contains no `unsafe` and no new dependency. Plan §4: the assembly of the inner loop; the engine's kernels have no `unsafe` (the loader's memory map is the only one outside tests, recorded in plan §5) and there is no new dependency
 - [x] S-6 reproducibility and S-8 identical-output tests pass. Both pass in the full run
 - [x] Test time and the whole summary of every binary recorded; no warnings. 204 tests in 14 binaries, every summary `ok`, 30 s; no warnings
-- [ ] The owner has reviewed the tests and the evidence; nothing is pushed, tagged or merged
+- [x] The owner has reviewed the tests and the evidence; nothing is pushed, tagged or merged. Reviewed and accepted 2026-11-07
