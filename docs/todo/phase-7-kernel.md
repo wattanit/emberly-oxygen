@@ -12,7 +12,7 @@ Out of scope: everything FR-25 and Spec §4 exclude: threads, `unsafe`, SIMD int
 
 ## Decision points for the owner
 
-Each has a recommendation; none is decided by this to-do. Points 1 and 2 block 7.2.
+Each has a recommendation; none is decided by this to-do. Points 1 and 2 blocked 7.2 and were resolved by the owner (2026-11-07): both recommendations.
 
 1. **The order the partial sums are combined in. (blocks 7.2.)** Spec §4 fixes "one fixed order" but does not name it, and the order-pinning test needs a specific one. *Recommendation:* sequentially, lane 0 first: `((l0 + l1) + l2) + … + l(N-1)`, then the tail elements added in index order. It is the easiest to state and to hand-compute, and the combine happens once per row (about 70 times for a 576-column row), so a tree would buy nothing measurable. Recorded in plan §5, suggesting §4 name it.
 2. **The tolerance for "agrees with the reference". (blocks 7.2.)** The tests compare the new kernel with the index-order loop and with `matrixmultiply`, and the two sides differ in the last bits by design. *Recommendation:* per output element, `|a - b| <= 64 · f32::EPSILON · Σ|w·x|` over that row, a standard summation-error bound scaled by how much the row's terms could have cancelled (about 7.6e-6 times the row's absolute sum). It is far below S-1's absolute 1e-3 for the model's values. A looser bound needs the owner's word.
@@ -23,14 +23,14 @@ Each has a recommendation; none is decided by this to-do. Points 1 and 2 block 7
 
 ## 7.1 Keep the 0.1.0 loop as a reference (FR-25, HC-2, Spec §12, §17)
 
-- [ ] Add `kernels::matvec_index_order`, the 0.1.0 loop copied unchanged, available only with `bench-kernels`; it stays a separate function from the engine's `matvec`, so changing the engine's kernel never changes the reference
-- [ ] The engine's own `matvec` is untouched in this task
-- [ ] The existing matrix-vector unit tests in `ops.rs` still pass; one new test (names FR-25) checks that `matvec_index_order` and the engine's current `matvec` give identical bits on a seeded input, which holds only until task 7.3 and is then replaced by 7.2's tests
-- [ ] A normal `cargo build` and `cargo doc --no-deps` do not contain the new function (as for `bench-kernels` in 0.1.0: documentation lists it only with `--features bench-kernels`)
+- [x] Add `kernels::matvec_index_order`, the 0.1.0 loop copied unchanged, available only with `bench-kernels`; it stays a separate function from the engine's `matvec`, so changing the engine's kernel never changes the reference Added in `lib.rs`, self-contained (it does not call `ops`), with the 0.1.0 assertions
+- [x] The engine's own `matvec` is untouched in this task
+- [x] The existing matrix-vector unit tests in `ops.rs` still pass; one new test (names FR-25) checks that `matvec_index_order` and the engine's current `matvec` give identical bits on a seeded input, which holds only until task 7.3 and is then replaced by 7.2's tests `tests/kernel.rs` holds `index_order_reference_matches_the_engine_until_the_kernel_changes` (names FR-25): seeded inputs at 7×13, 192×576 and 64×1536, identical bits; the full run passes, and the existing `ops.rs` tests are among the 130 library tests that pass
+- [x] A normal `cargo build` and `cargo doc --no-deps` do not contain the new function (as for `bench-kernels` in 0.1.0: documentation lists it only with `--features bench-kernels`) Checked from a clean `target/doc`: a normal `cargo doc -p emberly-oxygen` has no `kernels` module and no warning; with `--features bench-kernels` it lists `kernels::matvec_index_order`. (A plain `cargo doc --no-deps` for the workspace prints one output-filename-collision warning between the library and the CLI binary, which is there before this change too)
 
 ## 7.2 Kernel tests first (FR-25, S-6, Spec §4, §17)
 
-- [ ] **Resolve decision points 1 and 2 with the owner before writing these.**
+- [x] **Resolve decision points 1 and 2 with the owner before writing these.** Resolved: sequential lane order, and the 64·epsilon·Σ|w·x| bound
 - [ ] Add a stub `kernels::matvec_lanes::<N>` (const generic number of sums) that is not yet implemented, so the tests compile and fail for the right reason
 - [ ] **Agreement:** on seeded random inputs at the model's five shapes (576×576, 192×576, 1536×576, 576×1536, 49152×576), every output element of `matvec_lanes` at N = 4, 8 and 16 is within decision point 2's bound of both `matvec_index_order` and `matrixmultiply`'s single-column product (HC-2)
 - [ ] **Every length from 0 to 40** as the column count (with a few rows), at each N, so lengths below N (only a tail), exactly N, N+1 and not divisible by N are all covered; zero rows and zero columns are valid and give empty or zero outputs

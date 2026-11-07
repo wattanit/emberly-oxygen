@@ -40,4 +40,24 @@ pub mod kernels {
     pub fn matvec(weight: &Tensor, input: &[f32], output: &mut [f32]) {
         crate::ops::matvec(weight, input, output);
     }
+
+    /// The matrix-vector product exactly as release 0.1.0 computed it: one
+    /// running sum per output element, added in index order. Kept as a
+    /// reference point for tests and the benchmark's kernel group (FR-25,
+    /// Spec §12, §17); the engine never calls it, so changing the engine's
+    /// own kernel cannot change it.
+    pub fn matvec_index_order(weight: &Tensor, input: &[f32], output: &mut [f32]) {
+        let &[rows, cols] = weight.shape() else {
+            panic!("matvec needs a 2-D weight, got shape {:?}", weight.shape());
+        };
+        assert_eq!(input.len(), cols, "input length must equal the weight's columns");
+        assert_eq!(output.len(), rows, "output length must equal the weight's rows");
+        for (i, out) in output.iter_mut().enumerate() {
+            let mut sum = 0f32;
+            for (w, x) in weight.row(i).iter().zip(input) {
+                sum += w * x;
+            }
+            *out = sum;
+        }
+    }
 }

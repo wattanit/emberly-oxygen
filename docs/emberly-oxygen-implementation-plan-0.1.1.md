@@ -70,6 +70,7 @@ Recorded here and absorbed by the upstream owner at the next bump; the upstream 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
 | Before Phase 7 | Specification 0.2 status | The Specification was `draft` when this plan was written and pinned; the owner approved its content and the status is the owner's to set. The pin stands, and is updated here if the status or version changes. |
+| Task 7.2 | Specification §4 | Decision of the owner (2026-11-07): the eight sums are combined sequentially, lane 0 first, then the tail added in index order; the agreement tests use a per-element bound of 64 · `f32::EPSILON` · Σ\|w·x\|. Suggest §4 name the combining order, which it now leaves as "one fixed order". |
 
 ## 6. Open Questions
 
