@@ -2,7 +2,7 @@
 
 A decoder-only LLM inference engine written from scratch in Rust, to understand every part by building it. It starts naive and improves one version at a time; the first target is SmolLM2-135M on CPU. The foundation documents in `docs/` are the source of truth: [Requirements](docs/emberly-oxygen-requirements.md), [Technical Specification](docs/emberly-oxygen-technical-specification.md), and the [roadmap](docs/high-level-roadmap.md) for direction.
 
-Status: release 0.1.0, the baseline, tagged `v0.1.0`. The six phases of its plan are done (the oracle, the correctness harness, model loading and the tokenizer, the forward pass, generation with the command-line tool, and the baseline benchmark). The engine matches the oracle on every check in every prompt category, and its first benchmark rows are in `results/benchmarks.jsonl`. See the [release note](docs/releases/0.1.0.md) for what was built, measured and learned.
+Status: release 0.1.1 is built and measured on the branch `release/0.1.1`, awaiting the owner's review and the tag; the last tagged release is 0.1.0, the baseline (`v0.1.0`). 0.1.1 changes one thing: the matrix-vector product keeps 16 independent partial sums, in safe single-threaded Rust, which makes generation 4.3× to 6.2× faster than 0.1.0 and the kernel about 6.5× faster (about 37 GFLOP/s). The engine matches the oracle on every check in every prompt category; the worst logit error on `utf8-split-cjk` is 99% of S-1's limit, which the release note discusses. The kernels contain no `unsafe`, no intrinsics and no threads; the only `unsafe` in the engine is the memory-map call in the model loader. See the [0.1.1 release note](docs/releases/0.1.1.md) for what changed and was measured, and the [0.1.0 release note](docs/releases/0.1.0.md) for the baseline.
 
 ## Setup on a new machine
 
@@ -65,7 +65,7 @@ Run them from `oracle/` with `uv run python <script>`. They find the repository 
 
 ```sh
 cargo build                   # debug build
-cargo test                    # every test (optimized, debug assertions on); about 90 s, of which the harness running the 12 prompts in parallel threads takes about 60
+cargo test                    # every test (optimized, debug assertions on); about 30 s, of which the harness running the 12 prompts in parallel threads takes about 13
 cargo test --no-fail-fast     # same, but keeps running other test files after one fails
 cargo build --release         # optimized build; the binary is target/release/emberly-oxygen
 ```
@@ -100,11 +100,11 @@ Exit codes: `0` on success; `1` on an error (missing or unsupported model files,
 ## Benchmark
 
 ```sh
-cargo bench                   # about 5 minutes; appends to results/benchmarks.jsonl
-cargo bench -- --dry-run      # the same, printing the rows instead of appending them
+cargo bench                   # about 4 minutes; appends to results/benchmarks.jsonl
+cargo bench --bench benchmarks -- --dry-run   # the same, printing the rows instead of appending them (the plain `cargo bench -- --dry-run` fails: the library's own test binary rejects the flag)
 ```
 
-The harness runs two workloads, a 32-token and a 512-token prompt each followed by 128 generated tokens (texts in `crates/oxygen/benches/prompts.json`), every run in a fresh process: one warm-up and five recorded runs, reported as median, minimum and maximum. It measures time to first token, prompt and generation throughput, model load time and peak memory, and then times the engine's matrix-vector product against `matrixmultiply` at each of the model's matrix shapes. Each row carries its conditions: version, commit, whether the tree was dirty, machine, build profile and time. It refuses a build with debug assertions and needs neither network nor Python.
+The harness runs two workloads, a 32-token and a 512-token prompt each followed by 128 generated tokens (texts in `crates/oxygen/benches/prompts.json`), every run in a fresh process: one warm-up and five recorded runs, reported as median, minimum and maximum. It measures time to first token, prompt and generation throughput, model load time and peak memory, and then times the engine's matrix-vector product at each of the model's matrix shapes against `matrixmultiply`, the 0.1.0 index-order loop and partial-sum widths 4, 8, 16 and 32. Each row carries its conditions: version, commit, whether the tree was dirty, machine, build profile and time. It refuses a build with debug assertions and needs neither network nor Python.
 
 Recorded results come from the benchmark machine only (an Apple M4 Max), after `cargo test` has passed; rows from anywhere else, or with `"dirty": true`, are not results.
 

@@ -164,6 +164,8 @@ Filled in during the phases; they are inputs to the Specification's and Requirem
 
   The bench ran straight after the test suite, as Spec §16 orders, and the machine was still warm from it: the workload figures are about 6% below those of earlier runs on an idle machine (short workload 18.97 against 20.2 to 20.3 generation tokens/s; the largest kernel 5.35 against 5.82 GFLOP/s), while the small kernels, timed last, matched them. The owner kept these rows as the baseline. Later releases follow the same order, so their rows are comparable with these; a fixed cool-down between tests and bench was considered and not adopted.
 
+Later releases measure against these rows. Release 0.1.1's rows and its comparison with them are in [its plan's §4](emberly-oxygen-implementation-plan-0.1.1.md) and in `results/benchmarks.jsonl`.
+
 ## 9. Upstream feedback
 
 Recorded here and absorbed by the upstream owner at the next bump; the upstream documents are not edited from this one. This section is a permanent record.
