@@ -42,7 +42,7 @@ pub mod kernels {
     }
 
     /// The partial-sum matrix-vector product with `N` independent sums (FR-25,
-    /// Spec §4); the engine's own `matvec` is this at 8 sums. Public so the
+    /// Spec §4); the engine's own `matvec` is this at the width `ops::LANES` names. Public so the
     /// tests and the benchmark can try other widths.
     pub fn matvec_lanes<const N: usize>(weight: &Tensor, input: &[f32], output: &mut [f32]) {
         crate::ops::matvec_lanes::<N>(weight, input, output);

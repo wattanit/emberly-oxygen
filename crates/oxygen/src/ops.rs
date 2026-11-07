@@ -8,9 +8,10 @@
 use crate::Tensor;
 
 /// How many independent partial sums the engine's matrix-vector product keeps
-/// (Spec §4). Initial; tune with use: Phase 8 of release 0.1.1 sweeps 4, 8
-/// and 16 and records the choice.
-pub(crate) const LANES: usize = 8;
+/// (Spec §4). 16, chosen by the width sweep of release 0.1.1 (plan §4): of 4,
+/// 8, 16 and 32 it had the lowest estimated kernel time per token in two runs,
+/// 20% under 8 sums. Tune with use; `tests/kernel.rs` pins the value.
+pub(crate) const LANES: usize = 16;
 
 /// `output[i]` = dot product of weight row `i` with `input`, for a weight in
 /// the published `[out, in]` layout (Spec §3), so each row is contiguous.

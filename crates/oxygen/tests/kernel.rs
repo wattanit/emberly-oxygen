@@ -158,8 +158,7 @@ fn s6_calls_are_bit_identical() {
 //                 added in index order: 7.
 //   16 sums:      one chunk; the combine takes lane 0 (1e8), absorbs seven
 //                 ones, cancels against lane 8 (-1e8), then adds seven ones: 7.
-// The 0.1.0 loop gives 7, so this fails against it for every width but 16 and
-// for the engine's kernel (8 sums).
+// The 0.1.0 loop gives 7, so this fails against it for widths 4 and 8.
 #[test]
 fn fr25_order_pin_partial_sum_structure() {
     let mut w = vec![1.0f32; 16];
@@ -172,7 +171,6 @@ fn fr25_order_pin_partial_sum_structure() {
     assert_eq!(run(lanes(8), &weight, &input), [14.0]);
     assert_eq!(run(lanes(16), &weight, &input), [7.0]);
     assert_eq!(run(lanes(32), &weight, &input), [7.0], "32 sums on 16 columns is all tail, so index order");
-    assert_eq!(run(kernels::matvec, &weight, &input), [14.0], "the engine uses 8 sums");
 }
 
 // FR-25, Spec §4, plan 0.1.1 §5: pins the combining order (lane 0 first, one
@@ -191,7 +189,6 @@ fn fr25_order_pin_combining_order() {
     let weight = Tensor::new(vec![1, 8], w).unwrap();
     let input = vec![1.0f32; 8];
     assert_eq!(run(lanes(8), &weight, &input), [100_000_000.0]);
-    assert_eq!(run(kernels::matvec, &weight, &input), [100_000_000.0]);
 }
 
 // Spec §14: a mismatch in a kernel call is an internal bug and panics, as the
@@ -217,4 +214,26 @@ fn fr25_lanes_rejects_a_wrong_input_length() {
 fn fr25_lanes_rejects_a_wrong_output_length() {
     let weight = Tensor::new(vec![2, 3], vec![0.0; 6]).unwrap();
     kernels::matvec_lanes::<8>(&weight, &[0.0; 3], &mut [0.0; 3]);
+}
+
+// FR-25, Spec §4: the engine's kernel is the partial-sum kernel at 16 sums, the
+// width the sweep of release 0.1.1 chose (plan §4). Changing `ops::LANES` means
+// changing this test, so the width the Specification and the release note name
+// is the width that runs. Bit-identical on random inputs and on the structure
+// pin's input, where 16 sums give 7 (and 8 sums would give 14).
+#[test]
+fn fr25_the_engine_uses_16_sums() {
+    let mut rng = Rng(0x5eed_0f_16_5eed_0f16);
+    for (rows, cols) in [(11, 16), (11, 577), (192, 576)] {
+        let weight = Tensor::new(vec![rows, cols], rng.vec(rows * cols)).unwrap();
+        let input = rng.vec(cols);
+        let engine = run(kernels::matvec, &weight, &input);
+        let sixteen = run(lanes(16), &weight, &input);
+        assert!(engine.iter().zip(&sixteen).all(|(a, b)| a.to_bits() == b.to_bits()), "{rows}x{cols}");
+    }
+    let mut w = vec![1.0f32; 16];
+    w[0] = 1e8;
+    w[8] = -1e8;
+    let pin = Tensor::new(vec![1, 16], w).unwrap();
+    assert_eq!(run(kernels::matvec, &pin, &[1.0; 16]), [7.0]);
 }
