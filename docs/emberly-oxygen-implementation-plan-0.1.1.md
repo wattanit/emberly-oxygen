@@ -83,7 +83,43 @@ Filled in during the phases. Nothing here is tuned; thresholds change only by a 
 
   Estimated kernel time per token (decision point 1's weighted sum), run 1 then run 2, in ms: 0.1.0 loop 48.82 and 49.29 (0.1.0 measured 48.6), 4 sums 15.32 and 15.52, **8 sums 9.27 and 9.30**, **16 sums 7.47 and 7.42**, 32 sums 9.20 and 9.02, `matrixmultiply` 42.24 and 42.67. Both runs pick **16 sums** by the rule (the only width within 2% of the best): 20% less kernel time per token than 8 sums, 6.5× less than the 0.1.0 loop. 32 sums is worse than 16 and about level with 8, as the register limit predicted; 4 sums is much worse. Gate with 16 sums (task 8.2, harness, every prompt passes; 214 tests in 14 binaries, 26 s): worst logit and intermediate error english 3.14e-4 and 3.66e-5, thai 2.79e-4 and 1.51e-5, code 3.18e-4 and 4.02e-5, utf8-split 9.90e-4 and 2.70e-5, long 3.18e-4 and 2.99e-5. **`utf8-split` is at 99% of S-1** (96% with 8 sums; 0.1.0 22%); the other categories are under 32%. S-2's worst is 40% of its limit. Run-to-run difference 0, bit-identical on one load and on a second.
 
-- Benchmark comparison (task 8.5) against these 0.1.0 rows (clean tree, commit `0b4a5f3`, M4 Max, median of 5): short 1.682 s to first token, 19.03 prompt and 18.97 generation tokens/s; long 26.493 s, 19.33 and 18.48; peak memory 811.6 MB.
+- Benchmark comparison (task 8.5). 0.1.0 rows: clean tree, commit `0b4a5f3`; 0.1.1 rows: clean tree, commit `b1a3214` (the code of `1693fcb`), recorded 2026-11-07; both on the Apple M4 Max, median of 5 after one warm-up, range in brackets, `cargo bench` straight after `cargo test` in both (the same warm-machine bias on both sides).
+
+  | Workload | Measure | 0.1.0 | 0.1.1 | Ratio |
+  | --- | --- | --- | --- | --- |
+  | short | time to first token | 1.682 s (1.665 to 1.712) | 0.257 s (0.257 to 0.257) | 0.153 (6.5× faster) |
+  | short | prompt tokens/s | 19.03 (18.69 to 19.22) | 124.60 (124.43 to 124.65) | 6.55× |
+  | short | generation tokens/s | 18.97 (18.65 to 19.10) | 117.48 (117.18 to 117.55) | 6.19× |
+  | short | peak memory | 811.57 MB (811.53 to 811.57) | 811.57 MB (811.55 to 811.58) | 1.00 |
+  | long | time to first token | 26.493 s (26.331 to 26.848) | 5.178 s (4.954 to 5.198) | 0.195 (5.1× faster) |
+  | long | prompt tokens/s | 19.33 (19.07 to 19.45) | 98.87 (98.50 to 103.36) | 5.12× |
+  | long | generation tokens/s | 18.48 (18.30 to 18.59) | 79.76 (79.66 to 83.12) | 4.32× |
+  | long | peak memory | 811.57 MB (811.53 to 811.57) | 811.55 MB (811.52 to 811.57) | 1.00 |
+
+  The engine's kernel per shape, median GFLOP/s (ns per call), with the chosen width's neighbours and the baselines from the same 0.1.1 rows (`lanes_N` are the widths timed in the same run; `index_order` is the 0.1.0 loop, timed again):
+
+  | Shape | 0.1.0 | 0.1.1 (16 sums) | Ratio | 4 sums | 8 sums | 32 sums | `index_order` | `matrixmultiply` |
+  | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+  | 576×576 | 5.74 (115,685) | 37.34 (17,768) | 6.5× | 18.36 | 30.08 | 29.38 | 5.78 | 7.17 |
+  | 192×576 | 5.77 (38,352) | 36.76 (6,017) | 6.4× | 18.29 | 29.59 | 29.26 | 5.79 | 7.03 |
+  | 1536×576 | 5.77 (306,542) | 36.73 (48,173) | 6.4× | 18.31 | 29.74 | 29.46 | 5.80 | 7.25 |
+  | 576×1536 | 4.64 (381,634) | 38.30 (46,196) | 8.3× | 15.13 | 26.85 | 33.79 | 4.61 | 7.24 |
+  | 49152×576 | 5.35 (10,582,701) | 35.35 (1,601,846) | 6.6× | 18.10 | 29.57 | 29.32 | 5.79 | 4.49 |
+
+  The engine's column and the `lanes_16` column are the same kernel timed twice in one process (36.3 to 37.9 GFLOP/s), so the 1% gap between them is the measurement's own noise. Against `matrixmultiply` the engine is 5.2× faster at the four small shapes and 7.9× faster at the output projection.
+
+  What it is worth for a step. Step time is 1 / generation tokens per second; the kernel time per token is decision point 1's sum (60, 60, 60, 30 and 1 calls) of the median ns per call of the kernel rows, an estimate from timings of the product alone:
+
+  | | Step | Kernel per token | Kernel's share | Everything else |
+  | --- | --- | --- | --- | --- |
+  | 0.1.0, short | 52.71 ms | 49.67 ms | 94% | 3.04 ms |
+  | 0.1.0, long | 54.10 ms | 49.67 ms | 92% | 4.43 ms |
+  | 0.1.1, short | 8.51 ms | 7.31 ms | 86% | 1.20 ms |
+  | 0.1.1, long | 12.54 ms | 7.31 ms | 58% | 5.23 ms |
+
+  Notes on the table. (a) The 0.1.0 release note's 48.6 of 49.3 ms (98.6%) came from a dry run on a cooler machine; the recorded 0.1.0 rows give 49.67 ms of 52.7 ms (94%) for the same kernel, because the recorded rows carry the warm-machine bias (about 6%). The 0.1.1 shares are computed from the recorded rows, so they are comparable with the 94% and not with the 98.6%. (b) The share is an estimate: the products are timed alone on a hot cache, in the engine they run between other work, and "everything else" is a difference of two measurements (its 0.1.0 values are the same order as 0.1.1's, although the work outside the product did not change; that 1.8 ms gap is the estimate's own uncertainty). (c) The matrix-vector product is no longer nearly everything: on the long workload, where attention scans 512 to 640 cached positions per head, the work outside the product is about 5.2 ms, 42% of a step, and it has become the next thing to measure before any further kernel work (Requirements §2.2's further kernel optimization). (d) Peak memory did not move (811.57 MB), as expected: it is set by loading, and the kernel changes no allocation.
+
+  Against Phase 4's expectation of about 5× for the kernel: 6.4× to 8.3× per shape, above it; the engine as a whole: 6.2× (short) and 4.3× (long) on generation, 6.5× and 5.1× on prompts. The long workload's generation is below 5× because of the work outside the product (note c), which the kernel change does not touch; that is a hypothesis from the table above, not a profile. The widths behaved as the register limit predicted: 4 sums reaches 18 GFLOP/s, 8 sums 27 to 30, 16 sums 35 to 38, 32 sums 29 to 34 (below 16 at every shape, and at the four shapes other than 576×1536 level with 8 sums). Nothing was tuned after the sweep.
 
 ## 5. Upstream feedback
 

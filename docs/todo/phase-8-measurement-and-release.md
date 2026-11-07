@@ -57,10 +57,10 @@ Each has a recommendation; none is decided by this to-do. Point 1 blocks 8.2; it
 
 ## 8.5 The comparison with 0.1.0 (FR-8, FR-25, Requirements §12)
 
-- [ ] Plan §4 gets a table: for each workload, time to first token, prompt tokens/s, generation tokens/s and peak memory, median and range, 0.1.0 next to 0.1.1 with the ratio; and for each shape, the engine's kernel in GFLOP/s, 0.1.0 next to 0.1.1 with the ratio, plus the chosen width's neighbours
-- [ ] What the speed-up is worth for a step: the step time (1 / generation tokens per second) before and after, and the kernel time per token computed from the kernel rows (decision point 1's sum) against the step time, so the share of a step the matrix-vector product now takes is a number and not a guess (0.1.0: 48.6 of 49.3 ms, 98.6%)
-- [ ] Memory: peak memory should be unchanged (811.6 MB in 0.1.0, set by loading); say if it moved and why
-- [ ] If the measured speed-up is below Phase 4's expectation (about 5×), or the 16- and 32-wide kernels did not help, write down what the rows show and the most plausible reason as a hypothesis, labelled as one; do not tune further in this release
+- [x] Plan §4 gets a table: for each workload, time to first token, prompt tokens/s, generation tokens/s and peak memory, median and range, 0.1.0 next to 0.1.1 with the ratio; and for each shape, the engine's kernel in GFLOP/s, 0.1.0 next to 0.1.1 with the ratio, plus the chosen width's neighbours. Done in plan §4 (workload table with ranges and ratios, kernel table per shape with the neighbouring widths, `index_order` and `matrixmultiply` from the same rows)
+- [x] What the speed-up is worth for a step: the step time (1 / generation tokens per second) before and after, and the kernel time per token computed from the kernel rows (decision point 1's sum) against the step time, so the share of a step the matrix-vector product now takes is a number and not a guess (0.1.0: 48.6 of 49.3 ms, 98.6%). Done in plan §4: step 52.71 to 8.51 ms (short) and 54.10 to 12.54 ms (long); kernel 49.67 to 7.31 ms per token; its share 94% to 86% (short) and 92% to 58% (long). The 0.1.0 note's 98.6% came from a cooler dry run, so 94% is the like-for-like figure (plan §4 note a)
+- [x] Memory: peak memory should be unchanged (811.6 MB in 0.1.0, set by loading); say if it moved and why. Unchanged: 811.57 MB, as expected (set by loading)
+- [x] If the measured speed-up is below Phase 4's expectation (about 5×), or the 16- and 32-wide kernels did not help, write down what the rows show and the most plausible reason as a hypothesis, labelled as one; do not tune further in this release. Not below expectation: kernel 6.4× to 8.3× against about 5×; long generation is 4.3× because the work outside the product is now 42% of a long step (a hypothesis, not a profile). Width 32 did not help (below 16 everywhere). No tuning
 
 ## 8.6 Release note and README (Requirements §12)
 
