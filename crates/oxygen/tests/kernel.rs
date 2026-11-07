@@ -23,24 +23,6 @@ impl Rng {
     }
 }
 
-// FR-25: the kept reference is the 0.1.0 loop, so until the engine's kernel
-// changes (task 7.3) the two give identical bits. Task 7.3 replaces this test
-// with the agreement and order tests of task 7.2.
-#[test]
-fn index_order_reference_matches_the_engine_until_the_kernel_changes() {
-    let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
-    for (rows, cols) in [(7, 13), (192, 576), (64, 1536)] {
-        let weight = Tensor::new(vec![rows, cols], rng.vec(rows * cols)).unwrap();
-        let input = rng.vec(cols);
-        let mut engine = vec![0f32; rows];
-        let mut reference = vec![0f32; rows];
-        kernels::matvec(&weight, &input, &mut engine);
-        kernels::matvec_index_order(&weight, &input, &mut reference);
-        let same = engine.iter().zip(&reference).all(|(a, b)| a.to_bits() == b.to_bits());
-        assert!(same, "{rows}x{cols}: the reference differs from the engine's kernel");
-    }
-}
-
 type Kernel = fn(&Tensor, &[f32], &mut [f32]);
 
 /// The partial-sum kernel at each width the release tries (Spec §4).

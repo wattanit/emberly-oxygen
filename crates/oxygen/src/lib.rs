@@ -42,10 +42,10 @@ pub mod kernels {
     }
 
     /// The partial-sum matrix-vector product with `N` independent sums (FR-25,
-    /// Spec §4). Not written yet: task 7.3 implements it. This stub returns zeros, and
-    /// the tests of task 7.2 are written against it and fail until then.
-    pub fn matvec_lanes<const N: usize>(_weight: &Tensor, _input: &[f32], output: &mut [f32]) {
-        output.fill(0.0);
+    /// Spec §4); the engine's own `matvec` is this at 8 sums. Public so the
+    /// tests and the benchmark can try other widths.
+    pub fn matvec_lanes<const N: usize>(weight: &Tensor, input: &[f32], output: &mut [f32]) {
+        crate::ops::matvec_lanes::<N>(weight, input, output);
     }
 
     /// The matrix-vector product exactly as release 0.1.0 computed it: one

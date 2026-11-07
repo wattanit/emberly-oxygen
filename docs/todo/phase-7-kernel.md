@@ -42,13 +42,13 @@ Each has a recommendation; none is decided by this to-do. Points 1 and 2 blocked
 
 ## 7.3 The partial-sum kernel (FR-25, HC-1, Spec §4)
 
-- [ ] `matvec_lanes::<N>` in safe Rust in `ops.rs`: for each row, `N` independent f32 sums over `chunks_exact(N)` of the row and the input, combined in decision point 1's order, then the `len mod N` tail elements added in index order; the assertions and panics of the current `matvec` are kept
-- [ ] The engine's `matvec` becomes `matvec_lanes` at N = 8 (initial, Spec §4) through one named constant, so Phase 8 changes one line; no caller and no part of the forward pass changes
-- [ ] The combining order is written in the doc comment and the doc comment names Spec §4
-- [ ] The combining-order pin is shown able to fail: temporarily combine the lanes last-first (then as a pairwise tree) and check `fr25_order_pin_combining_order` fails each time with the values in its comment; revert each
-- [ ] All of 7.2's tests pass; `matvec_index_order` is unchanged and 7.1's temporary equality test is removed
-- [ ] The module comment at the top of `ops.rs` no longer says every operation adds in index order: it says all but the matrix-vector product do, with the reason (Spec §4)
-- [ ] No `unsafe`, no new dependency, no warning in a normal build, the test build, or with the features on
+- [x] `matvec_lanes::<N>` in safe Rust in `ops.rs`: for each row, `N` independent f32 sums over `chunks_exact(N)` of the row and the input, combined in decision point 1's order, then the `len mod N` tail elements added in index order; the assertions and panics of the current `matvec` are kept. `ops::matvec_lanes::<N>`: `chunks_exact(N)` on the row and the input, an `[f32; N]` of sums, a sequential combine from lane 0, then the remainder
+- [x] The engine's `matvec` becomes `matvec_lanes` at N = 8 (initial, Spec §4) through one named constant, so Phase 8 changes one line; no caller and no part of the forward pass changes. `ops::LANES = 8`, and `matvec` is `matvec_lanes::<LANES>`; `forward.rs` is untouched
+- [x] The combining order is written in the doc comment and the doc comment names Spec §4. In the function's doc comment, which cites Spec §4 and `tests/kernel.rs`
+- [x] The combining-order pin is shown able to fail: temporarily combine the lanes last-first (then as a pairwise tree) and check `fr25_order_pin_combining_order` fails each time with the values in its comment; revert each. Combining last-first makes the pin fail with `100000024` for `100000000` (and the structure pin with `8` for `7`); combining as a pairwise tree gives `100000016` (printed `100000020.0`, the shortest decimal for that f32) and `0` for `7`. Both reverted; the pin does fail for a different order
+- [x] All of 7.2's tests pass; `matvec_index_order` is unchanged and 7.1's temporary equality test is removed. All 9 kernel tests pass, `matvec_index_order` is unchanged, and the temporary equality test is gone from `kernel.rs`
+- [x] The module comment at the top of `ops.rs` no longer says every operation adds in index order: it says all but the matrix-vector product do, with the reason (Spec §4). Now says every operation but the matrix-vector product adds in index order
+- [x] No `unsafe`, no new dependency, no warning in a normal build, the test build, or with the features on. No `unsafe` and no new dependency in the engine; no warning in the debug, release or test builds. Whole suite: 204 tests in 14 test binaries all `ok`, 30 s (it was 92 s): the correctness harness takes 14.5 s where it took 61 s, and the reproducibility test 2.4 s where it took 11 s. The harness errors are not recorded yet: that is task 7.5
 
 ## 7.4 Did it vectorize? (FR-25, HC-1, Spec §4, §15)
 
