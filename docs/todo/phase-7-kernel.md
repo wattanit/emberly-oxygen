@@ -48,7 +48,7 @@ Each has a recommendation; none is decided by this to-do. Points 1 and 2 blocked
 - [x] The combining-order pin is shown able to fail: temporarily combine the lanes last-first (then as a pairwise tree) and check `fr25_order_pin_combining_order` fails each time with the values in its comment; revert each. Combining last-first makes the pin fail with `100000024` for `100000000` (and the structure pin with `8` for `7`); combining as a pairwise tree gives `100000016` (printed `100000020.0`, the shortest decimal for that f32) and `0` for `7`. Both reverted; the pin does fail for a different order
 - [x] All of 7.2's tests pass; `matvec_index_order` is unchanged and 7.1's temporary equality test is removed. All 9 kernel tests pass, `matvec_index_order` is unchanged, and the temporary equality test is gone from `kernel.rs`
 - [x] The module comment at the top of `ops.rs` no longer says every operation adds in index order: it says all but the matrix-vector product do, with the reason (Spec §4). Now says every operation but the matrix-vector product adds in index order
-- [x] No `unsafe`, no new dependency, no warning in a normal build, the test build, or with the features on. No `unsafe` and no new dependency in the engine; no warning in the debug, release or test builds. Whole suite: 204 tests in 14 test binaries all `ok`, 30 s (it was 92 s): the correctness harness takes 14.5 s where it took 61 s, and the reproducibility test 2.4 s where it took 11 s. The harness errors are not recorded yet: that is task 7.5
+- [x] No `unsafe`, no new dependency, no warning in a normal build, the test build, or with the features on. No `unsafe` and no new dependency in the engine; no warning in the debug, release or test builds. Whole suite: 212 tests in 14 test binaries all `ok`, 30 s (it was 92 s): the correctness harness takes 14.5 s where it took 61 s, and the reproducibility test 2.4 s where it took 11 s. The harness errors are not recorded yet: that is task 7.5
 
 ## 7.4 Did it vectorize? (FR-25, HC-1, Spec §4, §15)
 
@@ -59,7 +59,7 @@ Each has a recommendation; none is decided by this to-do. Points 1 and 2 blocked
 
 ## 7.5 The full gate (HC-4, S-1 to S-6, S-8, Spec §11, §17)
 
-- [x] `cargo test --no-fail-fast`, the whole summary read: every test binary, the number of tests, and the time Run after 7.3: 204 tests, 14 binaries, all `ok`, 30 s
+- [x] `cargo test --no-fail-fast`, the whole summary read: every test binary, the number of tests, and the time Run after 7.3: 212 tests, 14 binaries, all `ok`, 30 s
 - [x] Per category, the worst logit error (S-1) and worst intermediate error (S-2) recorded in plan §4 next to 0.1.0's; apply decision point 5 to any category more than twice 0.1.0's Recorded in plan §4. **Decision point 5 triggers:** thai (logit 2.7×) and utf8-split (4.4×) exceed twice 0.1.0's, and every category's intermediate error is 3.7 to 8.4× 0.1.0's. utf8-split's logit error is 9.59e-4, 96% of S-1's 1e-3. Stopped for the owner, who asked for a float64 diagnostic (not kept in the repository): the 8-sum kernel is closer to a float64 forward pass than the 0.1.0 loop is on 11 of 12 prompts, and the f32 reference is itself up to 7.1e-4 from it. The owner kept S-1 and S-2 for 0.1.1; plan §5 holds the recommendation (add a float64 reference to the oracle, or loosen S-1) for the next Requirements bump
 - [x] The top-token and greedy checks (S-3, S-4) pass in every category; record whether any near-tie was reached (none was in 0.1.0) Both pass in every category (the table's `top-1` and `greedy` columns); no near-tie stopped a comparison
 - [x] The three negative controls still fail the harness where they should (Spec §17); the test that asserts it passes `negative_controls` passes (4 tests, in the full run)
@@ -75,5 +75,5 @@ Each has a recommendation; none is decided by this to-do. Points 1 and 2 blocked
 - [x] The kernel tests pass, including both order pins, and the order pin was seen to fail against the 0.1.0 loop (task 7.2). All 9 pass; the structure pin was seen to fail against the 0.1.0 loop, and the combining-order pin against two other combining orders
 - [x] The vectorization evidence is recorded (task 7.4), and the engine contains no `unsafe` and no new dependency. Plan §4: the assembly of the inner loop; the engine's kernels have no `unsafe` (the loader's memory map is the only one outside tests, recorded in plan §5) and there is no new dependency
 - [x] S-6 reproducibility and S-8 identical-output tests pass. Both pass in the full run
-- [x] Test time and the whole summary of every binary recorded; no warnings. 204 tests in 14 binaries, every summary `ok`, 30 s; no warnings
+- [x] Test time and the whole summary of every binary recorded; no warnings. 212 tests in 14 binaries, every summary `ok`, 30 s; no warnings
 - [x] The owner has reviewed the tests and the evidence; nothing is pushed, tagged or merged. Reviewed and accepted 2026-11-07

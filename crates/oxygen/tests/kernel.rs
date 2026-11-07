@@ -31,11 +31,12 @@ fn lanes(n: usize) -> Kernel {
         4 => kernels::matvec_lanes::<4>,
         8 => kernels::matvec_lanes::<8>,
         16 => kernels::matvec_lanes::<16>,
+        32 => kernels::matvec_lanes::<32>,
         _ => panic!("no kernel at width {n}"),
     }
 }
 
-const WIDTHS: [usize; 3] = [4, 8, 16];
+const WIDTHS: [usize; 4] = [4, 8, 16, 32];
 
 fn run(kernel: Kernel, weight: &Tensor, input: &[f32]) -> Vec<f32> {
     let mut out = vec![0f32; weight.shape()[0]];
@@ -139,7 +140,7 @@ fn s6_calls_are_bit_identical() {
     let mut rng = Rng(0xfeed_face_cafe_beef);
     let weight = Tensor::new(vec![192, 577], rng.vec(192 * 577)).unwrap();
     let input = rng.vec(577);
-    for kernel in [kernels::matvec as Kernel, lanes(4), lanes(8), lanes(16)] {
+    for kernel in [kernels::matvec as Kernel, lanes(4), lanes(8), lanes(16), lanes(32)] {
         let (a, b) = (run(kernel, &weight, &input), run(kernel, &weight, &input));
         assert!(a.iter().zip(&b).all(|(x, y)| x.to_bits() == y.to_bits()));
     }
@@ -153,6 +154,8 @@ fn s6_calls_are_bit_identical() {
 //   4 sums:       lane 0 holds 1e8, 1, -1e8, 1 and gives 1; lanes 1 to 3 give
 //                 4 each: 1 + 12 = 13.
 //   8 sums:       lane 0 holds 1e8 + -1e8 = 0; lanes 1 to 7 give 2 each: 14.
+//   32 sums:      16 columns are all tail: no chunk, every lane 0, and the tail is
+//                 added in index order: 7.
 //   16 sums:      one chunk; the combine takes lane 0 (1e8), absorbs seven
 //                 ones, cancels against lane 8 (-1e8), then adds seven ones: 7.
 // The 0.1.0 loop gives 7, so this fails against it for every width but 16 and
@@ -168,6 +171,7 @@ fn fr25_order_pin_partial_sum_structure() {
     assert_eq!(run(lanes(4), &weight, &input), [13.0]);
     assert_eq!(run(lanes(8), &weight, &input), [14.0]);
     assert_eq!(run(lanes(16), &weight, &input), [7.0]);
+    assert_eq!(run(lanes(32), &weight, &input), [7.0], "32 sums on 16 columns is all tail, so index order");
     assert_eq!(run(kernels::matvec, &weight, &input), [14.0], "the engine uses 8 sums");
 }
 

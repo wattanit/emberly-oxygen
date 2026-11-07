@@ -107,3 +107,26 @@ fn timestamps_are_rfc3339_utc() {
     assert_eq!(rfc3339(1_793_957_400), "2026-11-06T09:30:00Z");
     assert_eq!(rfc3339(1_793_957_400 + 86_399 - 34_200), "2026-11-06T23:59:59Z");
 }
+
+// FR-9, FR-25: a kernel row keeps the four field names release 0.1.0's rows
+// have, so the series stays comparable, and gains two per variant.
+#[test]
+fn kernel_row_keeps_the_0_1_0_fields_and_adds_the_variants() {
+    let spread = Spread { median: 2.0, min: 1.0, max: 3.0 };
+    let mut names: Vec<String> = Vec::new();
+    for kernel in ["in_house", "matrixmultiply"].into_iter().chain(record::KERNEL_VARIANTS) {
+        names.extend(record::kernel_metrics(kernel));
+    }
+    let results: Vec<(&str, Spread)> = names.iter().map(|n| (n.as_str(), spread)).collect();
+    let line = row(&conditions(), json!({"group": "kernels", "kernel": "matvec"}), &results);
+    let present = line["results"].as_object().expect("results is an object");
+    for old in ["in_house_ns_per_call", "in_house_gflops", "matrixmultiply_ns_per_call", "matrixmultiply_gflops"] {
+        assert!(present.contains_key(old), "0.1.0's field {old} is missing");
+    }
+    for variant in record::KERNEL_VARIANTS {
+        for name in record::kernel_metrics(variant) {
+            assert!(present.contains_key(&name), "the variant field {name} is missing");
+        }
+    }
+    assert_eq!(present.len(), 4 + 2 * record::KERNEL_VARIANTS.len());
+}
