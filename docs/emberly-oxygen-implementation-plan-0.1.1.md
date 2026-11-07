@@ -58,7 +58,7 @@ All of 0.1.0's rules hold. The ones this release leans on, and what it adds:
 Filled in during the phases. Nothing here is tuned; thresholds change only by a foundation bump.
 
 - Worst logit and intermediate error per category (task 7.5), next to 0.1.0's: english 1.81e-4 and 4.78e-6, thai 2.36e-4 and 5.38e-6, code 1.97e-4 and 5.91e-6, utf8-split 2.16e-4 and 4.59e-6, long 1.81e-4 and 5.21e-6 (plan 0.1.0 §8, Apple M5; the M4 Max reproduced the worst values).
-- Vectorization evidence (task 7.4).
+- Vectorization evidence (task 7.4): the 8-sum kernel's inner loop in the release assembly (plain flags, aarch64) loads 8 weights and 8 inputs, then does 2 × `fmul.4s` and 2 × `fadd.4s` into two 4-lane accumulators per 8 elements, then a scalar lane-order combine and an unrolled tail. It is vectorized; the multiply and add are not fused. First informal speed reading (two runs, short prompt, 128 tokens, not a result): 102.9 and 103.2 generation tokens/s and 0.30 s to first token, against 0.1.0's about 19 and 1.68 s.
 - Run-to-run logit difference (task 7.5) for S-6, expected bit-identical.
 - Width sweep (task 8.2): GFLOP/s per shape for widths 4, 8 and 16, the index-order loop and `matrixmultiply`.
 - Benchmark comparison (task 8.5) against these 0.1.0 rows (clean tree, commit `0b4a5f3`, M4 Max, median of 5): short 1.682 s to first token, 19.03 prompt and 18.97 generation tokens/s; long 26.493 s, 19.33 and 18.48; peak memory 811.6 MB.
@@ -71,6 +71,7 @@ Recorded here and absorbed by the upstream owner at the next bump; the upstream 
 | --- | --- | --- |
 | Before Phase 7 | Specification 0.2 status | The Specification was `draft` when this plan was written and pinned; the owner approved its content and the status is the owner's to set. The pin stands, and is updated here if the status or version changes. |
 | Task 7.2 | Specification §4 | Decision of the owner (2026-11-07): the eight sums are combined sequentially, lane 0 first, then the tail added in index order; the agreement tests use a per-element bound of 64 · `f32::EPSILON` · Σ\|w·x\|. Suggest §4 name the combining order, which it now leaves as "one fixed order". |
+| Task 7.4 | 0.1.0 release note and README | Both say the engine has "no `unsafe`". The kernels have none, but `safetensors.rs` has one `unsafe` call, `Mmap::map`, with a SAFETY comment, as it did in 0.1.0. Spec §4 prohibits `unsafe` in the kernels and is accurate. Suggest the 0.1.1 release note and README say "no `unsafe` in the kernels" and name the memory map; the released 0.1.0 note is not edited without the owner's word. |
 
 ## 6. Open Questions
 
