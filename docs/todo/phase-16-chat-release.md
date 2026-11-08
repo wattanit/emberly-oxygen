@@ -42,7 +42,7 @@ Dependencies: none new. Out of scope: reusing the cache across turns, multi-line
 
 ## 16.9 Test then bench (FR-8, FR-9, S-7)
 
-- [ ] Tests, then `cargo bench` straight after.
+- [x] Tests, then `cargo bench` straight after.
 
 ## 16.10 Compare (FR-8, FR-9)
 
