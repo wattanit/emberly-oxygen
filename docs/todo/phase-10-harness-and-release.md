@@ -78,8 +78,8 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**. Po
 
 ## 10.11 Release note and README (Requirements §12)
 
-- [ ] `docs/releases/0.1.2.md`: what changed (the reference), why it was expected to help, what was measured (the tables of §4, the thresholds decision), what was learned, negative results. It does not claim a speed change.
-- [ ] README: status, the oracle's longer run and about 2 GB of fixtures, the test suite's time, and where the f32 distance appears.
+- [x] `docs/releases/0.1.2.md`: what changed (the reference), why it was expected to help, what was measured (the tables of §4, the thresholds decision), what was learned, negative results. It does not claim a speed change.
+- [x] README: status, the oracle's longer run and about 2 GB of fixtures, the test suite's time, and where the f32 distance appears.
 
 ## 10.12 Owner's review (Spec §16)
 
