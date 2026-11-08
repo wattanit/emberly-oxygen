@@ -26,7 +26,7 @@ Dependencies: none new. Out of scope: `Chat`, the command (Phase 16).
 
 ## 15.5 Reported-only table (FR-5, FR-39)
 
-- [ ] Tests first: reported figures never fail a run; then the table.
+- [x] Tests first: reported figures never fail a run; then the table.
 
 ## 15.6 Measure
 

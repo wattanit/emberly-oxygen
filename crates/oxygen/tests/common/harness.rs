@@ -9,7 +9,7 @@ use emberly_oxygen::{generate, Capture, Error, Message, Model, Role, Sampling, T
 use super::compare::{
     greedy_check, intermediate_error, logit_error, top1_check, Numeric, Reference, Verdict,
 };
-use super::fixtures::{Conversation, Fixtures, Prompt, PromptTensors, ReferenceTensors, Tensors};
+use super::fixtures::{ChatFixtures, Conversation, Fixtures, Prompt, PromptTensors, ReferenceTensors, Tensors};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Check {
@@ -405,4 +405,43 @@ pub fn check_chat_template(
         Err(e) => Verdict::Fail { position: None, message: format!("the encoder failed: {e}") },
     };
     result(text_verdict, tokens_verdict)
+}
+
+/// What the harness reports, without judging, about the instruct model on one
+/// conversation (FR-39, Requirements §13): the engine's largest logit
+/// difference from the stored f64 logits over the rendered prompt, and how its
+/// greedy reply compares with the stored one under S-4's near-tie rule. No
+/// verdict anywhere reads these fields: the type has no way to fail a run.
+#[derive(Debug, Clone)]
+pub struct ChatReported {
+    pub model_id: String,
+    pub conversation: String,
+    pub max_logit_error: f64,
+    pub reply: Verdict,
+    pub engine_reply_len: usize,
+    pub reference_reply_len: usize,
+}
+
+/// Measures the reported-only figures for one conversation: feeds the stored
+/// token ids through the forward pass, and generates a greedy reply from the
+/// stored rendering, up to the stored reply's own limit.
+pub fn report_chat(
+    model: &Model,
+    tokenizer: &Tokenizer,
+    fixtures: &ChatFixtures,
+    conversation: &Conversation,
+) -> Result<ChatReported, String> {
+    let reference = fixtures.load_logits(conversation)?;
+    let run = run_engine(model, &conversation.token_ids)?;
+    let max_logit_error = logit_error(&run.logits, &reference.data, fixtures.chat.dims.vocab).max_error;
+    let generation = generate(model, tokenizer, &conversation.rendered, fixtures.chat.reply_tokens, &mut |_| {})
+        .map_err(|e| format!("{}: {e}", conversation.id))?;
+    Ok(ChatReported {
+        model_id: fixtures.chat.model_id.clone(),
+        conversation: conversation.id.clone(),
+        max_logit_error,
+        reply: greedy_check(&generation.ids, &conversation.reply_ids, &conversation.reply_top2_gaps),
+        engine_reply_len: generation.ids.len(),
+        reference_reply_len: conversation.reply_ids.len(),
+    })
 }
