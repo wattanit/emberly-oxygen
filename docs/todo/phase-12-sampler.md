@@ -35,7 +35,7 @@ Dependencies: none new. Out of scope: wiring into `generate`, the CLI (Phase 13)
 
 ## 12.6 Negative controls (HC-4, S-9)
 
-- [ ] Add the two faults; a test asserts S-9 fails on each on the combined setting.
+- [x] Add the two faults; a test asserts S-9 fails on each on the combined setting.
 
 ## 12.7 Measure (S-9)
 

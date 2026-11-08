@@ -32,6 +32,8 @@ pub use fault::Fault;
 pub use generate::{generate, Generation, Stats};
 pub use model::{Capture, Model, Session};
 pub use sampling::{distribution, Sampling};
+#[cfg(feature = "negative-controls")]
+pub use sampling::distribution_with_fault;
 pub use tensor::Tensor;
 pub use tokenizer::{StreamDecoder, Tokenizer};
 

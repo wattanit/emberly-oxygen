@@ -17,6 +17,13 @@ pub enum Fault {
     PerturbedLogit { position: usize },
     /// The logits come from the residual stream without the final RMSNorm.
     NoFinalNorm,
+    /// Sampling applies top-p before temperature, so it cuts the distribution
+    /// of the unscaled logits (Spec §8, §17). Temperature and top-k commute, so
+    /// moving top-p is the order change that gives a different distribution.
+    SwappedSamplingOrder,
+    /// The repetition penalty is inverted: positive logits of repeated tokens
+    /// are multiplied and negative ones divided (FR-27).
+    PenaltyWrongSign,
 }
 
 /// Uninhabited: there is no way to build one.
@@ -33,6 +40,14 @@ impl Fault {
     pub(crate) fn skips_final_norm(self) -> bool {
         self == Fault::NoFinalNorm
     }
+
+    pub(crate) fn swaps_sampling_order(self) -> bool {
+        self == Fault::SwappedSamplingOrder
+    }
+
+    pub(crate) fn flips_penalty_sign(self) -> bool {
+        self == Fault::PenaltyWrongSign
+    }
 }
 
 #[cfg(not(feature = "negative-controls"))]
@@ -42,6 +57,14 @@ impl Fault {
     }
 
     pub(crate) fn skips_final_norm(self) -> bool {
+        match self {}
+    }
+
+    pub(crate) fn swaps_sampling_order(self) -> bool {
+        match self {}
+    }
+
+    pub(crate) fn flips_penalty_sign(self) -> bool {
         match self {}
     }
 }

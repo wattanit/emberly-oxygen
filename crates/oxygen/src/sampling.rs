@@ -1,5 +1,6 @@
 //! Sampling settings and the sampler (Spec §8, FR-26 to FR-30).
 
+use crate::fault::Fault;
 use crate::Error;
 
 /// How the next token is chosen (FR-26). The default is greedy (FR-29).
@@ -107,6 +108,22 @@ pub(crate) fn apply_top_p(logits: &mut [f32], p: f32) {
 /// the harness can compare it with the oracle's stored distribution (FR-31,
 /// S-9) without drawing.
 pub fn distribution(logits: &[f32], context: &[u32], sampling: &Sampling) -> Result<Vec<f64>, Error> {
+    distribution_inner(logits, context, sampling, None)
+}
+
+/// [`distribution`] with a deliberate fault, for the negative controls (Spec
+/// §17): S-9 must fail on it. Only exists with the `negative-controls` feature.
+#[cfg(feature = "negative-controls")]
+pub fn distribution_with_fault(
+    logits: &[f32],
+    context: &[u32],
+    sampling: &Sampling,
+    fault: crate::Fault,
+) -> Result<Vec<f64>, Error> {
+    distribution_inner(logits, context, sampling, Some(fault))
+}
+
+fn distribution_inner(logits: &[f32], context: &[u32], sampling: &Sampling, fault: Option<Fault>) -> Result<Vec<f64>, Error> {
     sampling.validate()?;
     if sampling.temperature == 0.0 {
         let mut best = 0;
@@ -121,13 +138,23 @@ pub fn distribution(logits: &[f32], context: &[u32], sampling: &Sampling) -> Res
     }
     let mut scores = logits.to_vec();
     if sampling.repetition_penalty != 1.0 {
-        apply_repetition_penalty(&mut scores, context, sampling.repetition_penalty);
+        // The inverted penalty is the reciprocal: it multiplies where the
+        // correct one divides and divides where it multiplies.
+        let inverted = fault.is_some_and(Fault::flips_penalty_sign);
+        let penalty = if inverted { 1.0 / sampling.repetition_penalty } else { sampling.repetition_penalty };
+        apply_repetition_penalty(&mut scores, context, penalty);
+    }
+    let top_p_first = fault.is_some_and(Fault::swaps_sampling_order);
+    if top_p_first {
+        apply_top_p(&mut scores, sampling.top_p);
     }
     if sampling.temperature != 1.0 {
         apply_temperature(&mut scores, sampling.temperature);
     }
     apply_top_k(&mut scores, sampling.top_k);
-    apply_top_p(&mut scores, sampling.top_p);
+    if !top_p_first {
+        apply_top_p(&mut scores, sampling.top_p);
+    }
     Ok(softmax_f64(&scores))
 }
 
