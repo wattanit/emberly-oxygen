@@ -5,10 +5,10 @@ use std::fs::File;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{ArgAction, Args, Parser, Subcommand};
-use emberly_oxygen::{generate, Model, Stats, Tokenizer};
+use emberly_oxygen::{generate_with, Model, Sampling, Stats, Tokenizer};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 
@@ -22,7 +22,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Generate a greedy continuation of a prompt and stream it to standard output.
+    /// Generate a continuation of a prompt and stream it to standard output: greedy by
+    /// default, sampled with --temperature above 0.
     Generate(GenerateArgs),
 }
 
@@ -36,6 +37,32 @@ struct GenerateArgs {
     /// token, which is not printed. Zero checks the prompt and generates nothing.
     #[arg(long, value_name = "N")]
     max_new_tokens: usize,
+
+    /// Temperature: logits are divided by it. 0 (the default) is greedy selection, and
+    /// then the other sampling options are ignored with a warning. Above 0 the run is
+    /// sampled, and its seed is printed to standard error.
+    #[arg(long, value_name = "T", default_value_t = 0.0)]
+    temperature: f32,
+
+    /// Sample only among the K highest-scoring tokens (ties with the K-th stay). 0 is off.
+    #[arg(long, value_name = "K", default_value_t = 0)]
+    top_k: usize,
+
+    /// Sample only among the smallest set of most likely tokens whose probabilities add
+    /// up to at least P, 0 < P <= 1. 1 is off.
+    #[arg(long, value_name = "P", default_value_t = 1.0)]
+    top_p: f32,
+
+    /// Divide the positive scores and multiply the negative ones of every token already
+    /// in the prompt or the output by R, as the reference library does; R > 0. 1 is off.
+    #[arg(long, value_name = "R", default_value_t = 1.0)]
+    repetition_penalty: f32,
+
+    /// Seed of the random number generator. The same seed, prompt, settings and build
+    /// give the same text; reproduction across releases is not promised. When sampling
+    /// without one, a seed is taken from the clock and printed.
+    #[arg(long, value_name = "N")]
+    seed: Option<u64>,
 
     /// Print run statistics to standard error: model load time, prompt and
     /// generated token counts, time to first token (from receiving the prompt to
@@ -83,12 +110,32 @@ fn run_generate(args: GenerateArgs) -> Result<(), String> {
             crate::fail(&format!("writing to standard output: {e}"));
         }
     };
-    let generation = generate(&model, &tokenizer, &prompt, args.max_new_tokens, &mut write).map_err(|e| e.to_string())?;
+    let mut sampling = Sampling {
+        temperature: args.temperature,
+        top_k: args.top_k,
+        top_p: args.top_p,
+        repetition_penalty: args.repetition_penalty,
+        seed: args.seed,
+    };
+    // Sampling always reports its seed, before any text, so the run can be replayed (FR-28).
+    // An invalid setting is rejected by the library, which names it, before anything runs.
+    if sampling.temperature > 0.0 && sampling.validate().is_ok() {
+        let seed = sampling.seed.unwrap_or_else(clock_seed);
+        sampling.seed = Some(seed);
+        eprintln!("seed: {seed}");
+    }
+    let generation =
+        generate_with(&model, &tokenizer, &prompt, args.max_new_tokens, &sampling, &mut write).map_err(|e| e.to_string())?;
 
     if args.stats {
         print_stats(load_time, &generation.stats);
     }
     Ok(())
+}
+
+/// A seed from the system clock, for a sampled run that was not given one.
+fn clock_seed() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64)
 }
 
 /// Installs the subscriber that formats the library's events, with their span

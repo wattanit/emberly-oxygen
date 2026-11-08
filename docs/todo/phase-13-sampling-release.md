@@ -22,7 +22,7 @@ Dependencies: none new. Out of scope: chat, the instruct model, any change to th
 
 ## 13.3 CLI (FR-19, FR-20, FR-30)
 
-- [ ] Options and the seed line; binary tests for invalid value, clean stdout, replay.
+- [x] Options and the seed line; binary tests for invalid value, clean stdout, replay.
 
 ## 13.4 Logging (S-8, FR-23)
 
