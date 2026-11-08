@@ -16,24 +16,24 @@ Out of scope: any engine change, any rerun of the model, chat, the instruct mode
 
 ## 11.1 Settings (FR-26, FR-31)
 
-- [ ] Write `oracle/sampling_settings.json` with the five settings above, each named.
+- [x] Write `oracle/sampling_settings.json` with the five settings above, each named.
 
 ## 11.2 The script (FR-31, FR-4, HC-3)
 
-- [ ] `sampling_reference.py` reads the manifest and each prompt's f64 file, takes the last position's logits, applies `RepetitionPenaltyLogitsProcessor`, `TemperatureLogitsWarper`, `TopKLogitsWarper`, `TopPLogitsWarper` in that order with the prompt's IDs as the context, and writes the f64 softmax.
-- [ ] Start-up check that the processors return f64; shown to fail when fed f32.
-- [ ] Writes `<id>.sampling.safetensors` and the manifest's `sampling` entry with each setting's cutoff margin.
+- [x] `sampling_reference.py` reads the manifest and each prompt's f64 file, takes the last position's logits, applies `RepetitionPenaltyLogitsProcessor`, `TemperatureLogitsWarper`, `TopKLogitsWarper`, `TopPLogitsWarper` in that order with the prompt's IDs as the context, and writes the f64 softmax.
+- [x] Start-up check that the processors return f64; shown to fail when fed f32.
+- [x] Writes `<id>.sampling.safetensors` and the manifest's `sampling` entry with each setting's cutoff margin.
 
 ## 11.3 Independent recomputation (FR-31)
 
-- [ ] A scratchpad numpy f64 script recomputes one setting per control from the textbook definition and compares. Record any difference (ties at k, the top-p boundary) in the plan's section 5.
+- [x] A scratchpad numpy f64 script recomputes one setting per control from the textbook definition and compares. Record any difference (ties at k, the top-p boundary) in the plan's section 5.
 
 ## 11.4 Run and record (FR-31, FR-4)
 
-- [ ] Run; record the time, file sizes, that each distribution sums to 1 within 1e-12, and each setting's support size.
+- [x] Run; record the time, file sizes, that each distribution sums to 1 within 1e-12, and each setting's support size.
 
 ## 11.5 Harness reader (FR-4, FR-7)
 
-- [ ] Tests first: a missing sampling file, a wrong shape and a missing manifest entry each fail naming the command that generates them. Then the reader.
+- [x] Tests first: a missing sampling file, a wrong shape and a missing manifest entry each fail naming the command that generates them. Then the reader.
 
 **Exit check:** as in the plan's section 2.

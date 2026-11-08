@@ -34,6 +34,7 @@ fn prompt(tokenizer: &Tokenizer, category: &str, text: &str, continuation: &str)
         f64_continuation_text: continuation.into(),
         f64_continuation_top2_gaps: vec![],
         f64_stopped_at_eos: false,
+        sampling_file: None,
         tensors_file: String::new(),
     }
 }

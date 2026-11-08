@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use common::fixtures::{
     discover, parse_safetensors, parse_safetensors_f64, require_model_dir, workspace_root, DOWNLOAD_COMMAND,
-    GENERATE_COMMAND,
+    GENERATE_COMMAND, SAMPLING_COMMAND,
 };
 
 /// Builds a safetensors file in memory: (name, dtype, shape, values).
@@ -260,5 +260,133 @@ fn fr4_real_fixture_shapes_match_the_manifest() {
         assert_eq!(prompt.f64_prompt_top2_gaps.len(), positions);
         assert_eq!(prompt.f64_continuation_top2_gaps.len(), prompt.f64_continuation_ids.len());
         assert!(r.logits.data.iter().all(|v| v.is_finite()));
+    }
+}
+
+/// `tiny_manifest` plus the oracle's `sampling` entry and the prompt's file name
+/// (Spec §10, FR-31).
+fn tiny_manifest_with_sampling() -> serde_json::Value {
+    let mut m = tiny_manifest(true);
+    m["prompts"][0]["sampling_file"] = "p.sampling.safetensors".into();
+    m["sampling"] = serde_json::json!({
+        "settings": [
+            {"name": "hot", "temperature": 0.7},
+            {"name": "all", "temperature": 0.7, "top_k": 40, "top_p": 0.9, "repetition_penalty": 1.3}
+        ],
+        "context": "the prompt's token ids",
+        "margins": {"p": {
+            "hot": {"top_k_margin_logit": null, "top_p_margin_prob": null, "support": 1},
+            "all": {"top_k_margin_logit": 0.25, "top_p_margin_prob": 0.125, "support": 1}
+        }}
+    });
+    m
+}
+
+#[test]
+fn fr31_a_manifest_without_the_sampling_entry_names_the_oracle_command() {
+    let root = temp_dir("no-sampling-entry");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), tiny_manifest(true).to_string()).unwrap();
+    // The greedy harness must still run on fixtures that predate sampling.
+    let all = discover(&root).unwrap();
+    let error = all[0].sampling().unwrap_err();
+    assert!(error.contains("sampling") && error.contains(SAMPLING_COMMAND), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr31_a_missing_sampling_file_fails_naming_it_and_the_command() {
+    let root = temp_dir("missing-sampling-file");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), tiny_manifest_with_sampling().to_string()).unwrap();
+    let all = discover(&root).unwrap();
+    let error = all[0].load_sampling(&all[0].manifest.prompts[0]).unwrap_err();
+    assert!(error.contains("p.sampling.safetensors") && error.contains(SAMPLING_COMMAND), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr31_a_sampling_distribution_of_the_wrong_shape_is_refused() {
+    let root = temp_dir("sampling-wrong-shape");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), tiny_manifest_with_sampling().to_string()).unwrap();
+    // vocab is 1 in the tiny manifest; a two-entry distribution does not fit.
+    let file = build64(&[("hot", "F64", &[2], &[0.5, 0.5]), ("all", "F64", &[1], &[1.0])]);
+    std::fs::write(root.join("m/p.sampling.safetensors"), file).unwrap();
+    let all = discover(&root).unwrap();
+    let error = all[0].load_sampling(&all[0].manifest.prompts[0]).unwrap_err();
+    assert!(error.contains("hot") && error.contains("shape"), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr31_a_setting_without_its_distribution_is_named() {
+    let root = temp_dir("sampling-missing-setting");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), tiny_manifest_with_sampling().to_string()).unwrap();
+    std::fs::write(root.join("m/p.sampling.safetensors"), build64(&[("hot", "F64", &[1], &[1.0])])).unwrap();
+    let all = discover(&root).unwrap();
+    let error = all[0].load_sampling(&all[0].manifest.prompts[0]).unwrap_err();
+    assert!(error.contains("all") && error.contains("missing"), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr31_a_sampling_file_in_the_wrong_precision_is_refused() {
+    let root = temp_dir("sampling-f32");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), tiny_manifest_with_sampling().to_string()).unwrap();
+    let file = build(&[("hot", "F32", &[1], &[1.0]), ("all", "F32", &[1], &[1.0])]);
+    std::fs::write(root.join("m/p.sampling.safetensors"), file).unwrap();
+    let all = discover(&root).unwrap();
+    let error = all[0].load_sampling(&all[0].manifest.prompts[0]).unwrap_err();
+    assert!(error.contains("F32") && error.contains("F64"), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr31_the_settings_margins_and_distributions_are_read_exactly() {
+    let root = temp_dir("sampling-reads");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), tiny_manifest_with_sampling().to_string()).unwrap();
+    let file = build64(&[("hot", "F64", &[1], &[1.0]), ("all", "F64", &[1], &[1.0])]);
+    std::fs::write(root.join("m/p.sampling.safetensors"), file).unwrap();
+    let all = discover(&root).unwrap();
+    let prompt = &all[0].manifest.prompts[0];
+    let entry = all[0].sampling().unwrap();
+    assert_eq!(entry.settings.len(), 2);
+    let all_setting = entry.settings.iter().find(|s| s.name == "all").unwrap();
+    assert_eq!(
+        (all_setting.temperature, all_setting.top_k, all_setting.top_p, all_setting.repetition_penalty),
+        (Some(0.7), Some(40), Some(0.9), Some(1.3))
+    );
+    let hot = entry.settings.iter().find(|s| s.name == "hot").unwrap();
+    assert_eq!((hot.top_k, hot.top_p, hot.repetition_penalty), (None, None, None));
+    let margins = &entry.margins["p"]["all"];
+    assert_eq!((margins.top_k_margin_logit, margins.top_p_margin_prob), (Some(0.25), Some(0.125)));
+    assert_eq!(entry.margins["p"]["hot"].top_k_margin_logit, None);
+    let loaded = all[0].load_sampling(prompt).unwrap();
+    assert_eq!(loaded["hot"], vec![1.0]);
+    assert_eq!(loaded["all"], vec![1.0]);
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr31_real_sampling_distributions_sum_to_one() {
+    let all = discover(&workspace_root().join("fixtures")).unwrap();
+    for fixtures in &all {
+        let entry = fixtures.sampling().unwrap();
+        assert!(entry.settings.len() >= 5, "each control alone and a combination");
+        for prompt in &fixtures.manifest.prompts {
+            let loaded = fixtures.load_sampling(prompt).unwrap();
+            for setting in &entry.settings {
+                let dist = &loaded[&setting.name];
+                assert_eq!(dist.len(), fixtures.manifest.dims.vocab);
+                let total: f64 = dist.iter().sum();
+                assert!((total - 1.0).abs() < 1e-12, "{} {}: sums to {total}", prompt.id, setting.name);
+                assert!(dist.iter().all(|p| p.is_finite() && *p >= 0.0));
+                assert!(entry.margins[&prompt.id].contains_key(&setting.name));
+            }
+        }
     }
 }

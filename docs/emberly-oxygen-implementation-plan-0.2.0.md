@@ -83,7 +83,11 @@ All of 0.1.2's rules hold. The ones this release leans on, and what it adds:
 
 Filled in as the phases land. Machine: the benchmark machine (Apple M4 Max), as before.
 
-- **Phase 11:** oracle script time; size of the sampling files; support size per setting; textbook recomputation result (differences at ties and boundaries).
+- **Phase 11 (done).**
+  - **Oracle script.** `sampling_reference.py` runs in 1 s (it reads the stored f64 logits and does not run the model) and writes 12 files, 23 MB in all, for 60 distributions (12 prompts × 5 settings). Every distribution sums to 1 within 1e-12 (checked in the script and again by a test).
+  - **Support sizes.** Temperature 0.7 and penalty 1.3 keep the whole vocabulary (49152); top-k 40 keeps 40 on every prompt, with no tie at the 40th logit. Top-p 0.9 keeps 1 to 102 tokens (1 on `long-go`, 2 on `code-rust`, 102 on `english-short`). **The combined setting keeps 1 to 7 tokens, and exactly 1 on `code-rust` and `long-go`:** on those two prompts the combined distribution is a point mass, so a swapped order cannot show there. The sampling negative controls (task 12.6) must be judged on a prompt where the combined support is larger (for example `thai-medium`, 7).
+  - **Textbook recomputation (task 11.3).** A numpy f64 script written from the textbook definitions, using no library code, agrees with the library's distributions to at most 1.10e-13 over all 60, so the library's definition and the textbook one are the same on this prompt set, including top-p's boundary rule. It found no tie at the k-th logit. (Scratchpad: `textbook_sampling.py`.)
+  - **Cutoff margins (first look, for task 12.8).** Smallest top-k margin: 2.18e-4 logits (`thai-medium`), then 9.76e-4 and 1.37e-3. Smallest top-p margin: 6.79e-5 in probability (`utf8-split-emoji`), then 1.16e-4 and 2.09e-4. The engine's worst logit error in 0.1.2 was 3.50e-4, so `thai-medium`'s top-k cutoff is within the engine's rounding and is the first candidate for the crossable-cutoff rule.
 - **Phase 12:** per category and setting, worst S-9 error (engine f32 against the stored f64 distribution); cutoff margins; settings whose cutoff the engine's rounding could cross.
 - **Phase 13:** the S-10 statistic against its limit; test suite time; the 0.2.0 rows against 0.1.2's; sampling-step cost per control, against a forward step.
 
