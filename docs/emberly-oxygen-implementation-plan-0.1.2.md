@@ -4,7 +4,7 @@ Nov 8, 2026 · @Wattanit
 
 **Target release:** 0.1.2\
 **Owner:** Wattanit\
-**Built against:** Emberly Oxygen — Requirements 0.3 (upstream, approved), Emberly Oxygen — Technical Specification 0.3 (upstream, draft when this plan was written)
+**Built against:** Emberly Oxygen — Requirements 0.4 (upstream, draft, awaiting the owner's approval; 0.3 was approved and then corrected, §5), Emberly Oxygen — Technical Specification 0.3 (upstream, draft when this plan was written)
 
 This is a living working document, not part of the SFD suite: it has no document version or status and is edited in place as work proceeds. It expands the Technical Specification's milestone M8 into two phases with ordered tasks and exit checks. It owns sequencing and task breakdown only; WHAT stays in the Requirements and HOW stays in the Specification, and every task cites the IDs it satisfies. A discovery that changes HOW is recorded in §5 and absorbed by a Specification version bump, never decided here. The foundation versions above are the as-built pin for this release: if either bumps while the release is in progress, the pin is updated and the change recorded in §5. The previous release's plan is [0.1.1](emberly-oxygen-implementation-plan-0.1.1.md); its §4 rows are the figures this release is compared with.
 
@@ -91,6 +91,7 @@ Recorded here and absorbed by the upstream owner at the next bump; the upstream 
 | Before Phase 9 | Specification 0.3 status | The Specification is `draft` and this plan pins it so; the status is the owner's to set. The pin is updated here if the status or version changes. |
 | Before Phase 9 | Requirements FR-25 | FR-25 says the matrix-vector product was "about 98.6% of a decode step in 0.1.0". Release 0.1.1's like-for-like figure from the recorded rows is 94%; 98.6% came from a dry run on a cooler machine (release note 0.1.1). Suggest the next Requirements bump correct the figure. The Specification §4 was corrected in 0.3. |
 
+| Task 9.4 | Pin | **Decision of the owner (2026-11-08): option B.** The oracle forces RMSNorm and softmax to float64 for the f64 run and leaves the rotary tables as published. Requirements bumped to 0.4 (FR-2 corrected, FR-25's 94% absorbed) and the Specification's §10 and §17 edited in place (it is `draft`); this plan's pin follows. Phase 10 starts only when the owner has approved Requirements 0.4. |
 | Task 9.4 | Requirements FR-2; Specification §10 | **FR-2 says the 64-bit run is "exact in arithmetic", and §10 says the library keeps only its RoPE tables in f32. Both are wrong:** the pinned library also computes RMSNorm and the attention softmax in float32 in a float64 model (task 9.4, §4). Whatever the owner decides below, FR-2's "Not guaranteed" sentence and §10's reference-limits bullet need correcting, which needs a Requirements bump because 0.3 is approved. |
 
 ## 6. Open Questions
