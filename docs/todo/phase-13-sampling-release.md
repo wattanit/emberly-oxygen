@@ -38,7 +38,7 @@ Dependencies: none new. Out of scope: chat, the instruct model, any change to th
 
 ## 13.7 Version (FR-9)
 
-- [ ] Workspace version 0.2.0, clean tree.
+- [x] Workspace version 0.2.0, clean tree.
 
 ## 13.8 Benchmark (FR-8, FR-9, S-7)
 
