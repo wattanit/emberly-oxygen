@@ -115,7 +115,22 @@ Filled in during the phases. Nothing here is tuned; thresholds change only by th
   Against the f64 reference the partial sums are closer to the truth than 0.1.0's index order, not further: the worst intermediate error falls 4.4× (4.37e-5, 44% of S-2, to 9.97e-6, 10%) and the worst logit error falls from 4.58e-4 to 3.50e-4. The 8-sum kernel is slightly better than 16 on the worst logit (3.20e-4) and on `utf8-split`; the differences between 8 and 16 are within what the sweep did not try to resolve. This is the finding of 0.1.1 shown directly: against the f32 reference the same engines looked 1.4× to 8× worse.
 - **Decision of the owner (task 10.7, 2026-11-08): S-1 to S-4 and the near-tie gap are kept as they are** (1e-3, 1e-4, 1e-3). By the rule agreed before the numbers were seen (keep when the worst error is at most half the limit), S-1 is at 35% and S-2 at 10%. The margin that 0.1.1 lost against the f32 reference (99% of S-1) is 65%. The limits are not tightened, because a real bug smaller than a tighter limit could hide and the negative controls are sized for the present values.
 - Test suite time with the larger fixtures (task 10.6): `time cargo test --no-fail-fast` 23.8 s wall with the build already compiled (100 s user, 230 tests; the correctness test 13.4 s against 12.7 s a task earlier, so reading about 2 GB of fixtures instead of 0.7 GB cost under a second). 0.1.1 recorded 28 s for 214 tests; how that figure was timed is not recorded here, so no speed-up is claimed.
-- Workloads and kernel shapes against 0.1.1's rows (task 10.10). *(to fill)*
+- **0.1.2's rows against 0.1.1's** (task 10.10; the engine's code is the same, so every difference here is variation between two measurements, not an effect of the release). 0.1.1 at commit `b1a3214`, 0.1.2 at `e132ab0`, both from a clean tree straight after a passing `cargo test`; median of 5 with the range in brackets:
+
+  | Workload | Measure | 0.1.1 | 0.1.2 | Change |
+  | --- | --- | --- | --- | --- |
+  | short | first token | 0.257 s (0.257 to 0.257) | 0.257 s (0.256 to 0.257) | 0.0% |
+  | short | prompt | 124.60 tok/s (124.43 to 124.65) | 124.61 (124.37 to 125.03) | 0.0% |
+  | short | generation | 117.48 tok/s (117.18 to 117.55) | 117.82 (117.73 to 117.97) | +0.3% |
+  | long | first token | 5.178 s (4.954 to 5.198) | 4.927 s (4.923 to 4.933) | -4.9% |
+  | long | prompt | 98.87 tok/s (98.50 to 103.36) | 103.91 (103.78 to 104.01) | +5.1% |
+  | long | generation | 79.76 tok/s (79.66 to 83.12) | 83.81 (83.68 to 83.92) | +5.1% |
+  | both | peak memory | 811.57 MB and 811.55 MB | 811.57 MB and 811.58 MB | 0.0% |
+  | both | model load | 60.5 ms | 60.5 ms and 60.9 ms | under 1% |
+
+  Kernel, the engine's GFLOP/s per shape: 576×576 37.34 to 37.39, 192×576 36.76 to 36.74, 1536×576 36.73 to 36.77, 576×1536 38.30 to 38.68, 49152×576 35.35 to 35.38; within 0.1% except 576×1536 (+1.0%). The other widths and `matrixmultiply` also reproduce (16 sums 36.5, 36.5, 36.3, 37.9 and 35.1 GFLOP/s; 8 sums 30.0, 29.8, 30.0, 26.8 and 29.8; `matrixmultiply` 7.2, 7.0, 7.2, 7.2 and 4.6). The whole bench took 3 minutes 51 seconds (0.1.1: 233 s).
+
+  **The long workload is 5% faster in 0.1.2 and nothing in the code explains it.** Its 0.1.1 range was wide (generation 79.66 to 83.12 tokens/s, first token 4.954 to 5.198 s, a 4% spread) with the median near the bottom; the 0.1.2 range is tight (83.68 to 83.92, 0.3%) and sits above 0.1.1's whole range. Candidates are the machine's state during the earlier run (thermal or background load), code placement after the rebuild, and chance; none was investigated or ruled out. Two consequences: a single long-workload figure carries at least 5% of variation between sessions on this machine, so 0.1.1's 4.3× long-generation gain over 0.1.0 could equally be stated as 4.5×, and the short workload and the kernel are far steadier (0.3% and 0.1%).
 
 ## 5. Upstream feedback
 

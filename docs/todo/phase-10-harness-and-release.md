@@ -69,12 +69,12 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**. Po
 
 ## 10.9 Test, then bench (HC-4, S-7, S-8, Spec §16)
 
-- [ ] `cargo test --no-fail-fast`, then `cargo bench` straight after on the M4 Max at the default log level; a failing test run stops here. No cool-down, so the rows stay comparable with 0.1.1's.
-- [ ] The rows land in `results/benchmarks.jsonl` and are committed on their own.
+- [x] `cargo test --no-fail-fast`, then `cargo bench` straight after on the M4 Max at the default log level; a failing test run stops here. No cool-down, so the rows stay comparable with 0.1.1's.
+- [x] The rows land in `results/benchmarks.jsonl` and are committed on their own.
 
 ## 10.10 Compare with 0.1.1 (FR-8, FR-9)
 
-- [ ] In plan §4: workloads and kernel shapes against 0.1.1's rows. The engine is unchanged, so the difference is run-to-run and machine-state variation; say so, with the spread.
+- [x] In plan §4: workloads and kernel shapes against 0.1.1's rows. The engine is unchanged, so the difference is run-to-run and machine-state variation; say so, with the spread.
 
 ## 10.11 Release note and README (Requirements §12)
 
