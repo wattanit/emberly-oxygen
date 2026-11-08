@@ -3,7 +3,7 @@
 Oct 27, 2026 · @Wattanit
 
 **Version:** 0.3\
-**Status:** draft\
+**Status:** approved\
 **Date:** 2026-11-08\
 **Owner:** Wattanit\
 **Companion documents:** Emberly Oxygen — Technical Specification 0.3 (downstream)
