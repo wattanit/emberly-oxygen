@@ -12,6 +12,9 @@ mod generate;
 mod kv_cache;
 mod model;
 mod ops;
+// Used by sampled generation from task 13.1; until then only its tests call it.
+#[allow(dead_code)]
+mod rng;
 mod safetensors;
 mod tensor;
 #[cfg(test)]
