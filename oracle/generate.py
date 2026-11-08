@@ -10,6 +10,11 @@ final-norm output, and a greedy continuation produced by this script's own
 argmax loop. The float32 files are `<id>.safetensors`; the float64 files are
 `<id>.f64.safetensors`, kept in 64-bit, and their manifest fields start `f64_`.
 
+In the float64 run, RMSNorm and the attention softmax are forced to float64 (the
+library computes both in float32 inside any model); the rotary tables are left as
+the library makes them, because they are the model as published. The float32 run
+is the unmodified library. See `float64_pure_ops`.
+
 The float64 run is slower and writes about twice the bytes: expect minutes, and
 fixtures of about 2 GB.
 
@@ -17,6 +22,7 @@ usage: uv run python generate.py [--out DIR]
 """
 
 import argparse
+import contextlib
 import datetime
 import json
 import platform
@@ -26,8 +32,10 @@ from importlib.metadata import version
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.models.llama import modeling_llama
 
 from download import MODEL_DIR, MODEL_ID, REPO, REVISION
 
@@ -77,6 +85,49 @@ def forward_all(model, ids: torch.Tensor, layer_outputs: list) -> dict:
         "layer_outputs": torch.stack([t[0] for t in layer_outputs]),
         "final_norm_output": hidden[-1][0],
     }
+
+
+@contextlib.contextmanager
+def float64_pure_ops():
+    """Make RMSNorm and the attention softmax compute in the model's own dtype.
+
+    The pinned library casts RMSNorm's input to float32 and the softmax to
+    float32 even in a float64 model, which made its "float64" output depend on
+    the thread count by up to 1.7e-5 in logits (plan 0.1.2, task 9.4). The
+    originals are restored on exit, so the float32 run is the plain library.
+    The rotary tables stay float32, as published (Spec section 10).
+    """
+    original_forward = modeling_llama.LlamaRMSNorm.forward
+    original_softmax = F.softmax
+
+    def rms_norm(self, hidden_states):
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        return self.weight * (hidden_states * torch.rsqrt(variance + self.variance_epsilon))
+
+    def softmax(x, dim=None, _stacklevel=3, dtype=None):
+        return original_softmax(x, dim=dim, dtype=None)
+
+    modeling_llama.LlamaRMSNorm.forward = rms_norm
+    F.softmax = softmax
+    try:
+        yield
+    finally:
+        modeling_llama.LlamaRMSNorm.forward = original_forward
+        F.softmax = original_softmax
+
+
+def check_float64_pure_ops() -> None:
+    """Fail loudly if the replacement is not active (Spec section 10).
+
+    The input differs from 1.0 by 1e-9, which float32 cannot hold, so a
+    normalization that passed through float32 would miss the float64 result
+    by about 1e-9, far over the 1e-14 allowed.
+    """
+    x = torch.tensor([[1.0 + 1e-9, 2.0, 3.0, 4.0]], dtype=torch.float64)
+    norm = modeling_llama.LlamaRMSNorm(4, eps=1e-5).double()
+    expected = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-5)
+    assert (norm(x) - expected).abs().max().item() < 1e-14, "RMSNorm is not computing in float64"
+    assert F.softmax(x, dim=-1, dtype=torch.float32).dtype == torch.float64, "softmax is still float32"
 
 
 def run_precision(dtype: torch.dtype, prompts: list, tok, out_dir: Path, suffix: str) -> dict:
@@ -153,7 +204,16 @@ def main() -> int:
     prompts = json.loads((Path(__file__).parent / "prompts.json").read_text())
 
     f32 = run_precision(torch.float32, prompts, tok, out_dir, "")
-    f64 = run_precision(torch.float64, prompts, tok, out_dir, ".f64")
+    with float64_pure_ops():
+        check_float64_pure_ops()
+        f64 = run_precision(torch.float64, prompts, tok, out_dir, ".f64")
+    # The library is the stock one again: the same check must now fail on the plain RMSNorm.
+    try:
+        check_float64_pure_ops()
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("the float64 replacement was not undone")
 
     records = []
     for p in prompts:
