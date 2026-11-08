@@ -64,8 +64,8 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**. Po
 
 ## 10.8 Prepare the measurement (FR-9, Spec §16)
 
-- [ ] The workspace version becomes 0.1.2 in its own commit, so every row of this release carries it.
-- [ ] A clean tree, the measured commit recorded.
+- [x] The workspace version becomes 0.1.2 in its own commit, so every row of this release carries it.
+- [x] A clean tree, the measured commit recorded. *Measured at the commit that follows this one (recorded in plan §4).*
 
 ## 10.9 Test, then bench (HC-4, S-7, S-8, Spec §16)
 
