@@ -57,12 +57,12 @@ fn a_shifted_continuation_names_the_first_diverging_position() {
     let prompt = fixtures.manifest.prompts.iter().find(|p| p.id == "english-short").unwrap();
     let (model, tokenizer) = load(&root, fixtures);
 
-    let n = prompt.continuation_ids.len();
+    let n = prompt.f64_continuation_ids.len();
     let ids = generate(&model, &tokenizer, &prompt.text, n + 1, &mut |_| {}).unwrap().ids;
-    let gaps = &prompt.continuation_top2_gaps;
-    assert!(!greedy_check(&ids[..n], &prompt.continuation_ids, gaps).is_failure(), "unshifted passes");
+    let gaps = &prompt.f64_continuation_top2_gaps;
+    assert!(!greedy_check(&ids[..n], &prompt.f64_continuation_ids, gaps).is_failure(), "unshifted passes");
 
-    let verdict = greedy_check(&ids[1..], &prompt.continuation_ids, gaps);
+    let verdict = greedy_check(&ids[1..], &prompt.f64_continuation_ids, gaps);
     let result = CheckResult {
         model_id: fixtures.manifest.model_id.clone(),
         prompt: prompt.id.clone(),
@@ -70,6 +70,7 @@ fn a_shifted_continuation_names_the_first_diverging_position() {
         check: Check::Greedy,
         verdict,
         max_error: None,
+        f32_error: None,
     };
     // The first index where the shifted sequence differs: not always 0, since a
     // continuation can repeat a token (english-short's starts with two newlines).
@@ -80,6 +81,34 @@ fn a_shifted_continuation_names_the_first_diverging_position() {
     );
     let text = render(&[result]).text;
     assert!(text.contains(&line), "expected {line:?} in:\n{text}");
+}
+
+/// FR-5: the distance to the f32 reference is reported and judges nothing. The
+/// f32 logits of a real prompt are moved by 0.5, 500 times S-1's limit: the
+/// prompt must still pass against the f64 reference, and the report must show
+/// the large f32 distance.
+#[test]
+fn fr5_the_f32_distance_is_reported_and_never_fails_a_prompt() {
+    let root = workspace_root();
+    let all = discover(&root.join("fixtures")).unwrap_or_else(|e| panic!("{e}"));
+    let fixtures = &all[0];
+    let prompt = fixtures.manifest.prompts.iter().find(|p| p.id == "english-short").unwrap();
+    let (model, tokenizer) = load(&root, fixtures);
+    let reference = fixtures.load_reference(prompt).unwrap();
+    let mut f32_reference = fixtures.load_tensors(prompt).unwrap();
+    f32_reference.logits.data.iter_mut().for_each(|v| *v += 0.5);
+
+    let results = check_prompt(fixtures, prompt, &reference, &f32_reference, &tokenizer, &model);
+    let logits = results.iter().find(|r| r.check == Check::Logits).unwrap();
+    assert!(!logits.verdict.is_failure(), "judged against f64: {:?}", logits.verdict);
+    assert!(logits.max_error.unwrap() < common::compare::LOGIT_TOLERANCE);
+    let reported = logits.f32_error.unwrap();
+    assert!(reported > 0.49 && reported < 0.51, "reported f32 distance {reported:e}");
+    assert!(results.iter().all(|r| !r.verdict.is_failure()), "no check fails because of the f32 distance");
+
+    let report = render(&results);
+    assert!(report.failed.is_empty());
+    assert!(report.text.contains("against the f32 reference (reported, never judged)"), "{}", report.text);
 }
 
 /// Runs every check on the prompts `keep` selects, one thread per prompt when
@@ -93,8 +122,9 @@ fn check_all(keep: impl Fn(&Prompt) -> bool, parallel: bool) -> Vec<CheckResult>
         let (model, tokenizer) = load(&root, fixtures);
         let prompts: Vec<&Prompt> = fixtures.manifest.prompts.iter().filter(|p| keep(p)).collect();
         let check = |prompt: &Prompt| {
-            let reference = fixtures.load_tensors(prompt).unwrap_or_else(|e| panic!("{e}"));
-            check_prompt(fixtures, prompt, &reference, &tokenizer, &model)
+            let reference = fixtures.load_reference(prompt).unwrap_or_else(|e| panic!("{e}"));
+            let f32_reference = fixtures.load_tensors(prompt).unwrap_or_else(|e| panic!("{e}"));
+            check_prompt(fixtures, prompt, &reference, &f32_reference, &tokenizer, &model)
         };
         if parallel {
             thread::scope(|s| {

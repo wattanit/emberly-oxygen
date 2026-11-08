@@ -2,11 +2,11 @@
 
 Oct 27, 2026 · @Wattanit
 
-**Version:** 0.2\
-**Status:** draft\
-**Date:** 2026-11-07\
+**Version:** 0.3\
+**Status:** approved\
+**Date:** 2026-11-08\
 **Owner:** Wattanit\
-**Upstream:** Emberly Oxygen — Requirements 0.2
+**Upstream:** Emberly Oxygen — Requirements 0.5
 
 This document owns HOW Emberly Oxygen is built: layout, data models, subsystems, dependencies, testing strategy and milestones. It defers WHAT and WHY to the Requirements, whose IDs it cites for every choice that satisfies one.
 
@@ -85,15 +85,15 @@ Sizes (hidden size, layers, heads, key-value heads, head dimension, intermediate
 
 ## 4. Tensor operations and kernels
 
-The operation set is exactly what the forward pass needs: matrix-vector product, RMSNorm, softmax, rotary position embedding (RoPE), SiLU, elementwise add and multiply. Each is a plain loop over slices with f32 accumulation in index order, except the matrix-vector product (below). None uses `unsafe`, SIMD intrinsics or threading (HC-1, FR-25). The other operations stay plain because the matrix-vector product is about 98.6% of a step (release note 0.1.0), so speeding them would add risk for no measurable gain.
+The operation set is exactly what the forward pass needs: matrix-vector product, RMSNorm, softmax, rotary position embedding (RoPE), SiLU, elementwise add and multiply. Each is a plain loop over slices with f32 accumulation in index order, except the matrix-vector product (below). None uses `unsafe`, SIMD intrinsics or threading (HC-1, FR-25). The other operations stay plain: the matrix-vector product was about 94% of a step in release 0.1.0 and, after the partial sums, is about 86% of a short step and 58% of a long one (release note 0.1.1, estimated from the kernel rows). On long prompts the rest, mostly attention over the cache, is therefore a real share, about 42%; whether to speed it is a later release's decision, taken after profiling.
 
-- **Matrix-vector product.** Output element `i` is the dot product of weight row `i` with the input, matching the `[out, in]` layout (§3). The dot product keeps 8 independent f32 partial sums (FR-25): sum `j` adds the elements whose index is `j` modulo 8, each in index order; the 8 sums are then combined in one fixed order, and the final `in mod 8` elements are added in index order after them. The count of 8 is initial; tune with use: 4, 8 and 16 are measured and the choice is recorded in the release note. Index-order addition was a chain of dependent adds, each waiting for the last, so the processor could not overlap them; independent sums remove the wait and let the compiler use vector registers, from safe code alone. Phase 4 of release 0.1.0 measured the plain-loop variants at about 2× (4 sums) and 5× (8 sums) on the benchmark machine; that is an expectation for this release, not a guarantee.
+- **Matrix-vector product.** Output element `i` is the dot product of weight row `i` with the input, matching the `[out, in]` layout (§3). The dot product keeps 16 independent f32 partial sums (FR-25): sum `j` adds the elements whose index is `j` modulo 16, each in index order; the 16 sums are then added to one another sequentially from sum 0, and the final `in mod 16` elements are added in index order after them. The count of 16 was chosen in release 0.1.1 by a sweep of 4, 8, 16 and 32 sums, with the rule fixed before measuring: the lowest estimated kernel time per token, ties within 2% going to the smaller width. It beat 8 sums by about 20% and 32 sums everywhere; it remains tunable with use. Index-order addition was a chain of dependent adds, each waiting for the last, so the processor could not overlap them; independent sums remove the wait and let the compiler use vector registers, from safe code alone. Release 0.1.1 measured the kernel at 6.4× to 8.3× the index-order loop at the model's five shapes.
 - **Prohibited in the kernel, for now.** `unsafe`, SIMD intrinsics, threads and tiling stay out (Requirements §2.2): each is its own technique and is measured as its own release. If safe code does not vectorize as expected, the implementation raises the issue with the owner instead of reaching for `unsafe`.
 - **RMSNorm.** `x · w / sqrt(mean(x²) + eps)`, with `eps` from the configuration.
 - **Softmax.** Subtracts the maximum before exponentiating, so large scores cannot overflow.
 - **RoPE.** Half-split pairing: dimension `i` rotates with dimension `i + d/2`, at frequency `theta^(-2i/d)`. Frequencies, angles, sines and cosines are computed in f32, not f64, because the reference computes them in f32 and a more precise angle is a different angle.
 
-The reference sums in a different order, so results differ in the last bits; S-1 and S-2 bound that difference. The partial sums also make the engine's logits differ in the last bits from release 0.1.0's, which were summed in index order; they are still bit-identical from run to run on one machine, because the number of sums and the combining order are fixed (S-6). Release 0.2 is therefore compared with 0.1.0 by the harness thresholds and by speed, never by exact equality. Decoded argmax tokens are protected only by S-3 and S-4, whose near-tie rule exists for exactly this reason.
+The engine computes in f32 and the reference in f64, so engine results differ from the reference in the last bits of f32 rounding, which depends on the order of additions; S-1 and S-2 bound that difference. The partial sums also make the engine's logits differ in the last bits from release 0.1.0's, which were summed in index order; they are still bit-identical from run to run on one machine, because the number of sums and the combining order are fixed (S-6). Release 0.1.1 is therefore compared with 0.1.0 by the harness thresholds and by speed, never by exact equality. Decoded argmax tokens are protected only by S-3 and S-4, whose near-tie rule exists for exactly this reason.
 
 ## 5. Model loading
 
@@ -158,26 +158,28 @@ emberly-oxygen generate --model <dir> --max-new-tokens <n> [--stats] [-v|-vv|-vv
 The oracle lives in `oracle/`, a Python project managed by `uv` with a lockfile pinning `torch`, `transformers` and `huggingface_hub`, so expected outputs can be regenerated with the same library versions.
 
 - **Model revision.** The model is downloaded at a pinned commit of its repository; the same files are the engine's model directory, so both read identical bytes (FR-11). The download script is the only step that needs network access.
-- **Settings.** f32 on CPU (FR-2), eager attention so no fused kernel changes the arithmetic, gradients disabled.
+- **Settings.** Two runs on CPU, in f64 and in f32 (FR-2), each loaded from the same published weights (bfloat16 widened exactly, as the engine widens them), with eager attention so no fused kernel changes the arithmetic, and gradients disabled. The oracle asserts each model's parameter dtype and device before running. In the f64 run the oracle forces the two operations the library computes in 32-bit inside any model to run in the model's dtype: RMSNorm (the library casts its input to 32-bit, normalizes and casts back) and the attention softmax (the library passes `dtype=torch.float32`). They are replaced for the duration of that run only, by a context manager that restores the library afterwards, so the f32 run is the unmodified library. Before the f64 run the oracle checks the replacement is active: a float64 RMSNorm of an input that 32-bit rounding would change must match a float64 calculation to 1e-14, and the softmax of a float64 tensor must come back as float64. The rotary tables are not replaced (below). The f64 run is the reference of S-1 to S-4; the f32 run is the library's default precision, kept so the harness can report the engine's distance to it (FR-5, §11) and the disagreement between the two references stays visible.
 - **Prompt set.** `oracle/prompts.json` lists each prompt with an ID and a category: `english`, `thai`, `code`, `utf8-split` (prompts whose tokens split multi-byte characters) and `long` (about 512 tokens, the longest benchmark prompt, §12). Each category has at least two prompts (FR-3).
-- **Greedy continuation.** 32 tokens, produced by the oracle's own argmax loop rather than a library generate call, so it can record the gap between the two highest logits at every step for near-tie detection (S-3, S-4).
-- **Output.** `fixtures/<model-id>/manifest.json` records the model ID and commit, library versions, the generating machine, and per prompt: ID, category, text, token IDs, continuation IDs and text, and top-two gaps. One safetensors file per prompt holds logits `[positions, vocab]`, embeddings `[positions, hidden]` and layer outputs `[layers, positions, hidden]` (FR-1). Fixtures are model-agnostic in shape, so adding a model adds a folder (Requirements §2.2).
+- **Greedy continuation.** 32 tokens per run, produced by the oracle's own argmax loop rather than a library generate call, so it can record the gap between the two highest logits at every step for near-tie detection (S-3, S-4). Each run continues from its own tokens, so the two continuations agree until a step whose gap is small enough for rounding to flip the choice, and may differ after it.
+- **Output.** `fixtures/<model-id>/manifest.json` records the model ID and commit, library versions, the generating machine, and per prompt: ID, category, text, token IDs, continuation IDs and text, and top-two gaps. Each prompt has two safetensors files with the same tensor names and shapes: `<id>.safetensors` (f32, the 32-bit run) and `<id>.f64.safetensors` (f64, the reference, stored in 64-bit so the reference is not rounded to 32-bit again). Each holds logits `[positions, vocab]`, embeddings `[positions, hidden]`, layer outputs `[layers, positions, hidden]` and `final_norm_output` (FR-1). The manifest keeps the existing per-prompt fields for the 32-bit run and adds, for the reference, its file name, continuation IDs and text, whether it stopped at the end-of-sequence token, and top-two gaps at the prompt positions and the continuation, all prefixed `f64_`. Fixtures are model-agnostic in shape, so adding a model adds a folder (Requirements §2.2).
 - **Honesty note.** In the reference library, the last entry of the library's hidden states is taken after the final norm, not straight from the last layer. The oracle therefore captures every layer's raw output with forward hooks (checked equal to the library's own hidden states for all other layers) and stores the final-norm output separately as `final_norm_output`; the harness compares that against the engine's normalized output.
-- **Top-two gaps** are stored for the prompt positions as well as for the continuation, because the near-tie test of S-3 applies at every position.
+- **Top-two gaps** are stored for the prompt positions as well as for the continuation, because the near-tie test of S-3 applies at every position. S-3 and S-4 use the f64 gaps.
+- **The reference's own limits.** The library computes its rotary sines and cosines in f32 even in a f64 model (it casts the angles to f32 and the results back, in the pinned version), and they are left as the library makes them: they are the model as published, so the f64 reference shares the engine's f32 RoPE tables (§4), where a true f64 angle would be a different angle (at position 5000 its cosine differs by 8.4e-5). The reference is independent of the engine but not of the reference library: it carries that library's definition of the model, including the f32 rotary tables. Measured in plan 0.1.2: the library's unmodified f64 run changed by up to 1.7e-5 in logits with the thread count and differs by up to 7.3e-5 from the run with RMSNorm and softmax in 64-bit, which is why the oracle makes that replacement; with it, a rerun at another thread count differs by about 2e-6 in logits. Any residual noise is measured again whenever the oracle's library versions change.
 - **Further outputs.** `oracle/tokenizer_corpus.py` writes `fixtures/<model-id>/tokenizer-corpus.json` (§6), `oracle/unicode_classes.py` writes the committed character classes (§6), and `oracle/rope_reference.py` prints the reference's rotary cosines and sines at positions 1 and 5000 as Rust constants for the RoPE test, because f32 angles must agree with the reference's (§4): at position 5000 an f64 cosine differs from the reference's by 8.4e-5.
 
-Logits dominate fixture size: about 200 KB per position, so the long prompts are about 100 MB each. Fixtures are therefore kept out of git: \`fixtures/\` is git-ignored and filled by running the oracle locally. What regenerates them is committed instead: the prompt set, the oracle's lockfile and the pinned model commit. Fixtures generated on a different machine may differ from another machine's in the last bits of the reference's own arithmetic; that stays far inside S-1, and the manifest records which machine produced them.
+Logits dominate fixture size: about 200 KB per position in f32 and twice that in f64, so a long prompt is about 100 MB in f32 and about 200 MB in f64, and the fixtures folder grows from about 0.7 GB to about 2 GB. Fixtures are therefore kept out of git: \`fixtures/\` is git-ignored and filled by running the oracle locally. What regenerates them is committed instead: the prompt set, the oracle's lockfile and the pinned model commit. The f32 fixtures generated on a different machine may differ from another machine's in the rounding of the f32 reference itself, and against which the engine's error in release 0.1.1 reached 99% of S-1; that is why S-1 is judged against the f64 fixtures, whose machine-to-machine differences are expected to be orders of magnitude smaller (measured, plan 0.1.2). The manifest records which machine produced them.
 
 ## 11. Correctness harness
 
 Rust integration tests in `tests/`, run with `cargo test`; the test profile is compiled with optimization and debug assertions on, so a full run takes seconds instead of minutes without losing overflow checks (FR-7).
 
 - The harness reads every `fixtures/*/manifest.json`, so a new model's fixtures are picked up without code changes.
-- Per prompt it checks encoding (FR-13), decoding (FR-14), logits (S-1), intermediates (S-2), top-1 token (S-3) and greedy continuation (S-4).
+- Per prompt it checks encoding (FR-13), decoding (FR-14), logits (S-1), intermediates (S-2), top-1 token (S-3) and greedy continuation (S-4). The numeric checks and the near-tie rule read the f64 fixtures (§10). The engine's f32 values are widened to f64 before the difference is taken, so the comparison adds no rounding of its own and the f64 reference is never narrowed.
+- Beside each logit and intermediate error it also measures the engine's distance to the f32 fixtures and reports it, per category, in the same table. This figure never fails a prompt (FR-5). The token encoding, decoding and streaming checks read the manifest's existing fields, which are the 32-bit run's: they test the tokenizer, whose result does not depend on the arithmetic, and the two runs' continuations were identical on every prompt when measured (plan 0.1.2 §4).
 - For `utf8-split` prompts it streams the expected continuation through the streaming decoder and checks that the concatenated chunks equal the full decode and that no chunk contains a replacement character the full decode lacks (FR-15).
-- A tensor, for S-2, is one layer's `[positions, hidden]` output for one prompt, and its largest magnitude is taken over all positions; a per-position maximum would be stricter. An all-zero reference tensor fails. A near-tie is a reference gap strictly less than 1e-3, and in the greedy comparison the gap before each continuation token decides: the first near-tie stops the comparison, tokens before it must match, and the token at it may be either (S-3, S-4).
+- A tensor, for S-2, is one layer's `[positions, hidden]` output for one prompt, and its largest magnitude is taken over all positions; a per-position maximum would be stricter. An all-zero reference tensor fails. A near-tie is an f64 reference gap strictly less than 1e-3, and in the greedy comparison the gap before each continuation token decides: the first near-tie stops the comparison, tokens before it must match, and the token at it may be either (S-3, S-4).
 - It prints a pass/fail table by prompt and by category; any failing category fails the run (S-5). Each failure reports the first diverging position and, for intermediates, the first diverging layer (FR-6).
-- Model files are found in `models/<model-id>/` (git-ignored, filled by the oracle's download script). If they are missing, the run fails naming the path; it never downloads (FR-7). Missing fixtures fail the run the same way, naming the oracle command that generates them.
+- Model files are found in `models/<model-id>/` (git-ignored, filled by the oracle's download script). If they are missing, the run fails naming the path; it never downloads (FR-7). Missing fixtures, f32 or f64, fail the run the same way, naming the oracle command that generates them.
 
 ## 12. Benchmark harness
 
@@ -195,8 +197,8 @@ A custom harness in `benches/`, run with `cargo bench`, which builds with the op
 - **Repetition.** Each workload runs 5 times; median, minimum and maximum are recorded (S-7).
 - **Record (FR-9).** One JSON line per workload is appended to `results/benchmarks.jsonl`: package version, commit and whether the tree was dirty, CPU model, core count, memory, OS, build profile, timestamp, and results.
 - **Kernel baseline (HC-2).** A separate group times the in-house matrix-vector product against the test-only linear algebra crate (`matrixmultiply`, single-threaded) at the model's five matrix shapes. It agrees with both before timing and records one row per shape with ns per call and GFLOP/s. The group is reached through the `bench-kernels` Cargo feature, off by default, which adds the public module `emberly_oxygen::kernels`; only the library's self-referencing dev-dependency enables it, so a normal build never contains it.
-- **Reference points for the kernel.** `matrixmultiply` is a weak yardstick for a matrix-vector product: built for matrix-matrix work, it is only about 1.25× faster than the 0.1.0 loop at most shapes and slower at the 49152×576 output projection, because it repacks the matrix on every call. The kernel group therefore also times the 0.1.0 index-order loop and the partial-sum widths tried (FR-25), so the speed-up is shown against the engine's own history. A dedicated matrix-vector library is not added as a baseline in 0.2: it would be a new dependency (§15) and the earlier loop already shows the ceiling.
-- **Comparability.** The workloads and procedure are unchanged from 0.1.0, so 0.1.0's rows are the previous release's in the record (FR-9, FR-25).
+- **Reference points for the kernel.** `matrixmultiply` is a weak yardstick for a matrix-vector product: built for matrix-matrix work, it is only about 1.25× faster than the 0.1.0 loop at most shapes and slower at the 49152×576 output projection, because it repacks the matrix on every call. The kernel group therefore also times the 0.1.0 index-order loop and the partial-sum widths swept, 4, 8, 16 and 32 (FR-25), so the speed-up is shown against the engine's own history. A dedicated matrix-vector library is not added as a baseline in 0.2: it would be a new dependency (§15) and the earlier loop already shows the ceiling.
+- **Comparability.** The workloads and procedure are unchanged from 0.1.0, so every release's rows are compared with the previous release's in the record, and 0.1.0's are the baseline (FR-9, FR-25).
 - **Definitions.** Throughput and time to first token are as defined in §8.
 
 ## 13. Configuration
@@ -260,13 +262,12 @@ Acceptance policy: an engine dependency must be general plumbing under HC-1; any
 - **Unit tests per kernel.** Each kernel is checked against hand-computed small cases (softmax sums to 1, RoPE at position 0 is the identity) and, for matrix-vector product, against the test-only linear algebra crate on random inputs (HC-2).
 - **Unit tests for the tokenizer.** Byte-map round trips, merge order on known pieces, and the streaming decoder's hold-back on split three-byte characters (FR-15).
 - **Correctness harness.** End-to-end comparison against the oracle's fixtures (§11), the gate every release must pass (HC-4).
-- **Negative controls.** The harness must be seen to fail. A Cargo feature, `negative-controls`, off by default, adds the enum `Fault` (`InterleavedRope`, `PerturbedLogit { position }`, `NoFinalNorm`) and `Model::inject_fault`; in a normal build `Fault` has no values, so no faulty arithmetic is compiled in. The library's self-referencing dev-dependency enables the feature, so plain `cargo test` always runs the controls and none is skipped for a missing flag, while `cargo build` never contains them. A test asserts that the harness fails on each fault. With no fault injected the feature changes no result. A check that has never failed has not been shown to work. The new kernel (§4) must leave all three controls failing as before.
+- **Negative controls.** The harness must be seen to fail. A Cargo feature, `negative-controls`, off by default, adds the enum `Fault` (`InterleavedRope`, `PerturbedLogit { position }`, `NoFinalNorm`) and `Model::inject_fault`; in a normal build `Fault` has no values, so no faulty arithmetic is compiled in. The library's self-referencing dev-dependency enables the feature, so plain `cargo test` always runs the controls and none is skipped for a missing flag, while `cargo build` never contains them. A test asserts that the harness fails on each fault. With no fault injected the feature changes no result. A check that has never failed has not been shown to work. The new kernel (§4) must leave all three controls failing as before, and so must the move to the f64 reference: the controls are run against it, and the `PerturbedLogit` size is checked to exceed the S-1 limit in force, so that a change of limit cannot leave a control that no longer fails.
 - **Kernel tests.** The new matrix-vector product is checked against the 0.1.0 index-order loop and against `matrixmultiply` on random inputs at the model's shapes and at lengths that are not a multiple of 8, including lengths below 8 (the tail), within an absolute tolerance far below S-1 (HC-2, FR-25).
+- **Reference tests.** The comparison functions are given a reference value that f32 cannot represent and must measure the error against the unrounded value (S-1, FR-2); the f64 fixtures are checked to have the manifest's shapes and dtype (FR-4); the oracle's own start-up check that the 64-bit RMSNorm and softmax are active (§10) is run whenever the oracle is; and a test shows that the f32 distance never turns a passing prompt into a failing one (FR-5).
 - Every test names the HC, FR or S item it verifies, so coverage of the Requirements can be listed mechanically.
 
 ## 18. Milestones
-
-&#91;embedded content: milestones · M1 to M7, ending in release 0.1.1\]
 
 - **M1 — Oracle.** The oracle generates fixtures for every prompt category from the committed prompt set. *Proves the reference exists.*
 - **M2 — Harness.** The harness runs against a stub engine, reports per category, and fails cleanly. *Proves the gate can fail.*
@@ -275,15 +276,39 @@ Acceptance policy: an engine dependency must be general plumbing under HC-1; any
 - **M5 — Generation.** Greedy continuations pass S-4, and the CLI meets FR-16 to FR-21. *Proves the engine end to end.*
 - **M6 — Baseline.** First benchmark record on the benchmark machine, release note written, tagged 0.1.0. *Proves the progression has a starting point.*
 - **M7 — Faster kernel.** The matrix-vector product with independent partial sums (§4) passes the unchanged harness in every category and leaves the negative controls failing; the kernel group and both workloads are recorded against 0.1.0's rows; release note written, tagged 0.1.1 (FR-25). *Proves the speed-up is real and costs nothing in correctness.*
+- **M8 — Float64 reference.** The oracle writes f64 fixtures beside the f32 ones, the reference's own run-to-run noise is measured, the harness judges S-1 to S-4 against the f64 fixtures and reports the f32 distance beside them, the thresholds are decided by the owner from the measurement, the negative controls fail against the new reference, and the release note is written and tagged 0.1.2 (FR-1, FR-2, FR-5). *Proves the gate measures correctness, not agreement with one library's rounding.*
 
 ## 19. Open Items
 
-- **Which partial-sum width is best (§4).** Resolver: M7 measurement; the choice and the numbers go in the release note.
+
+### Resolved since 0.2
+
+- **Whether S-1 to S-4's thresholds hold against the f64 reference (Requirements §13).** They hold and are kept, by the owner's decision of 2026-11-08: the 16-sum engine's worst logit error is 3.50e-4 (35% of S-1) and its worst relative intermediate error 9.97e-6 (10% of S-2) against the f64 reference (plan 0.1.2 §4).
+
+- **Which partial-sum width is best (§4).** 16, by the sweep of release 0.1.1 (plan 0.1.1 §4, release note 0.1.1).
+- **Whether release 0.1.2 re-runs the benchmark (§16, step 2).** Yes, decided by the owner on 2026-11-08: the version changes, so the record gets rows for it, taken by the same procedure as every release. The engine is unchanged, so the rows also show how repeatable 0.1.1's were; the release note says so and does not claim a speed change.
 
 ### Resolved since 0.1
 
 - **Tokenizer components.** SmolLM2's `tokenizer.json` was read at M3; §6 states what it uses.
 - **Benchmark platform.** The benchmark machine is an Apple M4 Max on macOS 26.3 (Requirements §13), so §12's Linux-or-macOS assumption holds.
+
+### Feedback absorbed in 0.3
+
+From plan 0.1.1 §5 (G-25). Every row addressed to this document, absorbed or rejected:
+
+| Plan row | Disposition |
+| --- | --- |
+| Specification 0.2 status | Not a content change. Specification 0.3 was approved by the owner on 2026-11-08, pinning Requirements 0.5; the plans' pins follow. |
+| Task 7.2, §4 | Absorbed into §4 (the combining order is named: sequential from sum 0, then the tail in index order). |
+| Task 7.5, §10, §11 | Absorbed into §10, §11 and §17, with the owner's wider scope (S-1 to S-4 and the near-tie rule against the f64 reference). The reference's RoPE limit is stated in §10, which the plan row did not mention. |
+| Task 8.2, §4, §12 | Absorbed: §4 names 16 sums and the sweep; §12 names the widths swept. |
+
+From plan 0.1.2 §5:
+
+| Plan row | Disposition |
+| --- | --- |
+| Task 9.4, §10 | Absorbed into §10 (Settings, and the reference's own limits, which 0.3 stated wrongly) and §17. |
 
 ### Feedback absorbed in 0.2
 

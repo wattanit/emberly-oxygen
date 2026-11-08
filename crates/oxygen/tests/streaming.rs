@@ -28,6 +28,12 @@ fn prompt(tokenizer: &Tokenizer, category: &str, text: &str, continuation: &str)
         continuation_text: continuation.into(),
         continuation_top2_gaps: vec![],
         stopped_at_eos: false,
+        f64_tensors_file: String::new(),
+        f64_prompt_top2_gaps: vec![],
+        f64_continuation_ids: ids(continuation),
+        f64_continuation_text: continuation.into(),
+        f64_continuation_top2_gaps: vec![],
+        f64_stopped_at_eos: false,
         tensors_file: String::new(),
     }
 }

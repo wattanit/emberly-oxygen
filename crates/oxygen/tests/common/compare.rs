@@ -1,15 +1,25 @@
 //! The correctness checks as pure functions (S-1 to S-4). Each reports the
 //! first diverging position (FR-6), not only pass or fail. Bad shapes and
 //! non-finite values are failures with a message, never panics.
+//!
+//! The engine computes in f32 and the reference is f64 (FR-2). Every difference
+//! is taken in f64 after widening the engine's f32 exactly, so the comparison
+//! adds no rounding of its own and the reference is never narrowed. The
+//! reference may also be the f32 run, whose distance the harness reports
+//! (FR-5): the reference type is generic for that reason only.
 
 /// S-1: largest absolute logit difference allowed at every position.
-pub const LOGIT_TOLERANCE: f32 = 1e-3;
+pub const LOGIT_TOLERANCE: f64 = 1e-3;
 /// S-2: largest difference allowed, relative to the largest magnitude in the
 /// reference tensor.
-pub const INTERMEDIATE_TOLERANCE: f32 = 1e-4;
+pub const INTERMEDIATE_TOLERANCE: f64 = 1e-4;
 /// S-3: two reference logits closer than this form a near-tie, where either
 /// token passes.
-pub const NEAR_TIE_GAP: f32 = 1e-3;
+pub const NEAR_TIE_GAP: f64 = 1e-3;
+
+/// A reference value: f64 (the reference) or f32 (the run the harness reports against).
+pub trait Reference: Copy + Into<f64> {}
+impl<T: Copy + Into<f64>> Reference for T {}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Verdict {
@@ -29,7 +39,7 @@ impl Verdict {
 /// real measurement can be recorded (Plan §8).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Numeric {
-    pub max_error: f32,
+    pub max_error: f64,
     pub verdict: Verdict,
 }
 
@@ -38,13 +48,13 @@ fn fail(position: impl Into<Option<usize>>, message: impl Into<String>) -> Verdi
 }
 
 fn numeric_fail(position: impl Into<Option<usize>>, message: impl Into<String>) -> Numeric {
-    Numeric { max_error: f32::INFINITY, verdict: fail(position, message) }
+    Numeric { max_error: f64::INFINITY, verdict: fail(position, message) }
 }
 
 /// Checks two `[positions, width]` matrices have the same, non-empty shape.
 // `%` rather than `is_multiple_of`, which would raise the minimum Rust version.
 #[allow(clippy::manual_is_multiple_of)]
-fn check_shape(engine: &[f32], reference: &[f32], width: usize) -> Result<(), String> {
+fn check_shape<R>(engine: &[f32], reference: &[R], width: usize) -> Result<(), String> {
     if width == 0 || reference.is_empty() || reference.len() % width != 0 {
         return Err(format!("reference has {} values, not a multiple of width {width}", reference.len()));
     }
@@ -65,17 +75,17 @@ fn first_non_finite(engine: &[f32], width: usize) -> Option<usize> {
 
 /// S-1: at every position the largest absolute logit difference is at most
 /// [`LOGIT_TOLERANCE`].
-pub fn logit_error(engine: &[f32], reference: &[f32], vocab: usize) -> Numeric {
+pub fn logit_error<R: Reference>(engine: &[f32], reference: &[R], vocab: usize) -> Numeric {
     if let Err(m) = check_shape(engine, reference, vocab) {
         return numeric_fail(None, m);
     }
     if let Some(p) = first_non_finite(engine, vocab) {
         return numeric_fail(p, "engine logits contain NaN or infinity");
     }
-    let mut max_error = 0f32;
+    let mut max_error = 0f64;
     let mut first_bad = None;
     for (p, (e, r)) in engine.chunks(vocab).zip(reference.chunks(vocab)).enumerate() {
-        let worst = e.iter().zip(r).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        let worst = e.iter().zip(r).map(|(a, b)| (f64::from(*a) - (*b).into()).abs()).fold(0f64, f64::max);
         max_error = max_error.max(worst);
         if worst > LOGIT_TOLERANCE && first_bad.is_none() {
             first_bad = Some((p, worst));
@@ -94,21 +104,21 @@ pub fn logit_error(engine: &[f32], reference: &[f32], vocab: usize) -> Numeric {
 /// S-2: one stored intermediate (a `[positions, width]` matrix) matches within
 /// [`INTERMEDIATE_TOLERANCE`] relative to the largest magnitude in the
 /// reference matrix.
-pub fn intermediate_error(engine: &[f32], reference: &[f32], width: usize) -> Numeric {
+pub fn intermediate_error<R: Reference>(engine: &[f32], reference: &[R], width: usize) -> Numeric {
     if let Err(m) = check_shape(engine, reference, width) {
         return numeric_fail(None, m);
     }
     if let Some(p) = first_non_finite(engine, width) {
         return numeric_fail(p, "engine values contain NaN or infinity");
     }
-    let scale = reference.iter().fold(0f32, |m, v| m.max(v.abs()));
+    let scale = reference.iter().fold(0f64, |m, v| m.max((*v).into().abs()));
     if !(scale > 0.0 && scale.is_finite()) {
         return numeric_fail(None, "reference tensor is all zero or not finite, so a relative error is undefined");
     }
-    let mut max_error = 0f32;
+    let mut max_error = 0f64;
     let mut first_bad = None;
     for (p, (e, r)) in engine.chunks(width).zip(reference.chunks(width)).enumerate() {
-        let worst = e.iter().zip(r).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max) / scale;
+        let worst = e.iter().zip(r).map(|(a, b)| (f64::from(*a) - (*b).into()).abs()).fold(0f64, f64::max) / scale;
         max_error = max_error.max(worst);
         if worst > INTERMEDIATE_TOLERANCE && first_bad.is_none() {
             first_bad = Some((p, worst));
@@ -126,10 +136,10 @@ pub fn intermediate_error(engine: &[f32], reference: &[f32], width: usize) -> Nu
 
 /// Index of the largest value; the lowest index wins an exact tie, as the
 /// reference's argmax does.
-fn argmax(row: &[f32]) -> usize {
+fn argmax<T: Copy + Into<f64>>(row: &[T]) -> usize {
     let mut best = 0;
     for (i, v) in row.iter().enumerate() {
-        if *v > row[best] {
+        if (*v).into() > row[best].into() {
             best = i;
         }
     }
@@ -139,7 +149,7 @@ fn argmax(row: &[f32]) -> usize {
 /// S-3: the engine's top token matches the reference at every position, except
 /// where the reference's two highest logits differ by less than
 /// [`NEAR_TIE_GAP`]. `gaps` holds that difference per position.
-pub fn top1_check(engine: &[f32], reference: &[f32], vocab: usize, gaps: &[f32]) -> Verdict {
+pub fn top1_check<R: Reference>(engine: &[f32], reference: &[R], vocab: usize, gaps: &[f64]) -> Verdict {
     if let Err(m) = check_shape(engine, reference, vocab) {
         return fail(None, m);
     }
@@ -162,7 +172,7 @@ pub fn top1_check(engine: &[f32], reference: &[f32], vocab: usize, gaps: &[f32])
 /// S-4: the greedy continuation matches token for token. Comparison stops at
 /// the first near-tie in `gaps` (the reference's top-two gap before each
 /// token), because the two sequences may legitimately diverge from there.
-pub fn greedy_check(engine: &[u32], reference: &[u32], gaps: &[f32]) -> Verdict {
+pub fn greedy_check(engine: &[u32], reference: &[u32], gaps: &[f64]) -> Verdict {
     if gaps.len() < reference.len() {
         return fail(None, format!("{} gaps for {} reference tokens", gaps.len(), reference.len()));
     }

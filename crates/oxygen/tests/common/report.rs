@@ -55,7 +55,11 @@ pub fn render(results: &[CheckResult]) -> Report {
             text.push('\n');
         }
 
-        writeln!(text, "\ncategory     prompts  result  max logit error  max intermediate error").unwrap();
+        writeln!(
+            text,
+            "\ncategory     prompts  result  max logit error  max intermediate error  | vs f32 reference, reported only: logit  intermediate"
+        )
+        .unwrap();
         for category in distinct(rows.iter().map(|r| r.category.as_str())) {
             let of_category: Vec<_> = rows.iter().filter(|r| r.category == category).collect();
             let prompts = distinct(of_category.iter().map(|r| r.prompt.as_str()));
@@ -65,17 +69,22 @@ pub fn render(results: &[CheckResult]) -> Report {
                 .count();
             let verdict = if bad == 0 { "pass" } else { "FAIL" };
             // Worst error measured within the category, for the checks that measure one (S-1, S-2).
-            let worst = |check: Check| {
-                let e = of_category.iter().filter(|r| r.check == check).filter_map(|r| r.max_error);
-                e.fold(None, |m: Option<f32>, e| Some(m.map_or(e, |m| m.max(e)))).map_or("-".to_string(), |e| format!("{e:e}"))
+            let worst = |check: Check, reported: bool| {
+                let e = of_category
+                    .iter()
+                    .filter(|r| r.check == check)
+                    .filter_map(|r| if reported { r.f32_error } else { r.max_error });
+                e.fold(None, |m: Option<f64>, e| Some(m.map_or(e, |m| m.max(e)))).map_or("-".to_string(), |e| format!("{e:e}"))
             };
             writeln!(
                 text,
-                "{category:<12} {:>2}/{:<5} {verdict:<7} {:<16} {}",
+                "{category:<12} {:>2}/{:<5} {verdict:<7} {:<16} {:<23} | {:<9} {}",
                 prompts.len() - bad,
                 prompts.len(),
-                worst(Check::Logits),
-                worst(Check::Intermediates)
+                worst(Check::Logits, false),
+                worst(Check::Intermediates, false),
+                worst(Check::Logits, true),
+                worst(Check::Intermediates, true)
             )
             .unwrap();
             if bad > 0 {
@@ -83,13 +92,21 @@ pub fn render(results: &[CheckResult]) -> Report {
             }
         }
 
-        let measured = |check: Check| {
-            rows.iter().filter(|r| r.check == check).filter_map(|r| r.max_error).fold(None, |m: Option<f32>, e| Some(m.map_or(e, |m| m.max(e))))
+        let measured = |check: Check, reported: bool| {
+            rows.iter()
+                .filter(|r| r.check == check)
+                .filter_map(|r| if reported { r.f32_error } else { r.max_error })
+                .fold(None, |m: Option<f64>, e| Some(m.map_or(e, |m| m.max(e))))
         };
         text.push('\n');
-        for (check, label) in [(Check::Logits, "largest logit error"), (Check::Intermediates, "largest relative intermediate error")] {
-            if let Some(e) = measured(check) {
-                writeln!(text, "{label}: {e:e}").unwrap();
+        for (check, label) in [(Check::Logits, "logit error"), (Check::Intermediates, "relative intermediate error")] {
+            if let Some(e) = measured(check, false) {
+                writeln!(text, "largest {label}: {e:e}").unwrap();
+            }
+        }
+        for (check, label) in [(Check::Logits, "logit error"), (Check::Intermediates, "relative intermediate error")] {
+            if let Some(e) = measured(check, true) {
+                writeln!(text, "largest {label} against the f32 reference (reported, never judged): {e:e}").unwrap();
             }
         }
 

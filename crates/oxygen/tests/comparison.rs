@@ -22,16 +22,50 @@ fn s1_identical_logits_pass_with_zero_error() {
     assert_eq!(n.max_error, 0.0);
 }
 
+// The tolerance is a decimal (1e-3), which no binary float holds exactly, so
+// "an f32 value exactly at the tolerance" cannot be built; the boundary is
+// tested just under and just over it instead.
 #[test]
 fn s1_boundary_at_the_tolerance() {
     let reference = [0.0; 4];
-    let at = [0.0, 0.0, LOGIT_TOLERANCE, 0.0];
-    assert_eq!(logit_error(&at, &reference, 2).verdict, Verdict::Pass, "exactly the tolerance passes");
-    let over = [0.0, 0.0, 1.0001 * LOGIT_TOLERANCE, 0.0];
+    let over = [0.0, 0.0, (1.0001 * LOGIT_TOLERANCE) as f32, 0.0];
     let n = logit_error(&over, &reference, 2);
     assert_eq!(failed_at(&n.verdict), Some(1));
-    let under = [0.0, 0.0, 0.9999 * LOGIT_TOLERANCE, 0.0];
+    let under = [0.0, 0.0, (0.9999 * LOGIT_TOLERANCE) as f32, 0.0];
     assert_eq!(logit_error(&under, &reference, 2).verdict, Verdict::Pass);
+}
+
+// FR-2, S-1: the reference is kept whole. 1 + 1e-9 is not an f32; a check that
+// narrowed the reference to f32 would see no error at all here.
+#[test]
+fn s1_the_f64_reference_is_not_narrowed() {
+    let n = logit_error(&[1.0f32, 2.0], &[1.0 + 1e-9, 2.0], 2);
+    assert!(n.max_error > 0.9e-9 && n.max_error < 1.1e-9, "measured {:e}", n.max_error);
+}
+
+// The engine's f32 is widened before the difference, so the comparison adds no
+// rounding: 0.1f32 against the same f32 value as an f64 is exactly zero, and
+// against the f64 0.1 it is the f32's own representation error, about 1.5e-9.
+#[test]
+fn s1_the_engines_f32_is_widened_exactly() {
+    let engine = [0.1f32, 2.0];
+    let same = [f64::from(0.1f32), 2.0];
+    assert_eq!(logit_error(&engine, &same, 2).max_error, 0.0);
+    let n = logit_error(&engine, &[0.1f64, 2.0], 2);
+    assert!(n.max_error > 1.4e-9 && n.max_error < 1.6e-9, "measured {:e}", n.max_error);
+}
+
+// FR-5: the same functions measure the distance to the f32 reference, which the
+// harness reports; an f32 reference gives the same figure as its widened copy.
+#[test]
+fn s1_an_f32_reference_is_measured_by_the_same_function() {
+    let engine = [1.0f32, 2.5, -3.0, 0.25];
+    let reference32 = [1.0005f32, 2.5, -3.0, 0.2504];
+    let widened: Vec<f64> = reference32.iter().map(|&v| f64::from(v)).collect();
+    let a = logit_error(&engine, &reference32, 2);
+    let b = logit_error(&engine, &widened, 2);
+    assert_eq!(a.max_error, b.max_error);
+    assert!(a.max_error > 0.0);
 }
 
 #[test]
@@ -57,7 +91,7 @@ fn s1_shape_mismatch_is_a_failure_not_a_panic() {
     assert!(logit_error(&[], &[1.0, 2.0], 2).verdict.is_failure(), "engine returned nothing");
     assert!(logit_error(&[1.0; 3], &[1.0; 4], 2).verdict.is_failure(), "length differs");
     assert!(logit_error(&[1.0; 3], &[1.0; 3], 2).verdict.is_failure(), "not a multiple of the width");
-    assert!(logit_error(&[], &[], 2).verdict.is_failure(), "empty reference");
+    assert!(logit_error(&[], &[] as &[f64], 2).verdict.is_failure(), "empty reference");
     assert!(logit_error(&[1.0], &[1.0], 0).verdict.is_failure(), "zero width");
 }
 
@@ -81,6 +115,13 @@ fn s2_the_same_absolute_error_is_judged_by_the_tensor_scale() {
     let large = [1000.0, 0.0];
     assert!(intermediate_error(&[1.0 + engine_error, 0.0], &small, 2).verdict.is_failure());
     assert_eq!(intermediate_error(&[1000.0 + engine_error, 0.0], &large, 2).verdict, Verdict::Pass);
+}
+
+// FR-2, S-2: as for the logits, the reference is not narrowed.
+#[test]
+fn s2_the_f64_reference_is_not_narrowed() {
+    let n = intermediate_error(&[1.0f32, 2.0], &[1.0, 2.0 + 2e-9], 2);
+    assert!(n.max_error > 0.9e-9 && n.max_error < 1.1e-9, "measured {:e}", n.max_error);
 }
 
 #[test]
@@ -121,6 +162,22 @@ fn s3_near_tie_boundary_on_the_reference_gap() {
     assert_eq!(top1_check(&engine, &reference, 2, &[0.9999 * NEAR_TIE_GAP]), Verdict::Pass);
     // Gap exactly at the threshold is not a near-tie ("less than").
     assert!(top1_check(&engine, &reference, 2, &[NEAR_TIE_GAP]).is_failure());
+}
+
+// S-3: the gap is an f64 from the reference, so a gap one part in a million over
+// the threshold is told from one under it; an f32 gap could not.
+#[test]
+fn s3_the_near_tie_rule_reads_the_f64_gap() {
+    let (reference, engine) = ([0.0, 1.0], [1.0f32, 0.0]);
+    assert_eq!(top1_check(&engine, &reference, 2, &[NEAR_TIE_GAP - 1e-12]), Verdict::Pass);
+    assert!(top1_check(&engine, &reference, 2, &[NEAR_TIE_GAP + 1e-12]).is_failure());
+}
+
+#[test]
+fn s3_the_reference_may_be_f32_or_f64() {
+    let engine = [0.0f32, 5.0, 1.0];
+    assert_eq!(top1_check(&engine, &[0.0f32, 5.0, 1.0], 3, &[1.0]), Verdict::Pass);
+    assert_eq!(top1_check(&engine, &[0.0f64, 5.0, 1.0], 3, &[1.0]), Verdict::Pass);
 }
 
 #[test]
@@ -170,6 +227,13 @@ fn s4_near_tie_at_the_end_still_checks_what_came_before() {
 fn s4_near_tie_boundary_on_the_gap() {
     assert_eq!(greedy_check(&[9], &[1], &[0.9999 * NEAR_TIE_GAP]), Verdict::NearTie { position: 0 });
     assert!(greedy_check(&[9], &[1], &[NEAR_TIE_GAP]).is_failure());
+}
+
+// S-4: comparison stops at a near-tie of the f64 reference, told from a gap just over it.
+#[test]
+fn s4_the_near_tie_rule_reads_the_f64_gap() {
+    assert_eq!(greedy_check(&[9], &[1], &[NEAR_TIE_GAP - 1e-12]), Verdict::NearTie { position: 0 });
+    assert!(greedy_check(&[9], &[1], &[NEAR_TIE_GAP + 1e-12]).is_failure());
 }
 
 #[test]

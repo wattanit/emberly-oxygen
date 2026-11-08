@@ -2,7 +2,7 @@
 
 A decoder-only LLM inference engine written from scratch in Rust, to understand every part by building it. It starts naive and improves one version at a time; the first target is SmolLM2-135M on CPU. The foundation documents in `docs/` are the source of truth: [Requirements](docs/emberly-oxygen-requirements.md), [Technical Specification](docs/emberly-oxygen-technical-specification.md), and the [roadmap](docs/high-level-roadmap.md) for direction.
 
-Status: release 0.1.1 is built and measured on the branch `release/0.1.1`, awaiting the owner's review and the tag; the last tagged release is 0.1.0, the baseline (`v0.1.0`). 0.1.1 changes one thing: the matrix-vector product keeps 16 independent partial sums, in safe single-threaded Rust, which makes generation 4.3× to 6.2× faster than 0.1.0 and the kernel about 6.5× faster (about 37 GFLOP/s). The engine matches the oracle on every check in every prompt category; the worst logit error on `utf8-split-cjk` is 99% of S-1's limit, which the release note discusses. The kernels contain no `unsafe`, no intrinsics and no threads; the only `unsafe` in the engine is the memory-map call in the model loader. See the [0.1.1 release note](docs/releases/0.1.1.md) for what changed and was measured, and the [0.1.0 release note](docs/releases/0.1.0.md) for the baseline.
+Status: release 0.1.2 is built and measured on the branch `release/0.1.2`, awaiting the owner's review and the tag; the last tagged release is 0.1.1 (`v0.1.1`), which made generation 4.3× to 6.2× faster than the baseline 0.1.0 with 16 independent partial sums in the matrix-vector product. 0.1.2 changes one thing, and not the engine: the correctness gate now judges the engine against a float64 reference instead of PyTorch's float32 output, because 0.1.1 found that the float32 reference itself is up to 7.1e-4 from the true value. Against the float64 reference the engine's worst logit error is 35% of S-1's limit and its worst intermediate error 10% of S-2's, with the thresholds unchanged; the distance to the float32 reference is still reported. Speed is the same as 0.1.1's. The kernels contain no `unsafe`, no intrinsics and no threads; the only `unsafe` in the engine is the memory-map call in the model loader. See the [0.1.2 release note](docs/releases/0.1.2.md), the [0.1.1 release note](docs/releases/0.1.1.md) and the [0.1.0 release note](docs/releases/0.1.0.md) for the baseline.
 
 ## Setup on a new machine
 
@@ -11,7 +11,7 @@ You need:
 - **Rust**, stable, recent enough for edition 2024 (1.85 or later), via [rustup](https://rustup.rs).
 - **[uv](https://docs.astral.sh/uv/)**, which installs the pinned Python (3.12) and the oracle's dependencies itself. No other Python setup is needed.
 - **Network access**, for the model download only. Everything else runs offline.
-- About **1 GB of free disk**: the model files are about 270 MB and the fixtures about 670 MB.
+- About **2.5 GB of free disk**: the model files are about 270 MB and the fixtures about 2 GB (each prompt is stored in float32 and float64).
 
 ```sh
 git clone <repo-url> emberly-oxygen
@@ -24,7 +24,7 @@ uv sync --frozen
 # 2. Download the model into models/smollm2-135m/
 uv run python download.py
 
-# 3. Generate the expected outputs into fixtures/smollm2-135m/ (about 35 seconds)
+# 3. Generate the expected outputs into fixtures/smollm2-135m/ (about 100 seconds: float32 and float64)
 uv run python generate.py
 
 # 4. Check the prompt set against the model's tokenizer (optional)
@@ -47,7 +47,7 @@ Run them from `oracle/` with `uv run python <script>`. They find the repository 
 | Script | Arguments | What it does |
 | --- | --- | --- |
 | `download.py` | none | Fetches `config.json`, `model.safetensors` and `tokenizer.json` of `HuggingFaceTB/SmolLM2-135M` at the pinned commit into `models/smollm2-135m/`. Checks the commit and file sizes. Safe to re-run: files already present are not downloaded again. The download is anonymous, so a stale Hugging Face token on the machine does not matter. |
-| `generate.py` | `--out DIR` (optional) | Runs the model through Hugging Face `transformers` in float32 on CPU and writes one safetensors file per prompt plus `manifest.json`. Without `--out` it writes to `fixtures/smollm2-135m/`. Needs the model from `download.py`. |
+| `generate.py` | `--out DIR` (optional) | Runs the model through Hugging Face `transformers` on CPU twice, in float64 (the reference the correctness checks judge by; RMSNorm and softmax are forced to float64, the rotary tables stay as the library makes them) and in float32 (the library's default, reported against), and writes two safetensors files per prompt (`<id>.safetensors`, `<id>.f64.safetensors`) plus `manifest.json`. Without `--out` it writes to `fixtures/smollm2-135m/`. Needs the model from `download.py`. |
 | `validate_prompts.py` | none | Prints token counts per prompt and fails if `oracle/prompts.json` breaks a category rule. |
 | `tokenizer_corpus.py` | none | Runs the reference tokenizer over about 4,000 strings (the prompts, edge cases and seeded random mixtures of Thai, white space, contractions, digits and emoji) and writes the expected pre-tokenizer pieces and token IDs, plus the oracle's decoded text for every string, every single token and 4,000 random ID sequences, to `fixtures/smollm2-135m/tokenizer-corpus.json`. The engine's tokenizer tests compare against it. Needs the model from `download.py`. |
 | `unicode_classes.py` | none | Measures which characters the reference treats as letters, numbers and white space, by running every Unicode scalar value through its pre-tokenizer, and writes `crates/oxygen/src/tokenizer/unicode_classes.rs`. That file is committed; re-run the script only after changing the model revision. |
@@ -59,16 +59,18 @@ Run them from `oracle/` with `uv run python <script>`. They find the repository 
 
 - **Prompts:** edit `oracle/prompts.json`, run `validate_prompts.py`, then re-run `generate.py`. Fixtures are not versioned, so regenerate them after any change.
 - **Model revision:** the pinned commit is `REVISION` in `oracle/download.py`. Changing it invalidates every stored fixture.
-- **Another machine's fixtures:** they can differ from yours in the last bits of the reference's own arithmetic, far inside the test tolerances. `manifest.json` records which machine and library versions produced them.
+- **Another machine's fixtures:** the float32 files can differ from yours by the library's own rounding, up to about 7e-4 in logits from the float64 result, which is why the checks judge by the float64 files; those differed by about 2e-6 between thread counts on one machine and have not been compared across machines. `manifest.json` records which machine and library versions produced them.
 
 ## Engine
 
 ```sh
 cargo build                   # debug build
-cargo test                    # every test (optimized, debug assertions on); about 30 s, of which the harness running the 12 prompts in parallel threads takes about 13
+cargo test                    # every test (optimized, debug assertions on); 25 to 30 s, of which the harness running the 12 prompts in parallel threads takes about 13
 cargo test --no-fail-fast     # same, but keeps running other test files after one fails
 cargo build --release         # optimized build; the binary is target/release/emberly-oxygen
 ```
+
+`cargo test --test correctness -- --nocapture` prints the harness's table for a passing run: each category's worst error against the float64 reference (what S-1 to S-4 judge) and, in separate columns labelled as reported only, against the float32 reference.
 
 The correctness harness never downloads files and never runs Python: if `models/` or `fixtures/` is missing, it fails and names the command that creates it.
 

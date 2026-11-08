@@ -19,6 +19,7 @@ fn results(prompt: &str, category: &str, verdicts: [Verdict; Check::ALL.len()]) 
             check,
             verdict,
             max_error: matches!(check, Check::Logits).then_some(2.5e-4),
+            f32_error: None,
         })
         .collect()
 }
@@ -127,4 +128,29 @@ fn the_measured_error_is_printed_per_category() {
     let text = squeeze(&render(&all).text);
     assert!(text.contains("english 1/1 pass 2.5e-4 -"), "{text}");
     assert!(text.contains("thai 1/1 pass 7.5e-4 3e-6"), "{text}");
+}
+
+// FR-5: the f32 distance is printed under its own label and fails nothing, even
+// above S-1's limit, while the judged error stays the one the verdict used.
+#[test]
+fn fr5_the_f32_distance_is_labelled_reported_and_judges_nothing() {
+    let mut all = results("a1", "english", passing());
+    for r in &mut all {
+        if r.check == Check::Logits {
+            r.f32_error = Some(7.1e-3);
+        }
+        if r.check == Check::Intermediates {
+            r.f32_error = Some(4e-4);
+        }
+    }
+    let report = render(&all);
+    assert!(report.failed.is_empty(), "an f32 distance over the limits does not fail the category");
+    assert!(report.text.contains("largest logit error: 2.5e-4"), "{}", report.text);
+    assert!(
+        report.text.contains("largest logit error against the f32 reference (reported, never judged): 7.1e-3"),
+        "{}",
+        report.text
+    );
+    let text = squeeze(&report.text);
+    assert!(text.contains("english 1/1 pass 2.5e-4 - | 7.1e-3 4e-4"), "{text}");
 }

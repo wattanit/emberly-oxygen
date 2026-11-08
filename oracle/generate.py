@@ -1,14 +1,28 @@
 """Generate the expected outputs (fixtures) for every prompt (Spec §10).
 
-Runs the model through Hugging Face transformers in float32 on CPU with eager
-attention, and stores per prompt: token IDs, logits at every position, input
-embeddings, the output of every decoder layer, the final-norm output, and a
-greedy continuation produced by this script's own argmax loop.
+Runs the model through Hugging Face transformers on CPU with eager attention,
+twice: in float64, which is the reference the engine is judged against
+(Requirements S-1 to S-4), and in float32, the library's default precision,
+which the harness reports against but does not judge by. Both runs load the
+same published weights. Per prompt and per run it stores token IDs, logits at
+every position, input embeddings, the output of every decoder layer, the
+final-norm output, and a greedy continuation produced by this script's own
+argmax loop. The float32 files are `<id>.safetensors`; the float64 files are
+`<id>.f64.safetensors`, kept in 64-bit, and their manifest fields start `f64_`.
+
+In the float64 run, RMSNorm and the attention softmax are forced to float64 (the
+library computes both in float32 inside any model); the rotary tables are left as
+the library makes them, because they are the model as published. The float32 run
+is the unmodified library. See `float64_pure_ops`.
+
+The float64 run is slower and writes about twice the bytes: expect minutes, and
+fixtures of about 2 GB.
 
 usage: uv run python generate.py [--out DIR]
 """
 
 import argparse
+import contextlib
 import datetime
 import json
 import platform
@@ -18,8 +32,10 @@ from importlib.metadata import version
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
 from safetensors.torch import save_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers.models.llama import modeling_llama
 
 from download import MODEL_DIR, MODEL_ID, REPO, REVISION
 
@@ -71,21 +87,59 @@ def forward_all(model, ids: torch.Tensor, layer_outputs: list) -> dict:
     }
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--out", type=Path, default=ROOT / "fixtures" / MODEL_ID)
-    out_dir = parser.parse_args().out
-    if not MODEL_DIR.joinpath("model.safetensors").is_file():
-        print(f"error: model files missing in {MODEL_DIR}; run `uv run python download.py`", file=sys.stderr)
-        return 1
-    out_dir.mkdir(parents=True, exist_ok=True)
+@contextlib.contextmanager
+def float64_pure_ops():
+    """Make RMSNorm and the attention softmax compute in the model's own dtype.
 
-    tok = AutoTokenizer.from_pretrained(MODEL_DIR)
+    The pinned library casts RMSNorm's input to float32 and the softmax to
+    float32 even in a float64 model, which made its "float64" output depend on
+    the thread count by up to 1.7e-5 in logits (plan 0.1.2, task 9.4). The
+    originals are restored on exit, so the float32 run is the plain library.
+    The rotary tables stay float32, as published (Spec section 10).
+    """
+    original_forward = modeling_llama.LlamaRMSNorm.forward
+    original_softmax = F.softmax
+
+    def rms_norm(self, hidden_states):
+        variance = hidden_states.pow(2).mean(-1, keepdim=True)
+        return self.weight * (hidden_states * torch.rsqrt(variance + self.variance_epsilon))
+
+    def softmax(x, dim=None, _stacklevel=3, dtype=None):
+        return original_softmax(x, dim=dim, dtype=None)
+
+    modeling_llama.LlamaRMSNorm.forward = rms_norm
+    F.softmax = softmax
+    try:
+        yield
+    finally:
+        modeling_llama.LlamaRMSNorm.forward = original_forward
+        F.softmax = original_softmax
+
+
+def check_float64_pure_ops() -> None:
+    """Fail loudly if the replacement is not active (Spec section 10).
+
+    The input differs from 1.0 by 1e-9, which float32 cannot hold, so a
+    normalization that passed through float32 would miss the float64 result
+    by about 1e-9, far over the 1e-14 allowed.
+    """
+    x = torch.tensor([[1.0 + 1e-9, 2.0, 3.0, 4.0]], dtype=torch.float64)
+    norm = modeling_llama.LlamaRMSNorm(4, eps=1e-5).double()
+    expected = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-5)
+    assert (norm(x) - expected).abs().max().item() < 1e-14, "RMSNorm is not computing in float64"
+    assert F.softmax(x, dim=-1, dtype=torch.float32).dtype == torch.float64, "softmax is still float32"
+
+
+def run_precision(dtype: torch.dtype, prompts: list, tok, out_dir: Path, suffix: str) -> dict:
+    """Run every prompt through the model in `dtype`; write one tensor file per prompt.
+
+    Returns, per prompt ID, the fields the manifest records for this run.
+    """
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_DIR, dtype=torch.float32, attn_implementation="eager"
+        MODEL_DIR, dtype=dtype, attn_implementation="eager"
     ).eval()
     # No device_map is given, so the model stays on CPU; check rather than assume.
-    assert next(model.parameters()).dtype == torch.float32
+    assert next(model.parameters()).dtype == dtype
     assert next(model.parameters()).device.type == "cpu"
 
     layer_outputs: list[torch.Tensor] = []
@@ -95,11 +149,12 @@ def main() -> int:
         )
     eos = model.config.eos_token_id
 
-    records = []
-    for p in json.loads((Path(__file__).parent / "prompts.json").read_text()):
+    runs = {}
+    for p in prompts:
         ids = torch.tensor([tok(p["text"])["input_ids"]])
         with torch.no_grad():
             tensors = forward_all(model, ids, layer_outputs)
+            assert tensors["logits"].dtype == dtype
             prompt_gaps = top2_gaps(tensors["logits"])
 
             # Greedy continuation by our own argmax loop (not generate()), so the
@@ -118,25 +173,75 @@ def main() -> int:
                 seq = torch.cat([seq, torch.tensor([[token]])], dim=1)
                 last = model(seq, use_cache=False).logits[0, -1:]
 
-        file = f"{p['id']}.safetensors"
+        file = f"{p['id']}{suffix}.safetensors"
         save_file({k: v.contiguous() for k, v in tensors.items()}, out_dir / file)
+        runs[p["id"]] = {
+            "ids": ids[0].tolist(),
+            "prompt_top2_gaps": prompt_gaps,
+            "continuation_ids": continuation,
+            "continuation_text": tok.decode(continuation),
+            "continuation_top2_gaps": gaps,
+            "stopped_at_eos": hit_eos,
+            "tensors_file": file,
+        }
+        print(
+            f"{str(dtype).removeprefix('torch.'):<8} {p['id']:<18} positions={ids.shape[1]:>4} "
+            f"continuation={len(continuation)} eos={hit_eos}"
+        )
+    return {"runs": runs, "config": model.config}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--out", type=Path, default=ROOT / "fixtures" / MODEL_ID)
+    out_dir = parser.parse_args().out
+    if not MODEL_DIR.joinpath("model.safetensors").is_file():
+        print(f"error: model files missing in {MODEL_DIR}; run `uv run python download.py`", file=sys.stderr)
+        return 1
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    tok = AutoTokenizer.from_pretrained(MODEL_DIR)
+    prompts = json.loads((Path(__file__).parent / "prompts.json").read_text())
+
+    f32 = run_precision(torch.float32, prompts, tok, out_dir, "")
+    with float64_pure_ops():
+        check_float64_pure_ops()
+        f64 = run_precision(torch.float64, prompts, tok, out_dir, ".f64")
+    # The library is the stock one again: the same check must now fail on the plain RMSNorm.
+    try:
+        check_float64_pure_ops()
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("the float64 replacement was not undone")
+
+    records = []
+    for p in prompts:
+        a, b = f32["runs"][p["id"]], f64["runs"][p["id"]]
+        # Same tokenizer and prompt, so the IDs agree; the check costs nothing.
+        assert a["ids"] == b["ids"]
         records.append(
             {
                 "id": p["id"],
                 "category": p["category"],
                 "text": p["text"],
-                "token_ids": ids[0].tolist(),
-                "prompt_top2_gaps": prompt_gaps,
-                "continuation_ids": continuation,
-                "continuation_text": tok.decode(continuation),
-                "continuation_top2_gaps": gaps,
-                "stopped_at_eos": hit_eos,
-                "tensors_file": file,
+                "token_ids": a["ids"],
+                "prompt_top2_gaps": a["prompt_top2_gaps"],
+                "continuation_ids": a["continuation_ids"],
+                "continuation_text": a["continuation_text"],
+                "continuation_top2_gaps": a["continuation_top2_gaps"],
+                "stopped_at_eos": a["stopped_at_eos"],
+                "tensors_file": a["tensors_file"],
+                "f64_tensors_file": b["tensors_file"],
+                "f64_prompt_top2_gaps": b["prompt_top2_gaps"],
+                "f64_continuation_ids": b["continuation_ids"],
+                "f64_continuation_text": b["continuation_text"],
+                "f64_continuation_top2_gaps": b["continuation_top2_gaps"],
+                "f64_stopped_at_eos": b["stopped_at_eos"],
             }
         )
-        print(f"{p['id']:<18} positions={ids.shape[1]:>4} continuation={len(continuation)} eos={hit_eos}")
 
-    config = model.config
+    config = f32["config"]
     manifest = {
         "model_id": MODEL_ID,
         "repo": REPO,
@@ -150,13 +255,17 @@ def main() -> int:
             "layer_outputs": "[layers, positions, hidden], the raw output of each decoder layer",
             "final_norm_output": "[positions, hidden], after the final RMSNorm",
         },
+        "precisions": {
+            "tensors_file": "float32, the library's default precision; reported against, never judged by",
+            "f64_*": "float64, stored in 64-bit; the reference S-1 to S-4 are judged against",
+        },
         "dims": {
             "layers": config.num_hidden_layers,
             "hidden": config.hidden_size,
             "vocab": config.vocab_size,
         },
         "continuation_tokens": CONTINUATION_TOKENS,
-        "eos_token_id": eos,
+        "eos_token_id": config.eos_token_id,
         "prompts": records,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")

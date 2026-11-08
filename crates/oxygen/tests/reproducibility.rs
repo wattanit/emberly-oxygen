@@ -46,7 +46,7 @@ fn runs_and_loads_give_the_same_output() {
         let again = prompt_logits(model, &prompt.token_ids);
         assert_eq!(again.len(), logits.len());
         let max_diff = logits.iter().zip(&again).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
-        assert!(max_diff <= LOGIT_TOLERANCE, "{name}: logits differ by {max_diff:e}, more than S-1 allows");
+        assert!(f64::from(max_diff) <= LOGIT_TOLERANCE, "{name}: logits differ by {max_diff:e}, more than S-1 allows");
         let identical = logits.iter().zip(&again).all(|(a, b)| a.to_bits() == b.to_bits());
         println!(
             "{name}: {} logits over {} positions, largest difference {max_diff:e}, bit-identical: {identical}",
