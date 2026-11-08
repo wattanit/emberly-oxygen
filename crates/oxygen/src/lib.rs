@@ -22,7 +22,7 @@ mod test_log;
 mod tokenizer;
 mod weights;
 
-pub use chat::{render, Message, Role};
+pub use chat::{render, Chat, Message, Role};
 pub use config::Config;
 pub use error::Error;
 #[cfg(feature = "negative-controls")]

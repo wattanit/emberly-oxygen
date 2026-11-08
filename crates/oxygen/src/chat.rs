@@ -1,4 +1,10 @@
-//! The chat template and conversation messages (FR-33, Spec §8).
+//! The chat template and conversations (FR-33 to FR-37, Spec §8). A conversation
+//! is kept as text and rendered again each turn; the arithmetic is the
+//! generation path's, this module only builds its prompts.
+
+use crate::generate::run;
+use crate::rng::Rng;
+use crate::{Error, Generation, Model, Sampling, Tokenizer};
 
 /// Who wrote a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +66,94 @@ pub fn render(messages: &[Message], add_generation_prompt: bool) -> String {
 /// The system message the model's template writes when a conversation has none.
 const DEFAULT_SYSTEM_MESSAGE: &str =
     "<|im_start|>system\nYou are a helpful AI assistant named SmolLM, trained by Hugging Face<|im_end|>\n";
+
+/// A conversation with the instruct model (FR-33 to FR-37): its messages, the
+/// settings replies are drawn with, and one generator for the whole conversation.
+pub struct Chat<'a> {
+    model: &'a Model,
+    tokenizer: &'a Tokenizer,
+    messages: Vec<Message>,
+    sampling: Sampling,
+    max_new_tokens: usize,
+    seed: Option<u64>,
+    rng: Option<Rng>,
+}
+
+impl<'a> Chat<'a> {
+    /// Starts a conversation, with `system` as its first message when given
+    /// (otherwise the template adds its default, FR-33). The settings are
+    /// validated, and sampling needs a seed, exactly as for `generate_with`
+    /// (FR-30, FR-28); one generator is built from it here and serves every turn.
+    pub fn new(
+        model: &'a Model,
+        tokenizer: &'a Tokenizer,
+        system: Option<String>,
+        sampling: &Sampling,
+        max_new_tokens: usize,
+    ) -> Result<Chat<'a>, Error> {
+        sampling.validate()?;
+        let seed = if sampling.temperature != 0.0 {
+            Some(sampling.seed.ok_or_else(|| {
+                Error::Rejected("sampling needs a seed so that the run can be replayed: set one".into())
+            })?)
+        } else {
+            if sampling.top_k != 0 || sampling.top_p != 1.0 || sampling.repetition_penalty != 1.0 {
+                tracing::warn!("temperature 0 is greedy selection: top-k, top-p and the repetition penalty are ignored");
+            }
+            None
+        };
+        Ok(Chat {
+            model,
+            tokenizer,
+            messages: system.map(|text| Message::new(Role::System, text)).into_iter().collect(),
+            sampling: *sampling,
+            max_new_tokens,
+            seed,
+            rng: seed.map(Rng::new),
+        })
+    }
+
+    /// The messages so far, which the next turn renders again (FR-35).
+    pub fn messages(&self) -> &[Message] {
+        &self.messages
+    }
+
+    /// The seed the replies are drawn with, `None` when they are greedy (FR-28).
+    pub fn seed(&self) -> Option<u64> {
+        self.seed
+    }
+
+    /// One turn: renders the messages and `user` with the generation prompt,
+    /// generates the reply, streaming its text to `on_text`, and on success adds
+    /// the user message and a reply message holding the text streamed (FR-35).
+    /// On any error, a request rejected before computation included (FR-36), the
+    /// conversation is as it was.
+    pub fn turn(&mut self, user: &str, on_text: &mut dyn FnMut(&str)) -> Result<Generation, Error> {
+        let mut candidate = self.messages.clone();
+        candidate.push(Message::new(Role::User, user));
+        let prompt = render(&candidate, true);
+        let mut reply = String::new();
+        let generation = {
+            let _generate = tracing::info_span!("generate").entered();
+            run(
+                self.model,
+                self.tokenizer,
+                &prompt,
+                self.max_new_tokens,
+                &self.sampling,
+                self.rng.as_mut(),
+                self.seed,
+                &mut |text| {
+                    reply.push_str(text);
+                    on_text(text);
+                },
+            )?
+        };
+        candidate.push(Message::new(Role::Assistant, reply));
+        self.messages = candidate;
+        Ok(generation)
+    }
+}
 
 #[cfg(test)]
 mod tests {

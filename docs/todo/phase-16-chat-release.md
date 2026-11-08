@@ -14,7 +14,7 @@ Dependencies: none new. Out of scope: reusing the cache across turns, multi-line
 
 ## 16.2 Chat and turn (FR-34, FR-35, FR-29)
 
-- [ ] Tests first on the real instruct model; then `Chat`.
+- [x] Tests first on the real instruct model; then `Chat`.
 
 ## 16.3 Context limit (FR-36, FR-18)
 
