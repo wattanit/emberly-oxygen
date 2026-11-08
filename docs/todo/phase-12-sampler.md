@@ -15,23 +15,23 @@ Dependencies: none new. Out of scope: wiring into `generate`, the CLI (Phase 13)
 
 ## 12.1 Generator (HC-1, FR-28)
 
-- [ ] Compile the authors' C reference in the scratchpad, record outputs for known seeds. Tests first, then `rng.rs`.
+- [x] Compile the authors' C reference in the scratchpad, record outputs for known seeds. Tests first, then `rng.rs`.
 
 ## 12.2 Settings and validation (FR-30)
 
-- [ ] Tests first: each invalid value rejected naming the option; boundary values accepted. Then `Sampling`.
+- [x] Tests first: each invalid value rejected naming the option; boundary values accepted. Then `Sampling`.
 
 ## 12.3 The controls (FR-26, FR-27)
 
-- [ ] Tests first on hand-computed cases (penalty sign rule, tie at k, top-p boundary, one token kept). Then the controls.
+- [x] Tests first on hand-computed cases (penalty sign rule, tie at k, top-p boundary, one token kept). Then the controls.
 
 ## 12.4 Distribution function (FR-26)
 
-- [ ] Tests first, including that swapping the order changes a combined result. Then the function.
+- [x] Tests first, including that swapping the order changes a combined result. Then the function.
 
 ## 12.5 S-9 in the harness (FR-5, S-9, S-5)
 
-- [ ] Tests first with a hand-made stored distribution. Then the check, the table column and the margin reporting.
+- [x] Tests first with a hand-made stored distribution. Then the check, the table column and the margin reporting.
 
 ## 12.6 Negative controls (HC-4, S-9)
 

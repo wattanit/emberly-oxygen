@@ -5,7 +5,7 @@
 use std::fmt::Write;
 
 use super::compare::Verdict;
-use super::harness::{Check, CheckResult};
+use super::harness::{Check, CheckResult, SamplingResult};
 
 pub struct Report {
     pub text: String,
@@ -33,6 +33,14 @@ fn distinct<'a>(items: impl Iterator<Item = &'a str>) -> Vec<&'a str> {
 }
 
 pub fn render(results: &[CheckResult]) -> Report {
+    render_with_sampling(results, &[])
+}
+
+/// The table, with S-9's results beside it: per category the worst probability
+/// error for each setting, the smallest cutoff margins (so a cutoff the engine's
+/// rounding could cross is visible), and each failing setting named. A category
+/// with a failing setting fails (S-5).
+pub fn render_with_sampling(results: &[CheckResult], sampling: &[SamplingResult]) -> Report {
     let mut text = String::new();
     let mut failed = Vec::new();
 
@@ -110,6 +118,48 @@ pub fn render(results: &[CheckResult]) -> Report {
             }
         }
 
+        let of_model: Vec<&SamplingResult> = sampling.iter().filter(|r| r.model_id == model).collect();
+        if !of_model.is_empty() {
+            let settings = distinct(of_model.iter().map(|r| r.setting.as_str()));
+            writeln!(text, "sampling distributions (S-9), worst probability error against the stored distribution:").unwrap();
+            write!(text, "{:<12}", "category").unwrap();
+            for setting in &settings {
+                write!(text, " {setting:<16}").unwrap();
+            }
+            text.push('\n');
+            for category in distinct(of_model.iter().map(|r| r.category.as_str())) {
+                write!(text, "{category:<12}").unwrap();
+                for setting in &settings {
+                    let worst = of_model
+                        .iter()
+                        .filter(|r| r.category == category && r.setting == *setting)
+                        .map(|r| r.max_error)
+                        .fold(None, |m: Option<f64>, e| Some(m.map_or(e, |m| m.max(e))));
+                    write!(text, " {:<16}", worst.map_or("-".to_string(), |e| format!("{e:e}"))).unwrap();
+                }
+                text.push('\n');
+                let category_failed = of_model.iter().any(|r| r.category == category && r.verdict.is_failure());
+                let key = (model.to_string(), category.to_string());
+                if category_failed && !failed.contains(&key) {
+                    failed.push(key);
+                }
+            }
+            // The smallest margin to each cutoff: a cutoff nearer than the engine's rounding can flip.
+            let smallest = |margin: fn(&SamplingResult) -> Option<f64>| {
+                of_model
+                    .iter()
+                    .filter_map(|r| margin(r).map(|m| (m, *r)))
+                    .min_by(|a, b| a.0.total_cmp(&b.0))
+            };
+            if let Some((m, r)) = smallest(|r| r.top_k_margin) {
+                writeln!(text, "smallest top-k cutoff margin: {m:e} logits ({} / {})", r.prompt, r.setting).unwrap();
+            }
+            if let Some((m, r)) = smallest(|r| r.top_p_margin) {
+                writeln!(text, "smallest top-p cutoff margin: {m:e} probability ({} / {})", r.prompt, r.setting).unwrap();
+            }
+            text.push('\n');
+        }
+
         let failures: Vec<_> = rows.iter().filter(|r| r.verdict.is_failure()).collect();
         if !failures.is_empty() {
             writeln!(text, "\nfailures ({}):", failures.len()).unwrap();
@@ -118,6 +168,11 @@ pub fn render(results: &[CheckResult]) -> Report {
                 let at = position.map_or(String::new(), |p| format!("first diverges at position {p}: "));
                 writeln!(text, "  {} / {}: {at}{message}", r.prompt, r.check.name()).unwrap();
             }
+        }
+        for r in of_model.iter().filter(|r| r.verdict.is_failure()) {
+            let Verdict::Fail { position, message } = &r.verdict else { continue };
+            let at = position.map_or(String::new(), |t| format!("largest difference at token {t}: "));
+            writeln!(text, "  {} / sampling {}: {at}{message}", r.prompt, r.setting).unwrap();
         }
         let ties: Vec<_> = rows.iter().filter(|r| matches!(r.verdict, Verdict::NearTie { .. })).collect();
         for r in ties {
