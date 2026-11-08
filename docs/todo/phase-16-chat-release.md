@@ -30,7 +30,7 @@ Dependencies: none new. Out of scope: reusing the cache across turns, multi-line
 
 ## 16.6 Logging (S-8, FR-23)
 
-- [ ] `-vv` per-turn events; output identical at every level.
+- [x] `-vv` per-turn events; output identical at every level.
 
 ## 16.7 Full gate (HC-4)
 
