@@ -49,10 +49,10 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**. Po
 
 ## 10.6 The full gate (HC-4, S-1 to S-6, S-8)
 
-- [ ] `cargo test --no-fail-fast`, whole summary read; record the time against 28 s.
-- [ ] Record, per category, the worst logit and intermediate error against the f64 reference and against the f32 one for the 16-sum engine, and the margin to each limit, in plan §4.
-- [ ] Optional, scratchpad only, for the release note: the same table with the engine at `LANES = 1` (0.1.0's order) and 8, so the three kernels' distances to the truth sit side by side. The constant is restored and `git status` is clean afterwards.
-- [ ] Reproducibility (S-6) and output at every verbosity level (S-8) still hold.
+- [x] `cargo test --no-fail-fast`, whole summary read; record the time against 28 s.
+- [x] Record, per category, the worst logit and intermediate error against the f64 reference and against the f32 one for the 16-sum engine, and the margin to each limit, in plan §4.
+- [x] Optional, scratchpad only, for the release note: the same table with the engine at `LANES = 1` (0.1.0's order) and 8, so the three kernels' distances to the truth sit side by side. The constant is restored and `git status` is clean afterwards.
+- [x] Reproducibility (S-6) and output at every verbosity level (S-8) still hold.
 
 ## 10.7 The owner decides the thresholds (S-1 to S-4, Requirements §13)
 

@@ -90,8 +90,30 @@ Filled in during the phases. Nothing here is tuned; thresholds change only by th
   The worst is 2.18e-6, 0.22% of S-1 and under the 1e-5 bar; it is 8 times smaller than the stock run's. Same thread count reproduces exactly. What remains on the thai and long prompts, the only ones with more than about 100 positions where it appears, is not explained; the rotary tables, which stay in float32, are one candidate, and nothing was done to find out. The start-up check was shown to fail without the replacement.
 - The difference between the f32 fixtures and the reference as released (task 9.5; worst logit absolute, worst intermediate relative; scratchpad `noise_and_diff.py diff`): english 3.28e-4 and 3.44e-5, thai 3.93e-4 and 1.64e-5, code 3.08e-4 and 4.28e-5, utf8-split **6.39e-4** and 2.83e-5, long 3.28e-4 and 2.99e-5. The f32 and f64 greedy continuations are identical for all 12 prompts. Against the stock library f64 run the same figures were as in the next entry.
 - For the record, the difference between the f32 and the stock library f64 fixtures (task 9.5, first attempt; worst logit absolute, worst intermediate relative): english 2.88e-4 and 3.45e-5, thai 3.34e-4 and 1.61e-5, code 3.54e-4 and 4.27e-5, utf8-split **7.13e-4** and 2.81e-5, long 2.92e-4 and 2.96e-5. 0.1.1's diagnostic gave 7.12e-4 for the same prompt, so it reappears. Against the patched variant (RMSNorm and softmax in f64) the f32 fixtures differ by 3.08e-4, 3.28e-4, 3.28e-4, 3.93e-4 and 6.39e-4 in logits (code, english, long, thai, utf8-split). The f32 and stock f64 greedy continuations are identical for all 12 prompts, so no near-tie arises in them.
-- Worst logit and intermediate error of the 16-sum engine per category, against the f64 and f32 references, with the margin to each limit (task 10.6). 0.1.1's figures against f32: english 3.14e-4 and 3.66e-5, thai 2.79e-4 and 1.51e-5, code 3.18e-4 and 4.02e-5, utf8-split 9.90e-4 and 2.70e-5, long 3.18e-4 and 2.99e-5. *(to fill)*
-- Test suite time with the larger fixtures, against 28 s (task 10.6). *(to fill)*
+- **The 16-sum engine against the f64 reference (task 10.6; the gate, every prompt in every category passes, thresholds unchanged).** Worst logit error (S-1, limit 1e-3) and worst relative intermediate error (S-2, limit 1e-4), the share of the limit in brackets, with the distance to the f32 reference beside them (reported, not judged):
+
+  | Category | Logit vs f64 | Intermediate vs f64 | Logit vs f32 | Intermediate vs f32 |
+  | --- | --- | --- | --- | --- |
+  | english | 2.45e-4 (25%) | 6.13e-6 (6%) | 3.14e-4 | 3.66e-5 |
+  | thai | 1.22e-4 (12%) | 9.97e-6 (10%) | 2.79e-4 | 1.51e-5 |
+  | code | 1.23e-4 (12%) | 5.24e-6 (5%) | 3.18e-4 | 4.02e-5 |
+  | utf8-split | **3.50e-4 (35%)** | 7.80e-6 (8%) | 9.90e-4 | 2.70e-5 |
+  | long | 2.45e-4 (25%) | 5.25e-6 (5%) | 3.18e-4 | 2.99e-5 |
+
+  Worst logit error 3.50e-4, 35% of S-1; worst intermediate error 9.97e-6, 10% of S-2. The "vs f32" columns reproduce 0.1.1's table digit for digit (9.90e-4 on `utf8-split`, 99% of S-1 against the f32 reference).
+- **The same table for three kernels against the f64 reference** (task 10.6, scratchpad only: `LANES` changed to 1 and to 8, run, restored, `git status` clean; 1 sum is 0.1.0's order, and its and the 8-sum run's "vs f32" columns reproduced 0.1.0's and 0.1.1's recorded figures). Worst logit and worst relative intermediate error per category:
+
+  | Category | 1 sum (0.1.0's order) | 8 sums | 16 sums (released) |
+  | --- | --- | --- | --- |
+  | english | 4.58e-4, 3.40e-5 | 2.56e-4, 9.19e-6 | 2.45e-4, 6.13e-6 |
+  | thai | 3.14e-4, 1.45e-5 | 2.67e-4, 6.97e-6 | 1.22e-4, 9.97e-6 |
+  | code | 3.10e-4, 4.37e-5 | 1.50e-4, 4.64e-6 | 1.23e-4, 5.24e-6 |
+  | utf8-split | 4.50e-4, 2.37e-5 | 3.20e-4, 1.32e-5 | 3.50e-4, 7.80e-6 |
+  | long | 4.58e-4, 2.46e-5 | 2.56e-4, 1.04e-5 | 2.45e-4, 5.25e-6 |
+  | worst | **4.58e-4**, **4.37e-5** | 3.20e-4, 1.32e-5 | 3.50e-4, 9.97e-6 |
+
+  Against the f64 reference the partial sums are closer to the truth than 0.1.0's index order, not further: the worst intermediate error falls 4.4× (4.37e-5, 44% of S-2, to 9.97e-6, 10%) and the worst logit error falls from 4.58e-4 to 3.50e-4. The 8-sum kernel is slightly better than 16 on the worst logit (3.20e-4) and on `utf8-split`; the differences between 8 and 16 are within what the sweep did not try to resolve. This is the finding of 0.1.1 shown directly: against the f32 reference the same engines looked 1.4× to 8× worse.
+- Test suite time with the larger fixtures (task 10.6): `time cargo test --no-fail-fast` 23.8 s wall with the build already compiled (100 s user, 230 tests; the correctness test 13.4 s against 12.7 s a task earlier, so reading about 2 GB of fixtures instead of 0.7 GB cost under a second). 0.1.1 recorded 28 s for 214 tests; how that figure was timed is not recorded here, so no speed-up is claimed.
 - Workloads and kernel shapes against 0.1.1's rows (task 10.10). *(to fill)*
 
 ## 5. Upstream feedback
