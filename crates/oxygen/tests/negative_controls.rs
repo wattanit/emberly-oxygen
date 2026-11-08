@@ -31,8 +31,9 @@ fn run(fault: Option<Fault>) -> Vec<CheckResult> {
     }
     let tokenizer = Tokenizer::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
     let prompt = fixtures.manifest.prompts.iter().find(|p| p.id == PROMPT).expect("prompt missing");
-    let reference = fixtures.load_tensors(prompt).unwrap_or_else(|e| panic!("{e}"));
-    check_prompt(&fixtures, prompt, &reference, &tokenizer, &model)
+    let reference = fixtures.load_reference(prompt).unwrap_or_else(|e| panic!("{e}"));
+    let f32_reference = fixtures.load_tensors(prompt).unwrap_or_else(|e| panic!("{e}"));
+    check_prompt(&fixtures, prompt, &reference, &f32_reference, &tokenizer, &model)
 }
 
 fn result(results: &[CheckResult], check: Check) -> &CheckResult {

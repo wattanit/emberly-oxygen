@@ -5,9 +5,9 @@
 use emberly_oxygen::{generate, Capture, Model, Tokenizer};
 
 use super::compare::{
-    greedy_check, intermediate_error, logit_error, top1_check, Numeric, Verdict,
+    greedy_check, intermediate_error, logit_error, top1_check, Numeric, Reference, Verdict,
 };
-use super::fixtures::{Fixtures, Prompt, PromptTensors};
+use super::fixtures::{Fixtures, Prompt, PromptTensors, ReferenceTensors, Tensors};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Check {
@@ -60,8 +60,12 @@ pub struct CheckResult {
     pub category: String,
     pub check: Check,
     pub verdict: Verdict,
-    /// Worst error measured, for the checks that measure one.
-    pub max_error: Option<f32>,
+    /// Worst error against the 64-bit reference, for the checks that measure one
+    /// (S-1, S-2). This is the figure the verdict is judged by.
+    pub max_error: Option<f64>,
+    /// The same error against the 32-bit run, reported beside it and never
+    /// judged (FR-5): no verdict reads this field.
+    pub f32_error: Option<f64>,
 }
 
 /// What the engine produced for one prompt, fed one token at a time.
@@ -96,19 +100,19 @@ pub fn run_engine(model: &Model, ids: &[u32]) -> Result<EngineRun, String> {
 }
 
 fn fail(message: impl Into<String>) -> Numeric {
-    Numeric { max_error: f32::INFINITY, verdict: Verdict::Fail { position: None, message: message.into() } }
+    Numeric { max_error: f64::INFINITY, verdict: Verdict::Fail { position: None, message: message.into() } }
 }
 
 /// S-2 over every stored intermediate, in order: embeddings, layers 0 to N-1,
 /// then the final-norm output. The first tensor over the threshold is the
 /// verdict, so a failure names the first diverging layer (FR-6).
-pub fn check_intermediates(run: &EngineRun, reference: &PromptTensors, layers: usize, hidden: usize) -> Numeric {
+pub fn check_intermediates<R: Reference>(run: &EngineRun, reference: &Tensors<R>, layers: usize, hidden: usize) -> Numeric {
     if run.layers.len() != layers {
         return fail(format!("engine captured {} layers, reference has {layers}", run.layers.len()));
     }
-    let mut max_error = 0f32;
+    let mut max_error = 0f64;
     let mut first_bad: Option<Verdict> = None;
-    let mut tensors: Vec<(String, &[f32], &[f32])> = vec![("embeddings".into(), &run.embeddings, &reference.embeddings.data)];
+    let mut tensors: Vec<(String, &[f32], &[R])> = vec![("embeddings".into(), &run.embeddings, &reference.embeddings.data)];
     let per_layer = reference.layer_outputs.data.len() / layers.max(1);
     for (i, engine) in run.layers.iter().enumerate() {
         let reference = &reference.layer_outputs.data[i * per_layer..(i + 1) * per_layer];
@@ -188,49 +192,63 @@ pub fn streaming_check(tokenizer: &Tokenizer, prompt: &Prompt) -> Verdict {
     Verdict::Pass
 }
 
+/// S-4 against the 64-bit reference's continuation and gaps.
 fn greedy(tokenizer: &Tokenizer, model: &Model, prompt: &Prompt) -> Verdict {
-    let run = generate(model, tokenizer, &prompt.text, prompt.continuation_ids.len(), &mut |_| {});
+    let run = generate(model, tokenizer, &prompt.text, prompt.f64_continuation_ids.len(), &mut |_| {});
     match run {
         Err(e) => Verdict::Fail { position: None, message: e.to_string() },
-        Ok(run) => greedy_check(&run.ids, &prompt.continuation_ids, &prompt.continuation_top2_gaps),
+        Ok(run) => greedy_check(&run.ids, &prompt.f64_continuation_ids, &prompt.f64_continuation_top2_gaps),
     }
 }
 
-/// Runs every check for one prompt.
+/// Runs every check for one prompt. S-1 to S-4 are judged against `reference`,
+/// the 64-bit run; `f32_reference`, the 32-bit run, only supplies the distance
+/// reported beside the errors (FR-5).
 pub fn check_prompt(
     fixtures: &Fixtures,
     prompt: &Prompt,
-    reference: &PromptTensors,
+    reference: &ReferenceTensors,
+    f32_reference: &PromptTensors,
     tokenizer: &Tokenizer,
     model: &Model,
 ) -> Vec<CheckResult> {
     let dims = &fixtures.manifest.dims;
-    let result = |check, verdict, max_error| CheckResult {
+    let result = |check, verdict, max_error, f32_error| CheckResult {
         model_id: fixtures.manifest.model_id.clone(),
         prompt: prompt.id.clone(),
         category: prompt.category.clone(),
         check,
         verdict,
         max_error,
+        f32_error,
     };
     // The forward pass is fed the reference token IDs, so a tokenizer failure
     // does not hide the model's results.
     let run = run_engine(model, &prompt.token_ids);
-    let (logits, top1, inter) = match &run {
+    let (logits, top1, inter, f32_logits, f32_inter) = match &run {
         Ok(run) => (
             logit_error(&run.logits, &reference.logits.data, dims.vocab),
-            top1_check(&run.logits, &reference.logits.data, dims.vocab, &prompt.prompt_top2_gaps),
+            top1_check(&run.logits, &reference.logits.data, dims.vocab, &prompt.f64_prompt_top2_gaps),
             check_intermediates(run, reference, dims.layers, dims.hidden),
+            // Reported, not judged: only the measured error is read from these two.
+            logit_error(&run.logits, &f32_reference.logits.data, dims.vocab).max_error,
+            check_intermediates(run, f32_reference, dims.layers, dims.hidden).max_error,
         ),
-        Err(e) => (fail(e.clone()), Verdict::Fail { position: None, message: e.clone() }, fail(e.clone())),
+        Err(e) => (
+            fail(e.clone()),
+            Verdict::Fail { position: None, message: e.clone() },
+            fail(e.clone()),
+            f64::INFINITY,
+            f64::INFINITY,
+        ),
     };
     vec![
-        result(Check::Encode, encode_check(tokenizer, prompt), None),
-        result(Check::Decode, decode_check(tokenizer, prompt), None),
-        result(Check::Streaming, streaming_check(tokenizer, prompt), None),
-        result(Check::Logits, logits.verdict, Some(logits.max_error)),
-        result(Check::Top1, top1, None),
-        result(Check::Intermediates, inter.verdict, Some(inter.max_error)),
-        result(Check::Greedy, greedy(tokenizer, model, prompt), None),
+        result(Check::Encode, encode_check(tokenizer, prompt), None, None),
+        result(Check::Decode, decode_check(tokenizer, prompt), None, None),
+        result(Check::Streaming, streaming_check(tokenizer, prompt), None, None),
+        result(Check::Logits, logits.verdict, Some(logits.max_error), Some(f32_logits)),
+        result(Check::Top1, top1, None, None),
+        result(Check::Intermediates, inter.verdict, Some(inter.max_error), Some(f32_inter)),
+        result(Check::Greedy, greedy(tokenizer, model, prompt), None, None),
     ]
 }

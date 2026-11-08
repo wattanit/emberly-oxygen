@@ -19,6 +19,7 @@ fn results(prompt: &str, category: &str, verdicts: [Verdict; Check::ALL.len()]) 
             check,
             verdict,
             max_error: matches!(check, Check::Logits).then_some(2.5e-4),
+            f32_error: None,
         })
         .collect()
 }

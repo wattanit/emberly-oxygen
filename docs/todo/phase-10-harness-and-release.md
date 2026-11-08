@@ -33,8 +33,8 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**. Po
 
 ## 10.3 Judge against an f64 reference (S-1 to S-4, FR-2)
 
-- [ ] Apply decision point 3. **Tests first**, in `comparison.rs`, seen to fail against the old functions: a reference value that f32 cannot represent, where narrowing the reference gives a different error than measuring against the unrounded value; the near-tie rule reads f64 gaps; the greedy comparison reads an f64 continuation and stops at an f64 near-tie.
-- [ ] The comparison functions take the f64 reference and widen the engine's f32 values before subtracting. `LOGIT_TOLERANCE`, `INTERMEDIATE_TOLERANCE` and `NEAR_TIE_GAP` keep their values.
+- [x] Apply decision point 3. **Tests first**, in `comparison.rs`, seen to fail against the old functions: a reference value that f32 cannot represent, where narrowing the reference gives a different error than measuring against the unrounded value; the near-tie rule reads f64 gaps; the greedy comparison reads an f64 continuation and stops at an f64 near-tie.
+- [x] The comparison functions take the f64 reference and widen the engine's f32 values before subtracting. `LOGIT_TOLERANCE`, `INTERMEDIATE_TOLERANCE` and `NEAR_TIE_GAP` keep their values (now f64 constants of the same decimals, so "an f32 value exactly at the tolerance" can no longer be built and the boundary test is just under and just over). *The shared `common` harness module is compiled by every test file, so the harness's wiring to the f64 fixtures had to land in this same commit; 10.4 then adds the report and its tests.*
 
 ## 10.4 Wire the gate and report the f32 distance (FR-5, FR-6, S-5)
 

@@ -57,12 +57,12 @@ fn a_shifted_continuation_names_the_first_diverging_position() {
     let prompt = fixtures.manifest.prompts.iter().find(|p| p.id == "english-short").unwrap();
     let (model, tokenizer) = load(&root, fixtures);
 
-    let n = prompt.continuation_ids.len();
+    let n = prompt.f64_continuation_ids.len();
     let ids = generate(&model, &tokenizer, &prompt.text, n + 1, &mut |_| {}).unwrap().ids;
-    let gaps = &prompt.continuation_top2_gaps;
-    assert!(!greedy_check(&ids[..n], &prompt.continuation_ids, gaps).is_failure(), "unshifted passes");
+    let gaps = &prompt.f64_continuation_top2_gaps;
+    assert!(!greedy_check(&ids[..n], &prompt.f64_continuation_ids, gaps).is_failure(), "unshifted passes");
 
-    let verdict = greedy_check(&ids[1..], &prompt.continuation_ids, gaps);
+    let verdict = greedy_check(&ids[1..], &prompt.f64_continuation_ids, gaps);
     let result = CheckResult {
         model_id: fixtures.manifest.model_id.clone(),
         prompt: prompt.id.clone(),
@@ -70,6 +70,7 @@ fn a_shifted_continuation_names_the_first_diverging_position() {
         check: Check::Greedy,
         verdict,
         max_error: None,
+        f32_error: None,
     };
     // The first index where the shifted sequence differs: not always 0, since a
     // continuation can repeat a token (english-short's starts with two newlines).
@@ -93,8 +94,9 @@ fn check_all(keep: impl Fn(&Prompt) -> bool, parallel: bool) -> Vec<CheckResult>
         let (model, tokenizer) = load(&root, fixtures);
         let prompts: Vec<&Prompt> = fixtures.manifest.prompts.iter().filter(|p| keep(p)).collect();
         let check = |prompt: &Prompt| {
-            let reference = fixtures.load_tensors(prompt).unwrap_or_else(|e| panic!("{e}"));
-            check_prompt(fixtures, prompt, &reference, &tokenizer, &model)
+            let reference = fixtures.load_reference(prompt).unwrap_or_else(|e| panic!("{e}"));
+            let f32_reference = fixtures.load_tensors(prompt).unwrap_or_else(|e| panic!("{e}"));
+            check_prompt(fixtures, prompt, &reference, &f32_reference, &tokenizer, &model)
         };
         if parallel {
             thread::scope(|s| {
