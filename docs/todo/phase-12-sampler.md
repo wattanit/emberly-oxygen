@@ -39,7 +39,7 @@ Dependencies: none new. Out of scope: wiring into `generate`, the CLI (Phase 13)
 
 ## 12.7 Measure (S-9)
 
-- [ ] Per category and setting, the worst error and margins; record in the plan's section 5.
+- [x] Per category and setting, the worst error and margins; record in the plan's section 5.
 
 ## 12.8 Stop: owner decides
 
