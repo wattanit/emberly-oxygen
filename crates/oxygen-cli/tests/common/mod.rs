@@ -52,3 +52,21 @@ pub fn generate(extra: &[&str]) -> Run {
     args.extend(extra);
     run(&args, None)
 }
+
+pub fn instruct_model_dir() -> String {
+    let dir = root().join("models/smollm2-135m-instruct");
+    assert!(
+        dir.exists(),
+        "{}: missing; run `cd oracle && uv run python download.py smollm2-135m-instruct`",
+        dir.display()
+    );
+    dir.to_str().unwrap().to_owned()
+}
+
+/// Runs the chat command on the instruct model with `extra` options, giving it `input` on standard input.
+pub fn chat(extra: &[&str], input: &str) -> Run {
+    let model = instruct_model_dir();
+    let mut args = vec!["chat", "--model", &model];
+    args.extend(extra);
+    run(&args, Some(input.as_bytes()))
+}

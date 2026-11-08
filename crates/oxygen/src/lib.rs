@@ -4,6 +4,7 @@
 //! command-line tool need: loading, tokenization, the forward pass one token
 //! at a time, and greedy generation (Spec §1).
 
+mod chat;
 mod config;
 mod error;
 mod fault;
@@ -21,6 +22,7 @@ mod test_log;
 mod tokenizer;
 mod weights;
 
+pub use chat::{render, Chat, Message, Role};
 pub use config::Config;
 pub use error::Error;
 #[cfg(feature = "negative-controls")]
@@ -58,7 +60,8 @@ pub mod kernels {
     /// repetition penalty's context. For the benchmark's sampling cost group
     /// (Spec §12) and its test.
     pub fn sample_token(logits: &[f32], context: &[u32], sampling: &crate::Sampling, seed: u64) -> u32 {
-        crate::sampling::Sampler::new(sampling, seed, context).choose(logits).token
+        let mut rng = crate::rng::Rng::new(seed);
+        crate::sampling::Sampler::new(sampling, &mut rng, context).choose(logits).token
     }
 
     /// The matrix-vector product exactly as release 0.1.0 computed it: one

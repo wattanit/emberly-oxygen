@@ -137,3 +137,37 @@ fn fr26_sampled_generation_stops_at_the_maximum_number_of_tokens() {
         assert_eq!(run.stats.generated_tokens, run.ids.len());
     }
 }
+
+/// The settings of the guard below: greedy, two plain seeds, and all four controls together.
+fn guard_cases() -> Vec<(&'static str, Sampling)> {
+    vec![
+        ("greedy", Sampling::default()),
+        ("seed 1", sampled(1)),
+        ("seed 2", sampled(2)),
+        (
+            "combined",
+            Sampling { temperature: 0.7, top_k: 40, top_p: 0.9, repetition_penalty: 1.3, seed: Some(7) },
+        ),
+    ]
+}
+
+// FR-28, FR-29: a guard for refactoring the step loop (plan 0.3.0 task 16.1). The ids below
+// were recorded from the code before the loop was reorganized so a chat turn could own its
+// generator; they must not change with the reorganization. They pin this build on the
+// benchmark machine (FR-28 promises reproduction within a build only): if a deliberate change
+// to the generator, the controls or the arithmetic moves them, record them again.
+#[test]
+fn fr28_fr29_greedy_and_seeded_output_is_unchanged_by_the_step_loop_refactor() {
+    let (m, t) = load();
+    let expected: [(&str, &[u32]); 4] = [
+        ("greedy", &[260, 2767, 27003, 690, 260, 2644, 30, 198, 198, 504, 2767, 314, 253, 2767, 28, 284]),
+        ("seed 1", &[656, 260, 13917, 6391, 47, 198, 198, 504, 16438, 553, 17986, 12364, 284, 5988, 288, 3134]),
+        ("seed 2", &[260, 4255, 359, 12027, 281, 260, 4480, 30, 216, 15442, 3528, 339, 3363, 3590, 10761, 198]),
+        ("combined", &[665, 314, 253, 27216, 6621, 351, 253, 1805, 7706, 30, 378, 6715, 30858, 1187, 288, 1138]),
+    ];
+    for ((name, sampling), (expected_name, want)) in guard_cases().iter().zip(expected) {
+        assert_eq!(*name, expected_name);
+        let got = ids(&m, &t, sampling);
+        assert_eq!(got.as_slice(), want, "{name}: recorded as {got:?}");
+    }
+}

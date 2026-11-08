@@ -5,7 +5,7 @@
 use std::fmt::Write;
 
 use super::compare::Verdict;
-use super::harness::{Check, CheckResult, SamplingResult};
+use super::harness::{Check, CheckResult, ChatReported, ChatResult, SamplingResult};
 
 pub struct Report {
     pub text: String,
@@ -180,6 +180,58 @@ pub fn render_with_sampling(results: &[CheckResult], sampling: &[SamplingResult]
             writeln!(text, "note: {} / {}: comparison stopped at a near-tie, position {position}", r.prompt, r.check.name()).unwrap();
         }
         text.push('\n');
+    }
+    let text = text.lines().map(str::trim_end).collect::<Vec<_>>().join("\n") + "\n";
+    Report { text, failed }
+}
+
+/// The chat tables (S-11, FR-39): per conversation, whether the rendered text and
+/// the token ids equal the reference's, and then, labelled *reported only
+/// (instruct)*, the logit difference and greedy reply agreement that judge
+/// nothing. `failed` holds the (model, conversation) pairs whose S-11 failed and
+/// nothing else: the reported figures never reach it.
+pub fn render_chat(results: &[ChatResult], reported: &[ChatReported]) -> Report {
+    let mut text = String::new();
+    let mut failed = Vec::new();
+    let models = distinct(results.iter().map(|r| r.model_id.as_str()).chain(reported.iter().map(|r| r.model_id.as_str())));
+    for model in models {
+        writeln!(text, "model {model}").unwrap();
+        let rows: Vec<&ChatResult> = results.iter().filter(|r| r.model_id == model).collect();
+        if !rows.is_empty() {
+            writeln!(text, "chat template (S-11), rendered text and token ids against the reference:").unwrap();
+            writeln!(text, "{:<16} {:<8} {:<8}", "conversation", "text", "tokens").unwrap();
+            for r in &rows {
+                writeln!(text, "{:<16} {:<8} {:<8}", r.conversation, cell(&r.text), cell(&r.tokens)).unwrap();
+                if r.is_failure() {
+                    failed.push((model.to_string(), r.conversation.clone()));
+                }
+            }
+            for r in &rows {
+                for (what, verdict) in [("text", &r.text), ("tokens", &r.tokens)] {
+                    if let Verdict::Fail { message, .. } = verdict {
+                        writeln!(text, "  {} / {what}: {message}", r.conversation).unwrap();
+                    }
+                }
+            }
+            text.push('\n');
+        }
+        let of_model: Vec<&ChatReported> = reported.iter().filter(|r| r.model_id == model).collect();
+        if !of_model.is_empty() {
+            writeln!(text, "reported only (instruct), judges nothing:").unwrap();
+            writeln!(text, "{:<16} {:<20} greedy reply against the reference", "conversation", "largest logit error")
+                .unwrap();
+            for r in of_model {
+                let lengths = format!("{}/{}", r.engine_reply_len, r.reference_reply_len);
+                let reply = match &r.reply {
+                    Verdict::Pass => format!("agrees {lengths}"),
+                    Verdict::NearTie { position } => format!("tie at {position} {lengths}"),
+                    Verdict::Fail { position: Some(p), .. } => format!("differs at {p} {lengths}"),
+                    Verdict::Fail { position: None, .. } => format!("differs {lengths}"),
+                };
+                writeln!(text, "{:<16} {:<20} {reply}", r.conversation, format!("{:e}", r.max_logit_error)).unwrap();
+            }
+            text.push('\n');
+        }
     }
     let text = text.lines().map(str::trim_end).collect::<Vec<_>>().join("\n") + "\n";
     Report { text, failed }

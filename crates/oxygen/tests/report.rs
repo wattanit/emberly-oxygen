@@ -5,8 +5,8 @@
 mod common;
 
 use common::compare::Verdict;
-use common::harness::{Check, CheckResult};
-use common::report::render;
+use common::harness::{Check, CheckResult, ChatReported, ChatResult};
+use common::report::{render, render_chat};
 
 fn results(prompt: &str, category: &str, verdicts: [Verdict; Check::ALL.len()]) -> Vec<CheckResult> {
     Check::ALL
@@ -213,4 +213,69 @@ fn s9_the_smallest_cutoff_margins_are_reported() {
     let text = squeeze(&render_with_sampling(&all, &[near, far]).text);
     assert!(text.contains("4.4e-4") && text.contains("a1"), "the smaller margin and its prompt appear: {text}");
     assert!(!text.contains("9e-3"), "only the smallest is reported: {text}");
+}
+
+// --- S-11 and the reported-only table (FR-39) ----------------------------------
+
+fn chat_result(conversation: &str, text: Verdict, tokens: Verdict) -> ChatResult {
+    ChatResult { model_id: "i".into(), conversation: conversation.into(), text, tokens }
+}
+
+fn reported(conversation: &str, error: f64, reply: Verdict, engine: usize, reference: usize) -> ChatReported {
+    ChatReported {
+        model_id: "i".into(),
+        conversation: conversation.into(),
+        max_logit_error: error,
+        reply,
+        engine_reply_len: engine,
+        reference_reply_len: reference,
+    }
+}
+
+#[test]
+fn s11_passing_conversations_are_listed_and_fail_nothing() {
+    let results = [chat_result("no-system", Verdict::Pass, Verdict::Pass), chat_result("thai", Verdict::Pass, Verdict::Pass)];
+    let report = render_chat(&results, &[]);
+    assert!(report.failed.is_empty());
+    let text = squeeze(&report.text);
+    assert!(text.contains("no-system pass pass") && text.contains("thai pass pass"), "{}", report.text);
+    assert!(text.contains("S-11"), "{}", report.text);
+}
+
+#[test]
+fn s11_a_failing_conversation_fails_the_run_and_its_failure_is_located() {
+    let text = Verdict::Fail { position: Some(12), message: "character 12: engine has 'u', reference has 's'".into() };
+    let results = [chat_result("no-system", Verdict::Pass, Verdict::Pass), chat_result("thai", text, failing_at(0))];
+    let report = render_chat(&results, &[]);
+    assert_eq!(report.failed, [("i".to_string(), "thai".to_string())]);
+    let squeezed = squeeze(&report.text);
+    assert!(squeezed.contains("thai FAIL FAIL"), "{}", report.text);
+    assert!(report.text.contains("thai / text") && report.text.contains("character 12"), "{}", report.text);
+    assert!(report.text.contains("thai / tokens"), "{}", report.text);
+}
+
+// FR-39: the reported figures are printed, labelled, and cannot fail the run.
+#[test]
+fn fr39_a_reported_figure_never_fails_the_run() {
+    let results = [chat_result("c", Verdict::Pass, Verdict::Pass)];
+    let reported = [
+        reported("c", 0.5, Verdict::Fail { position: Some(3), message: "token 9 at continuation index 3, reference 8".into() }, 6, 8),
+        reported("d", f64::INFINITY, Verdict::NearTie { position: 2 }, 0, 4),
+    ];
+    let report = render_chat(&results, &reported);
+    assert!(report.failed.is_empty(), "a reported figure judges nothing");
+    let text = squeeze(&report.text);
+    assert!(text.contains("reported only (instruct)"), "{}", report.text);
+    assert!(text.contains("c 5e-1") && text.contains("differs at 3"), "{}", report.text);
+    assert!(text.contains("d inf") && text.contains("tie at 2"), "{}", report.text);
+    let after = report.text.split("reported only (instruct)").nth(1).unwrap();
+    assert!(!after.contains("FAIL"), "reported rows must not look like failures: {after}");
+}
+
+#[test]
+fn fr39_an_agreeing_reply_shows_its_lengths() {
+    let reported = [reported("c", 7.5e-5, Verdict::Pass, 8, 8)];
+    let report = render_chat(&[chat_result("c", Verdict::Pass, Verdict::Pass)], &reported);
+    let text = squeeze(&report.text);
+    assert!(text.contains("c 7.5e-5 agrees 8/8"), "{}", report.text);
 }

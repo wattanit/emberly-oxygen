@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use tracing::Level;
 
+use crate::rng::Rng;
 use crate::sampling::Sampler;
 use crate::{Error, Model, Sampling, Session, Tokenizer};
 
@@ -90,6 +91,27 @@ pub fn generate_with(
         }
         None
     };
+    let mut rng = seed.map(Rng::new);
+    run(model, tokenizer, prompt, max_new_tokens, sampling, rng.as_mut(), seed, on_text)
+}
+
+/// The step loop shared by [`generate_with`] and a chat turn (Spec §8): encodes
+/// `prompt`, checks the request (FR-18), feeds the prompt, then chooses and
+/// streams tokens until the end-of-sequence token or the maximum. `sampling`
+/// must already be valid. With `rng` it draws from that generator, which the
+/// caller owns, so a chat can carry one generator across turns (FR-37); without
+/// it, selection is greedy. `seed` is only what [`Generation`] reports.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run(
+    model: &Model,
+    tokenizer: &Tokenizer,
+    prompt: &str,
+    max_new_tokens: usize,
+    sampling: &Sampling,
+    rng: Option<&mut Rng>,
+    seed: Option<u64>,
+    on_text: &mut dyn FnMut(&str),
+) -> Result<Generation, Error> {
     let start = Instant::now();
     let config = model.config();
     let prompt_ids = tokenizer.encode(prompt)?;
@@ -121,7 +143,7 @@ pub fn generate_with(
         session: model.session(false),
         tokenizer,
         debug: tracing::enabled!(Level::DEBUG),
-        sampler: seed.map(|seed| Sampler::new(sampling, seed, &prompt_ids)),
+        sampler: rng.map(|rng| Sampler::new(sampling, rng, &prompt_ids)),
     };
     let last = prompt_ids.len() - 1;
     let mut next = 0;
@@ -177,7 +199,7 @@ struct Steps<'a> {
     tokenizer: &'a Tokenizer,
     debug: bool,
     /// `None` for greedy generation, which takes the argmax as it always has.
-    sampler: Option<Sampler>,
+    sampler: Option<Sampler<'a>>,
 }
 
 impl Steps<'_> {

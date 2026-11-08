@@ -293,3 +293,53 @@ fn s9_shape_mismatch_and_non_finite_values_fail_without_panicking() {
     assert!(distribution_error(&[f64::NAN, 1.0], &[0.5, 0.5]).verdict.is_failure());
     assert!(distribution_error(&[f64::INFINITY, 0.0], &[0.5, 0.5]).verdict.is_failure());
 }
+
+// --- S-11: chat template text and ids ----------------------------------------
+
+#[test]
+fn s11_identical_text_passes() {
+    assert_eq!(text_check("<|im_start|>user\nhi", "<|im_start|>user\nhi"), Verdict::Pass);
+    assert_eq!(text_check("", ""), Verdict::Pass);
+}
+
+#[test]
+fn s11_one_differing_character_fails_at_its_position() {
+    let v = text_check("abcXe", "abcde");
+    assert_eq!(failed_at(&v), Some(3));
+    let Verdict::Fail { message, .. } = v else { unreachable!() };
+    assert!(message.contains("character 3") && message.contains('X') && message.contains('d'), "{message}");
+}
+
+#[test]
+fn s11_a_text_that_is_longer_or_shorter_fails_where_it_ends() {
+    assert_eq!(failed_at(&text_check("abc\n", "abc")), Some(3));
+    assert_eq!(failed_at(&text_check("ab", "abc")), Some(2));
+    assert_eq!(failed_at(&text_check("", "a")), Some(0));
+}
+
+// The position counts characters, not bytes: a Thai letter is three bytes.
+#[test]
+fn s11_the_position_counts_characters_not_bytes() {
+    let thai = "\u{e2a}\u{e27}\u{e31}";
+    assert_eq!(failed_at(&text_check(&format!("{thai}X"), &format!("{thai}Y"))), Some(3));
+}
+
+#[test]
+fn s11_identical_ids_pass() {
+    assert_eq!(ids_check(&[1, 5, 2], &[1, 5, 2]), Verdict::Pass);
+    assert_eq!(ids_check(&[], &[]), Verdict::Pass);
+}
+
+#[test]
+fn s11_a_differing_id_fails_at_its_position() {
+    let v = ids_check(&[1, 6, 2], &[1, 5, 2]);
+    assert_eq!(failed_at(&v), Some(1));
+    let Verdict::Fail { message, .. } = v else { unreachable!() };
+    assert!(message.contains("position 1") && message.contains('6') && message.contains('5'), "{message}");
+}
+
+#[test]
+fn s11_ids_of_another_length_fail_where_one_ends() {
+    assert_eq!(failed_at(&ids_check(&[1, 5, 2, 198], &[1, 5, 2])), Some(3));
+    assert_eq!(failed_at(&ids_check(&[1, 5], &[1, 5, 2])), Some(2));
+}

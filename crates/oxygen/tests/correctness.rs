@@ -16,10 +16,13 @@ mod common;
 use std::thread;
 
 use common::compare::greedy_check;
-use common::fixtures::{discover, require_model_dir, workspace_root, Fixtures, Prompt};
-use common::harness::{check_prompt, check_prompt_with_run, check_sampling, run_engine, Check, CheckResult, SamplingResult};
-use common::report::{render, render_with_sampling};
-use emberly_oxygen::{distribution, generate, Model, Tokenizer};
+use common::fixtures::{discover, discover_chat, require_model_dir, workspace_root, Fixtures, Prompt};
+use common::harness::{
+    check_chat_template, check_prompt, check_prompt_with_run, check_sampling, report_chat, run_engine, Check, CheckResult,
+    ChatReported, ChatResult, SamplingResult,
+};
+use common::report::{render, render_chat, render_with_sampling};
+use emberly_oxygen::{distribution, generate, render as render_template, Model, Tokenizer};
 
 #[test]
 fn correctness_harness() {
@@ -33,6 +36,23 @@ fn correctness_harness() {
         distinct_categories(&results),
         report.text
     );
+    println!("{}", report.text);
+}
+
+/// S-11, FR-39: the chat template and its token ids equal the reference's for every
+/// stored conversation, and the instruct model's logit difference and greedy reply
+/// agreement are printed beside it, reported only (they judge nothing).
+#[test]
+fn chat_harness() {
+    let (results, reported) = check_chat();
+    let report = render_chat(&results, &reported);
+    assert!(
+        report.failed.is_empty(),
+        "{} conversations failed S-11\n\n{}",
+        report.failed.len(),
+        report.text
+    );
+    assert!(!results.is_empty() && results.len() == reported.len(), "every conversation is checked and reported");
     println!("{}", report.text);
 }
 
@@ -176,4 +196,28 @@ fn distinct_categories(results: &[CheckResult]) -> usize {
         }
     }
     seen.len()
+}
+
+/// S-11 with the real renderer and encoder, and the reported-only figures, for
+/// every stored conversation of every chat fixture folder.
+fn check_chat() -> (Vec<ChatResult>, Vec<ChatReported>) {
+    let root = workspace_root();
+    let all = discover_chat(&root.join("fixtures")).unwrap_or_else(|e| panic!("{e}"));
+    let (mut results, mut reported) = (Vec::new(), Vec::new());
+    for fixtures in &all {
+        let dir = root.join("models").join(&fixtures.chat.model_id);
+        require_model_dir(&dir).unwrap_or_else(|e| panic!("{e}"));
+        let model = Model::load(&dir).unwrap_or_else(|e| panic!("{e}"));
+        let tokenizer = Tokenizer::load(&dir).unwrap_or_else(|e| panic!("{e}"));
+        for conversation in &fixtures.chat.conversations {
+            results.push(check_chat_template(
+                &fixtures.chat.model_id,
+                conversation,
+                &render_template,
+                &|text| tokenizer.encode(text),
+            ));
+            reported.push(report_chat(&model, &tokenizer, fixtures, conversation).unwrap_or_else(|e| panic!("{e}")));
+        }
+    }
+    (results, reported)
 }

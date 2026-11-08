@@ -4,12 +4,12 @@
 
 use std::collections::HashMap;
 
-use emberly_oxygen::{generate, Capture, Error, Model, Sampling, Tokenizer};
+use emberly_oxygen::{generate, Capture, Error, Message, Model, Role, Sampling, Tokenizer};
 
 use super::compare::{
     greedy_check, intermediate_error, logit_error, top1_check, Numeric, Reference, Verdict,
 };
-use super::fixtures::{Fixtures, Prompt, PromptTensors, ReferenceTensors, Tensors};
+use super::fixtures::{ChatFixtures, Conversation, Fixtures, Prompt, PromptTensors, ReferenceTensors, Tensors};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Check {
@@ -342,4 +342,106 @@ pub fn check_sampling(
         });
     }
     Ok(results)
+}
+
+/// One conversation's S-11 result (FR-39): the rendered text and the token ids
+/// are judged separately, because a text that matches can still encode wrongly
+/// (FR-33), so each gets its own verdict.
+#[derive(Debug, Clone)]
+pub struct ChatResult {
+    pub model_id: String,
+    pub conversation: String,
+    pub text: Verdict,
+    pub tokens: Verdict,
+}
+
+impl ChatResult {
+    pub fn is_failure(&self) -> bool {
+        self.text.is_failure() || self.tokens.is_failure()
+    }
+}
+
+/// How the engine renders a conversation: the library's `render`, or a faulty
+/// one for the negative controls.
+pub type RenderFn<'a> = dyn Fn(&[Message], bool) -> String + 'a;
+/// How the engine encodes text: the tokenizer's `encode`, or a faulty one.
+pub type EncodeFn<'a> = dyn Fn(&str) -> Result<Vec<u32>, Error> + 'a;
+
+/// S-11 for one conversation: render the stored messages with the generation
+/// prompt, compare the text with the stored rendering, then encode the engine's
+/// rendering and compare its ids with the stored ones.
+pub fn check_chat_template(
+    model_id: &str,
+    conversation: &Conversation,
+    render: &RenderFn<'_>,
+    encode: &EncodeFn<'_>,
+) -> ChatResult {
+    let result = |text, tokens| ChatResult {
+        model_id: model_id.to_string(),
+        conversation: conversation.id.clone(),
+        text,
+        tokens,
+    };
+    let mut messages = Vec::new();
+    for m in &conversation.messages {
+        let role = match m.role.as_str() {
+            "system" => Role::System,
+            "user" => Role::User,
+            "assistant" => Role::Assistant,
+            other => {
+                let failure = || Verdict::Fail {
+                    position: None,
+                    message: format!("conversation {}: stored role {other:?} is not one the engine knows", conversation.id),
+                };
+                return result(failure(), failure());
+            }
+        };
+        messages.push(Message::new(role, m.content.clone()));
+    }
+    let text = render(&messages, true);
+    let text_verdict = super::compare::text_check(&text, &conversation.rendered);
+    let tokens_verdict = match encode(&text) {
+        Ok(ids) => super::compare::ids_check(&ids, &conversation.token_ids),
+        Err(e) => Verdict::Fail { position: None, message: format!("the encoder failed: {e}") },
+    };
+    result(text_verdict, tokens_verdict)
+}
+
+/// What the harness reports, without judging, about the instruct model on one
+/// conversation (FR-39, Requirements §13): the engine's largest logit
+/// difference from the stored f64 logits over the rendered prompt, and how its
+/// greedy reply compares with the stored one under S-4's near-tie rule. No
+/// verdict anywhere reads these fields: the type has no way to fail a run.
+#[derive(Debug, Clone)]
+pub struct ChatReported {
+    pub model_id: String,
+    pub conversation: String,
+    pub max_logit_error: f64,
+    pub reply: Verdict,
+    pub engine_reply_len: usize,
+    pub reference_reply_len: usize,
+}
+
+/// Measures the reported-only figures for one conversation: feeds the stored
+/// token ids through the forward pass, and generates a greedy reply from the
+/// stored rendering, up to the stored reply's own limit.
+pub fn report_chat(
+    model: &Model,
+    tokenizer: &Tokenizer,
+    fixtures: &ChatFixtures,
+    conversation: &Conversation,
+) -> Result<ChatReported, String> {
+    let reference = fixtures.load_logits(conversation)?;
+    let run = run_engine(model, &conversation.token_ids)?;
+    let max_logit_error = logit_error(&run.logits, &reference.data, fixtures.chat.dims.vocab).max_error;
+    let generation = generate(model, tokenizer, &conversation.rendered, fixtures.chat.reply_tokens, &mut |_| {})
+        .map_err(|e| format!("{}: {e}", conversation.id))?;
+    Ok(ChatReported {
+        model_id: fixtures.chat.model_id.clone(),
+        conversation: conversation.id.clone(),
+        max_logit_error,
+        reply: greedy_check(&generation.ids, &conversation.reply_ids, &conversation.reply_top2_gaps),
+        engine_reply_len: generation.ids.len(),
+        reference_reply_len: conversation.reply_ids.len(),
+    })
 }

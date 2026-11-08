@@ -2,13 +2,13 @@
 //! library's; this reads the prompt, routes text and log events, and reports.
 
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use clap::{ArgAction, Args, Parser, Subcommand};
-use emberly_oxygen::{generate_with, Model, Sampling, Stats, Tokenizer};
+use emberly_oxygen::{generate_with, Chat, Error, Model, Sampling, Stats, Tokenizer};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 
@@ -25,6 +25,9 @@ enum Command {
     /// Generate a continuation of a prompt and stream it to standard output: greedy by
     /// default, sampled with --temperature above 0.
     Generate(GenerateArgs),
+    /// Chat with an instruct model in the terminal: one message per line, each reply
+    /// streamed to standard output. Ends at end of input or a line that is exactly /exit.
+    Chat(ChatArgs),
 }
 
 #[derive(Args)]
@@ -85,9 +88,64 @@ struct GenerateArgs {
     prompt: Option<String>,
 }
 
+/// The options of the chat command (Spec §9). The sampling defaults are the
+/// instruct model's published example (FR-37).
+#[derive(Args)]
+struct ChatArgs {
+    /// Model directory holding config.json, model.safetensors and tokenizer.json of an
+    /// instruct model.
+    #[arg(long, value_name = "DIR")]
+    model: PathBuf,
+
+    /// A system message to start the conversation with, instead of the model's default one.
+    #[arg(long, value_name = "TEXT")]
+    system: Option<String>,
+
+    /// The most tokens in one reply. A reply also ends at the model's end-of-turn token,
+    /// which is not printed. A turn whose conversation plus this many tokens would not
+    /// fit the model's context is rejected and the chat continues.
+    #[arg(long, value_name = "N", default_value_t = 256)]
+    max_new_tokens: usize,
+
+    /// Temperature: logits are divided by it. The default is 0.2, the instruct model's
+    /// published example. 0 is greedy replies; the other sampling options are then ignored.
+    #[arg(long, value_name = "T", default_value_t = 0.2)]
+    temperature: f32,
+
+    /// Sample only among the K highest-scoring tokens (ties with the K-th stay). 0 is off.
+    #[arg(long, value_name = "K", default_value_t = 0)]
+    top_k: usize,
+
+    /// Sample only among the smallest set of most likely tokens whose probabilities add
+    /// up to at least P, 0 < P <= 1. The default is 0.9, or 1 (off) when --temperature
+    /// is 0 and this is not given.
+    #[arg(long, value_name = "P")]
+    top_p: Option<f32>,
+
+    /// Divide the positive scores and multiply the negative ones of every token already
+    /// in the conversation or the reply by R, as the reference library does; R > 0. 1 is off.
+    #[arg(long, value_name = "R", default_value_t = 1.0)]
+    repetition_penalty: f32,
+
+    /// Seed of the random number generator for the whole conversation. When sampling
+    /// without one, a seed is taken from the clock and printed once, before the first prompt.
+    #[arg(long, value_name = "N")]
+    seed: Option<u64>,
+
+    /// Log more, to standard error: -v run summary and timings, -vv each decode
+    /// step, -vvv each layer within each step. By default only warnings and errors.
+    #[arg(short, long, action = ArgAction::Count)]
+    verbose: u8,
+
+    /// Write the log to this file instead of standard error.
+    #[arg(long, value_name = "PATH")]
+    log_file: Option<PathBuf>,
+}
+
 pub fn run(cli: Cli) -> Result<(), String> {
     match cli.command {
         Command::Generate(args) => run_generate(args),
+        Command::Chat(args) => run_chat(args),
     }
 }
 
@@ -131,6 +189,64 @@ fn run_generate(args: GenerateArgs) -> Result<(), String> {
         print_stats(load_time, &generation.stats);
     }
     Ok(())
+}
+
+fn run_chat(args: ChatArgs) -> Result<(), String> {
+    init_logging(args.verbose, args.log_file.as_deref())?;
+    let model = Model::load(&args.model).map_err(|e| e.to_string())?;
+    let tokenizer = Tokenizer::load(&args.model).map_err(|e| e.to_string())?;
+
+    let mut sampling = Sampling {
+        temperature: args.temperature,
+        top_k: args.top_k,
+        // Greedy chat asked for with --temperature 0 alone is not answered with a warning about
+        // a top-p the user never set; one the user did set is still reported ignored (Spec §9).
+        top_p: args.top_p.unwrap_or(if args.temperature == 0.0 { 1.0 } else { 0.9 }),
+        repetition_penalty: args.repetition_penalty,
+        seed: args.seed,
+    };
+    // The seed is reported once, before the first prompt marker, so the whole conversation can be replayed (FR-28).
+    if sampling.temperature > 0.0 && sampling.validate().is_ok() {
+        let seed = sampling.seed.unwrap_or_else(clock_seed);
+        sampling.seed = Some(seed);
+        eprintln!("seed: {seed}");
+    }
+    let mut chat = Chat::new(&model, &tokenizer, args.system, &sampling, args.max_new_tokens).map_err(|e| e.to_string())?;
+
+    let mut stdout = io::stdout().lock();
+    let mut stdin = io::stdin().lock();
+    let mut line = String::new();
+    loop {
+        // The marker invites the next message; it is not a reply, so it goes to standard error (FR-38, FR-20).
+        let mut stderr = io::stderr();
+        let _ = stderr.write_all(b"> ");
+        let _ = stderr.flush();
+        line.clear();
+        let read = stdin.read_line(&mut line).map_err(|e| format!("reading standard input: {e}"))?;
+        if read == 0 {
+            let _ = stderr.write_all(b"\n");
+            return Ok(());
+        }
+        let message = line.trim_end_matches(['\n', '\r']);
+        if message == "/exit" {
+            return Ok(());
+        }
+        if message.trim().is_empty() {
+            continue;
+        }
+        let mut write = |text: &str| {
+            if let Err(e) = stdout.write_all(text.as_bytes()).and_then(|()| stdout.flush()) {
+                // Usually a closed pipe: nobody is reading, so stop at once.
+                crate::fail(&format!("writing to standard output: {e}"));
+            }
+        };
+        match chat.turn(message, &mut write) {
+            Ok(_) => write("\n"),
+            // A turn that cannot fit is the user's to shorten: say so and go on (FR-36).
+            Err(e @ Error::Rejected(_)) => eprintln!("error: {e}"),
+            Err(e) => return Err(e.to_string()),
+        }
+    }
 }
 
 /// A seed from the system clock, for a sampled run that was not given one.
