@@ -22,7 +22,7 @@ Dependencies: none new. Out of scope: `Chat`, the command (Phase 16).
 
 ## 15.4 Negative controls (HC-4, S-11)
 
-- [ ] Three faulty renderers/encoders fail S-11; the real ones pass.
+- [x] Three faulty renderers/encoders fail S-11; the real ones pass.
 
 ## 15.5 Reported-only table (FR-5, FR-39)
 
