@@ -97,6 +97,19 @@ Filled in as the phases land. Machine: the benchmark machine (Apple M4 Max), as 
   The folder is **101 MB** (four logits files and `chat.json`, 21 KB). No reply step has a top-two gap under 1e-3, so no near-tie falls inside any reply. Two of the four replies hit the 64-token maximum and not `<|im_end|>`, so the harness will see both endings; the Thai one is also a reply cut in the middle of a character, which exercises streaming.
 - **Task 14.6 (done).** The harness reads `chat.json` and the logits files (`discover_chat`, `ChatFixtures::load_logits`). Eight tests, written first and seen to fail against stubs: missing chat fixtures, the two discoveries ignoring each other's folders, a missing field, a missing logits file, a wrong shape, a missing logits tensor or an F32 file, an exact read of values f32 cannot hold, and the real fixtures' consistency (four conversations, shapes `[positions, 49152]`, reply ends at `<|im_end|>` exactly when it stopped there). **312 tests pass, 0 fail** (304 at 0.2.0, so 8 new); the greedy and sampling harness is untouched.
 - **Phase 14 exit check (passed).** All four conversations have rendering, ids, logits and a reply; the hand-written renderings equal the library's; the base fixtures are unchanged (bit-identical rerun); the harness reads the files; `cargo test` passes with no existing test changed.
+- **Task 15.1 (done).** Four tests pin the instruct facts against the real files; each was seen to fail when its expected value was changed.
+- **Tasks 15.2 to 15.5 (done).** `chat.rs` (`Role`, `Message`, `render`, 9 tests; five mutations of the renderer each fail one, after a surviving one, trimming the content, led to a stronger test). The S-11 check (`text_check`, `ids_check`, `check_chat_template`; 13 tests, six mutations killed). The three negative controls on the real conversations (4 tests, each control made a no-op in turn and failed its test): no default system message fails exactly `no-system`, `multi-turn` and `thai` and changes nothing for `with-system`, which has its own; no newline after `<|im_end|>` fails all four on both text and ids; markers spelled out as characters leave the text right and fail the ids at position 0 on all four. The reported-only table (`report_chat`, `render_chat`; 6 tests, nine mutations killed after three survivors led to a stronger test) and its wiring into the correctness harness.
+- **Task 15.6, measured (done).** Suite: **350 tests pass, 0 fail, 2 ignored** (312 after Phase 14; 304 at 0.2.0; so 46 new in the release so far). **S-11: all four conversations pass, text and ids, with the real functions.** Reported only (instruct), against the f64 reference:
+
+  | Conversation | Largest logit error | Greedy reply against the reference |
+  | --- | --- | --- |
+  | `no-system` | 8.84e-5 | agrees, 8/8 tokens |
+  | `with-system` | 5.62e-5 | agrees, 64/64 |
+  | `multi-turn` | 8.84e-5 | agrees, 7/7 |
+  | `thai` | 8.84e-5 | agrees, 64/64 |
+
+  Three conversations share the value 8.8359137e-5 to ten digits because they open with the same 24 tokens (the default system message and the start of the user turn) and the forward pass is causal, so the worst position lies in the shared prefix; `with-system` differs from token 6 and has its own. For comparison, the base model's worst logit error against its f64 reference is 3.50e-4 (S-1's limit is 1e-3, which applies to the base model only). Every reply agrees token for token, including the two cut by the 64-token maximum and the Thai one cut inside a character, and there is no near-tie in any. The correctness harness's chat test takes 5.8 s. Nothing in these figures is alarming; none is a threshold.
+- **Phase 15 exit check (passed).** S-11 passes on every conversation with the real functions and fails on each control; the reported table is printed and judges nothing; the greedy and sampling harness passes untouched.
 
 ## 6. Upstream feedback
 

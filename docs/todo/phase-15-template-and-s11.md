@@ -30,4 +30,4 @@ Dependencies: none new. Out of scope: `Chat`, the command (Phase 16).
 
 ## 15.6 Measure
 
-- [ ] Record the reported figures and S-11 results in plan §5.
+- [x] Record the reported figures and S-11 results in plan §5.
