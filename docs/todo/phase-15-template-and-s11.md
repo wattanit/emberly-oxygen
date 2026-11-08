@@ -14,7 +14,7 @@ Dependencies: none new. Out of scope: `Chat`, the command (Phase 16).
 
 ## 15.2 Renderer (FR-33)
 
-- [ ] Tests first on hand-written strings; then `render`.
+- [x] Tests first on hand-written strings; then `render`.
 
 ## 15.3 S-11 check (S-11, FR-39)
 

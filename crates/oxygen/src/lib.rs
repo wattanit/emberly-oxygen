@@ -4,6 +4,7 @@
 //! command-line tool need: loading, tokenization, the forward pass one token
 //! at a time, and greedy generation (Spec §1).
 
+mod chat;
 mod config;
 mod error;
 mod fault;
@@ -21,6 +22,7 @@ mod test_log;
 mod tokenizer;
 mod weights;
 
+pub use chat::{render, Message, Role};
 pub use config::Config;
 pub use error::Error;
 #[cfg(feature = "negative-controls")]
