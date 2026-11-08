@@ -42,11 +42,11 @@ Dependencies: none new. Out of scope: chat, the instruct model, any change to th
 
 ## 13.8 Benchmark (FR-8, FR-9, S-7)
 
-- [ ] Tests, then `cargo bench` straight after, default log level.
+- [x] Tests, then `cargo bench` straight after, default log level.
 
 ## 13.9 Comparison (FR-8, FR-9)
 
-- [ ] Rows against 0.1.2's; no speed claim; the cost of a sampled step beside a forward step.
+- [x] Rows against 0.1.2's; no speed claim; the cost of a sampled step beside a forward step.
 
 ## 13.10 Release note and README (Requirements §12)
 

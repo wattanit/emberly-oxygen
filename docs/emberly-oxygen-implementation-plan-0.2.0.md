@@ -95,7 +95,24 @@ Filled in as the phases land. Machine: the benchmark machine (Apple M4 Max), as 
   - **Negative controls.** On `thai-medium`: the swapped order (top-p before temperature) moves the combined setting by 0.050 and nothing else; the inverted penalty moves `penalty-1.3` by 0.85 and `combined` by 0.97 and nothing else. On `english-short` the inverted penalty moves the distribution by only 7.7e-3 (its repeated tokens carry little probability), so a tolerance of 1e-2 would miss it there; the controls therefore run on `thai-medium`. Every setting passes with no fault.
   - **Decided by the owner at task 12.8 (2026-11-08).** `SAMPLING_TOLERANCE` is **1e-5**, by the rule of decision point 1 (the smallest round decimal at least twice the worst error, 1.98e-6). **No cutoff exemption:** S-9 judges every setting and the margins stay reported. The tolerance was measured on one machine only; fixtures regenerated elsewhere are untested.
 - **S-10 (task 13.2).** 200,000 draws with a fixed seed, chi-square over tokens pooled to at least 5 expected draws: 500 logits, no controls, **9.0 over 12 degrees of freedom** (limit 31.6; the 500 tokens pool to 13 bins because the logits are spread widely); 64 logits with temperature 0.7, top-k 40 and top-p 0.9, **442.7 over 422** (limit 538.2). The test fails as it should on draws from another distribution (temperature 0.9, no top-p, or top-k 10 against the expected 0.7/40/0.9) and on a sampler biased by 2%. It cannot tell the order in which a sampler walks the tokens, which does not change the distribution; reproduction is tested separately (FR-28).
-- **Phase 13:** the S-10 statistic against its limit; test suite time; the 0.2.0 rows against 0.1.2's; sampling-step cost per control, against a forward step.
+- **Test suite (task 13.5, 13.8).** 304 tests pass, 0 fail, 2 ignored (the two already ignored in 0.1.2); the test binaries sum to about 25 s. 230 at 0.1.2, so 74 new: 7 reader, 5 comparison, 5 S-9 check, 3 report, 3 negative control, 3 generator, 5 settings, 15 controls and distribution, 5 S-10, 11 sampled generation, 9 CLI, 2 log level, 1 kernel-module.
+- **Benchmark (tasks 13.8, 13.9).** Apple M4 Max, commit `7e69bb4`, clean tree, version 0.2.0, straight after the 304 tests passed; the whole bench took 302 s. Thirteen rows appended (two workloads, five kernel shapes, six sampling settings); `results/benchmarks.jsonl` has 34 lines. **Against 0.1.2's rows (medians), the greedy path is unchanged:**
+
+  | | 0.1.2 | 0.2.0 | change |
+  | --- | --- | --- | --- |
+  | short, generation tok/s | 117.824 | 117.892 | +0.06% |
+  | short, prompt tok/s | 124.610 | 124.761 | +0.12% |
+  | short, first token ms | 256.800 | 256.491 | -0.12% |
+  | long, generation tok/s | 83.810 | 83.809 | 0.00% |
+  | long, prompt tok/s | 103.914 | 103.917 | 0.00% |
+  | long, first token ms | 4927.2 | 4927.0 | 0.00% |
+  | model load ms (short / long) | 60.5 / 60.9 | 61.4 / 61.4 | +1.6% / +0.8% |
+  | peak memory | 811.6 MB | 811.6 MB | 0.00% |
+  | kernel, in-house GFLOP/s, five shapes | 35.4 to 38.7 | 35.4 to 38.4 | -0.8% to +1.0% |
+
+  The long workload's 83.8 tok/s repeats 0.1.2's to the third decimal, so the 5% gap to 0.1.1's rows (79.8) that 0.1.2 left unexplained is stable across two builds with different code (0.2.0 adds the sampler), and a single session's noise does not explain it. Its cause is still unknown.
+- **Cost of a sampled step (task 13.6, 13.8).** One step on 49152 logits, median microseconds over five runs: no filtering **161.7**, temperature 0.7 **164.7**, top-k 40 **181.9**, top-p 0.9 **933.5**, penalty 1.3 **162.6**, all four **562.5**. A forward step is 8.48 ms on the short workload (117.9 tok/s) and 11.9 ms on the long one, so a sampled step adds **1.9%** (no filtering) to **11.0%** (top-p 0.9) of a short-workload step. Top-p is the expensive control because it sorts all 49152 probabilities each step; with top-k first (the combined setting) only 40 survive and the cost falls to 562 us. Reducing it would be a separate technique (a partial selection instead of a full sort) and is not part of this release.
+- **Phase 13 (remaining):** nothing further to measure.
 
 ## 6. Upstream feedback
 
