@@ -1,9 +1,17 @@
 """Generate the expected outputs (fixtures) for every prompt (Spec §10).
 
-Runs the model through Hugging Face transformers in float32 on CPU with eager
-attention, and stores per prompt: token IDs, logits at every position, input
-embeddings, the output of every decoder layer, the final-norm output, and a
-greedy continuation produced by this script's own argmax loop.
+Runs the model through Hugging Face transformers on CPU with eager attention,
+twice: in float64, which is the reference the engine is judged against
+(Requirements S-1 to S-4), and in float32, the library's default precision,
+which the harness reports against but does not judge by. Both runs load the
+same published weights. Per prompt and per run it stores token IDs, logits at
+every position, input embeddings, the output of every decoder layer, the
+final-norm output, and a greedy continuation produced by this script's own
+argmax loop. The float32 files are `<id>.safetensors`; the float64 files are
+`<id>.f64.safetensors`, kept in 64-bit, and their manifest fields start `f64_`.
+
+The float64 run is slower and writes about twice the bytes: expect minutes, and
+fixtures of about 2 GB.
 
 usage: uv run python generate.py [--out DIR]
 """
@@ -71,21 +79,16 @@ def forward_all(model, ids: torch.Tensor, layer_outputs: list) -> dict:
     }
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--out", type=Path, default=ROOT / "fixtures" / MODEL_ID)
-    out_dir = parser.parse_args().out
-    if not MODEL_DIR.joinpath("model.safetensors").is_file():
-        print(f"error: model files missing in {MODEL_DIR}; run `uv run python download.py`", file=sys.stderr)
-        return 1
-    out_dir.mkdir(parents=True, exist_ok=True)
+def run_precision(dtype: torch.dtype, prompts: list, tok, out_dir: Path, suffix: str) -> dict:
+    """Run every prompt through the model in `dtype`; write one tensor file per prompt.
 
-    tok = AutoTokenizer.from_pretrained(MODEL_DIR)
+    Returns, per prompt ID, the fields the manifest records for this run.
+    """
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_DIR, dtype=torch.float32, attn_implementation="eager"
+        MODEL_DIR, dtype=dtype, attn_implementation="eager"
     ).eval()
     # No device_map is given, so the model stays on CPU; check rather than assume.
-    assert next(model.parameters()).dtype == torch.float32
+    assert next(model.parameters()).dtype == dtype
     assert next(model.parameters()).device.type == "cpu"
 
     layer_outputs: list[torch.Tensor] = []
@@ -95,11 +98,12 @@ def main() -> int:
         )
     eos = model.config.eos_token_id
 
-    records = []
-    for p in json.loads((Path(__file__).parent / "prompts.json").read_text()):
+    runs = {}
+    for p in prompts:
         ids = torch.tensor([tok(p["text"])["input_ids"]])
         with torch.no_grad():
             tensors = forward_all(model, ids, layer_outputs)
+            assert tensors["logits"].dtype == dtype
             prompt_gaps = top2_gaps(tensors["logits"])
 
             # Greedy continuation by our own argmax loop (not generate()), so the
@@ -118,25 +122,66 @@ def main() -> int:
                 seq = torch.cat([seq, torch.tensor([[token]])], dim=1)
                 last = model(seq, use_cache=False).logits[0, -1:]
 
-        file = f"{p['id']}.safetensors"
+        file = f"{p['id']}{suffix}.safetensors"
         save_file({k: v.contiguous() for k, v in tensors.items()}, out_dir / file)
+        runs[p["id"]] = {
+            "ids": ids[0].tolist(),
+            "prompt_top2_gaps": prompt_gaps,
+            "continuation_ids": continuation,
+            "continuation_text": tok.decode(continuation),
+            "continuation_top2_gaps": gaps,
+            "stopped_at_eos": hit_eos,
+            "tensors_file": file,
+        }
+        print(
+            f"{str(dtype).removeprefix('torch.'):<8} {p['id']:<18} positions={ids.shape[1]:>4} "
+            f"continuation={len(continuation)} eos={hit_eos}"
+        )
+    return {"runs": runs, "config": model.config}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--out", type=Path, default=ROOT / "fixtures" / MODEL_ID)
+    out_dir = parser.parse_args().out
+    if not MODEL_DIR.joinpath("model.safetensors").is_file():
+        print(f"error: model files missing in {MODEL_DIR}; run `uv run python download.py`", file=sys.stderr)
+        return 1
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    tok = AutoTokenizer.from_pretrained(MODEL_DIR)
+    prompts = json.loads((Path(__file__).parent / "prompts.json").read_text())
+
+    f32 = run_precision(torch.float32, prompts, tok, out_dir, "")
+    f64 = run_precision(torch.float64, prompts, tok, out_dir, ".f64")
+
+    records = []
+    for p in prompts:
+        a, b = f32["runs"][p["id"]], f64["runs"][p["id"]]
+        # Same tokenizer and prompt, so the IDs agree; the check costs nothing.
+        assert a["ids"] == b["ids"]
         records.append(
             {
                 "id": p["id"],
                 "category": p["category"],
                 "text": p["text"],
-                "token_ids": ids[0].tolist(),
-                "prompt_top2_gaps": prompt_gaps,
-                "continuation_ids": continuation,
-                "continuation_text": tok.decode(continuation),
-                "continuation_top2_gaps": gaps,
-                "stopped_at_eos": hit_eos,
-                "tensors_file": file,
+                "token_ids": a["ids"],
+                "prompt_top2_gaps": a["prompt_top2_gaps"],
+                "continuation_ids": a["continuation_ids"],
+                "continuation_text": a["continuation_text"],
+                "continuation_top2_gaps": a["continuation_top2_gaps"],
+                "stopped_at_eos": a["stopped_at_eos"],
+                "tensors_file": a["tensors_file"],
+                "f64_tensors_file": b["tensors_file"],
+                "f64_prompt_top2_gaps": b["prompt_top2_gaps"],
+                "f64_continuation_ids": b["continuation_ids"],
+                "f64_continuation_text": b["continuation_text"],
+                "f64_continuation_top2_gaps": b["continuation_top2_gaps"],
+                "f64_stopped_at_eos": b["stopped_at_eos"],
             }
         )
-        print(f"{p['id']:<18} positions={ids.shape[1]:>4} continuation={len(continuation)} eos={hit_eos}")
 
-    config = model.config
+    config = f32["config"]
     manifest = {
         "model_id": MODEL_ID,
         "repo": REPO,
@@ -150,13 +195,17 @@ def main() -> int:
             "layer_outputs": "[layers, positions, hidden], the raw output of each decoder layer",
             "final_norm_output": "[positions, hidden], after the final RMSNorm",
         },
+        "precisions": {
+            "tensors_file": "float32, the library's default precision; reported against, never judged by",
+            "f64_*": "float64, stored in 64-bit; the reference S-1 to S-4 are judged against",
+        },
         "dims": {
             "layers": config.num_hidden_layers,
             "hidden": config.hidden_size,
             "vocab": config.vocab_size,
         },
         "continuation_tokens": CONTINUATION_TOKENS,
-        "eos_token_id": eos,
+        "eos_token_id": config.eos_token_id,
         "prompts": records,
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")

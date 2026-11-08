@@ -25,11 +25,11 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**.
 
 ## 9.2 The f64 run (FR-1, FR-2, Spec §10)
 
-- [ ] Refactor `generate.py` so one routine runs the forward pass, the greedy loop and the file writing for a given model and dtype; the f32 outputs and every existing manifest field stay as they are (check by diffing the generated manifest's existing fields against task 9.1's copy after 9.3).
-- [ ] Load the f64 model from the same files with `dtype=torch.float64`, eager attention, `.eval()`, no `device_map`; assert its parameter dtype is `float64` and its device `cpu`, as the f32 model's are.
-- [ ] Hooks, `final_norm_output` and the hook-versus-library check work as before for the f64 model. The top-two gaps and the greedy continuation (own argmax loop, 32 tokens, EOS stop) are computed from the f64 logits.
-- [ ] Write `<id>.f64.safetensors` per prompt (same tensor names and shapes, dtype F64, not narrowed) and add to each manifest record `f64_tensors_file`, `f64_prompt_top2_gaps`, `f64_continuation_ids`, `f64_continuation_text`, `f64_continuation_top2_gaps`, `f64_stopped_at_eos`; the manifest's `tensors` note says which file is which precision.
-- [ ] The script's docstring and `--help` say what it writes and that it takes minutes; the README is updated in task 10.11, not here.
+- [x] Refactor `generate.py` so one routine runs the forward pass, the greedy loop and the file writing for a given model and dtype; the f32 outputs and every existing manifest field stay as they are (check by diffing the generated manifest's existing fields against task 9.1's copy after 9.3).
+- [x] Load the f64 model from the same files with `dtype=torch.float64`, eager attention, `.eval()`, no `device_map`; assert its parameter dtype is `float64` and its device `cpu`, as the f32 model's are.
+- [x] Hooks, `final_norm_output` and the hook-versus-library check work as before for the f64 model. The top-two gaps and the greedy continuation (own argmax loop, 32 tokens, EOS stop) are computed from the f64 logits.
+- [x] Write `<id>.f64.safetensors` per prompt (same tensor names and shapes, dtype F64, not narrowed) and add to each manifest record `f64_tensors_file`, `f64_prompt_top2_gaps`, `f64_continuation_ids`, `f64_continuation_text`, `f64_continuation_top2_gaps`, `f64_stopped_at_eos`; the manifest's `tensors` note says which file is which precision.
+- [x] The script's docstring and `--help` say what it writes and that it takes minutes; the README is updated in task 10.11, not here.
 
 ## 9.3 Run it and check the f32 set (FR-2, FR-4)
 
