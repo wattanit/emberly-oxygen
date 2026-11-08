@@ -12,7 +12,7 @@ Out of scope: any Rust change. Any change to the f32 outputs or to the prompt se
 
 ## Decision points for the owner
 
-Each has a recommendation; none is decided by this to-do.
+Each has a recommendation; **the owner agreed to all of them on 2026-11-08**.
 
 1. **Which prompts get an f64 run. (applies to 9.2.)** *Recommendation:* all twelve, because S-5 judges every category and a subset would leave a category judged against a different reference than the rest. The cost is a few minutes more and about 1.3 GB of disk (Specification §10).
 2. **How the reference's noise is measured. (applies to 9.4.)** *Recommendation:* run the f64 forward pass of every prompt once with one thread and once with the default thread count, compare each to the stored f64 result, and report the worst logit difference and worst relative intermediate difference per category. Thread count is the only source of reordering inside one machine; a second machine is not available for this release, and the note says so.
@@ -20,8 +20,8 @@ Each has a recommendation; none is decided by this to-do.
 
 ## 9.1 Save the current fixtures' fingerprint (FR-4)
 
-- [ ] Write, in the scratchpad (not the repository), a copy of `fixtures/smollm2-135m/manifest.json` and the SHA-256 of every `*.safetensors` file there, with the date and the machine.
-- [ ] Confirm `git status` is clean and the branch is `release/0.1.2`.
+- [x] Write, in the scratchpad (not the repository), a copy of `fixtures/smollm2-135m/manifest.json` and the SHA-256 of every `*.safetensors` file there, with the date and the machine. *Done: 12 files, in `scratchpad/fixtures-0.1.1/`; the fixtures were generated 2026-11-05 on the Apple M4 Max with torch 2.14.1, transformers 5.21.0, 12 torch threads.*
+- [x] Confirm `git status` is clean and the branch is `release/0.1.2`.
 
 ## 9.2 The f64 run (FR-1, FR-2, Spec §10)
 

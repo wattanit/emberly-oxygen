@@ -14,7 +14,7 @@ The benchmark machine is the owner's Apple M4 Max (Requirements §13).
 
 ## Decision points for the owner
 
-Each has a recommendation; none is decided by this to-do. Point 1 blocks 10.7 and must be settled before the measurement in 10.6 is seen.
+Each has a recommendation; **the owner agreed to all of them on 2026-11-08**. Point 1 blocks 10.7 and must be settled before the measurement in 10.6 is seen.
 
 1. **How the thresholds are decided, written before the numbers. (blocks 10.7.)** *Recommendation:* for each of S-1 (logit) and S-2 (intermediate), take the worst error over all categories against the f64 reference. If it is at most **half the limit**, keep the limit: the margin is at least 2×, which is what 0.1.0 had at 22% and 0.1.1 lost. If it is above half and below the limit, the owner chooses between loosening and investigating; if it is at or above the limit, that is a failure to investigate, not a reason to loosen. A limit is not tightened to follow the engine's error, because a real bug smaller than the new limit could then hide, and the negative controls were sized for the present values. The near-tie gap (S-3) stays equal to the S-1 limit.
 2. **What the f32 distance column shows. (applies to 10.4.)** *Recommendation:* the same two figures as the gating columns (worst logit error and worst relative intermediate error) per category, labelled "vs f32 (reported)", with no pass or fail mark, so the table cannot be misread as gating on it.
