@@ -2,11 +2,11 @@
 
 Oct 27, 2026 · @Wattanit
 
-**Version:** 0.5\
+**Version:** 0.6\
 **Status:** approved\
 **Date:** 2026-11-08\
 **Owner:** Wattanit\
-**Companion documents:** Emberly Oxygen — Technical Specification 0.3 (downstream)
+**Companion documents:** Emberly Oxygen — Technical Specification 0.4 (downstream)
 
 This document owns WHAT Emberly Oxygen must do and WHY it exists. It defers HOW it is built (architecture, algorithms, data layouts, dependencies, testing strategy, milestones) to the Technical Specification. There is no Design Guideline: the only human-facing surface is a command-line interface, so naming and output wording are decided here.
 
@@ -24,7 +24,7 @@ Emberly Oxygen is a decoder-only LLM inference engine written from scratch in Ru
 
 - Loading the SmolLM2-135M base model from its published weights, chosen because it is the smallest widely used Llama-architecture model, so a naive engine runs it in seconds.
 - Converting text to tokens and tokens to text with that model's tokenizer.
-- Generating text from a prompt on CPU with greedy decoding.
+- Generating text from a prompt on CPU with greedy decoding, or by sampling with temperature, top-k, top-p and a repetition penalty from a seeded random number generator (FR-26 to FR-29). Sampling is the first generation that has no single correct output, so it is judged by the distribution it draws from and by statistics over its draws, not by matching a reference's tokens (S-9, S-10).
 - A command-line interface for generation.
 - A reference oracle that produces expected outputs from an independent implementation of the same model.
 - A correctness harness that compares engine output against the oracle's expected outputs.
@@ -33,14 +33,15 @@ Emberly Oxygen is a decoder-only LLM inference engine written from scratch in Ru
 
 ### 2.2 Explicitly deferred
 
-- **Additional models.** The oracle, its expected outputs and both harnesses must not be specific to SmolLM2-135M: adding a model adds expected outputs, not changes to the harnesses. This door is kept because it costs nothing now and every future model needs it.
+- **Additional models.** The oracle, its expected outputs and both harnesses must not be specific to SmolLM2-135M: adding a model adds expected outputs, not changes to the harnesses. This door is kept because it costs nothing now and every future model needs it. The first model through it is the instruct variant of SmolLM2-135M, planned with chat; sampling stays on the base model.
 - **Further kernel optimization.** Threads, SIMD intrinsics and `unsafe` code, tiling, and reading weights at lower precision inside the kernel. Each enters as its own release by replacing the body of the matrix-vector function, so neither its callers nor the harnesses change. FR-25 takes only the first step, because each technique is measured on its own (§1, purpose 2).
 
 ### 2.3 Out of scope
 
 The engine is built naive-first: nothing is designed ahead for a capability until it is planned. The following are expected in future releases and enter this document by version bump when planned; until then no part of the engine is shaped for them.
 
-- Sampling strategies other than greedy, and chat or instruction-following conversation.
+- Chat or instruction-following conversation, with its template and stop conditions; planned for the release after sampling.
+- Sampling controls beyond FR-26 (for example min-p) and stopping on a text string; neither is planned, and each enters by version bump if measured use shows a need.
 - Processing a prompt's tokens in one batched pass.
 - Quantized weights or quantized cached state.
 - Model families other than the one in scope.
@@ -68,12 +69,13 @@ A release that violates any of these is defective by definition.
 
 - **FR-1 — Expected outputs.** For each prompt in the prompt set, the oracle produces: the prompt's token IDs, the logits at every position, a greedy continuation of fixed length, the input embeddings, and the output of every transformer layer. Per-layer outputs exist so that a mismatch can be traced to the first layer that diverges. Every output is produced twice, in 64-bit and in 32-bit floating point (FR-2).
 - **FR-2 — Computed in 64-bit and 32-bit floats on CPU.** The oracle computes on CPU in 64-bit floating point, and again in 32-bit, which is the precision the reference library uses by default. Both runs start from identical weights (the published values, widened exactly), which are also the values the engine computes from. The 64-bit run is the reference that §11 judges the engine against; the 32-bit run is reported beside it and judges nothing. The reason: a 32-bit run carries its own rounding, which depends on its order of additions, so a check against it measures agreement with one implementation's rounding and not correctness. In release 0.1.1 the 32-bit reference was measured up to 7.1e-4 in logit from the 64-bit result, farther than the engine at either summation order tried (3.3e-4 and 5.1e-4), so a more accurate engine could fail against it. The 64-bit run computes every operation of the model in 64-bit except the rotary position tables, which stay as the reference library makes them (32-bit): they are part of the model as published, and a more precise angle is a different angle. The library's own 64-bit run is not used as it stands, because it also computes the normalization and the attention softmax in 32-bit; measured in plan 0.1.2, that made its logits depend on the thread count by up to 1.7e-5 and differ by up to 7.3e-5 from the version that does not. Not guaranteed: the reference is independent of the engine but not of the reference library. It carries that library's definition of the model, including its 32-bit rotary tables, so an error in that definition would be shared by the reference and would pass these checks.
+- **FR-31 — Expected distributions for sampling.** For a fixed set of prompts and sampling settings (FR-26), the oracle produces the probability distribution over the vocabulary after the controls are applied, at the last position of the prompt, computed from the 64-bit logits (FR-2) by the reference library's own logit processors. The oracle does not draw tokens: a draw from a random number generator has no correct value to store, only a distribution it must follow. The distributions are stored, not rerun, under FR-4. Not guaranteed: the processors are the reference library's definition of each control, so a difference between that definition and the textbook one is shared by the reference.
 - **FR-3 — Prompt coverage.** The prompt set includes English prose, Thai text, source code, prompts whose tokens split multi-byte UTF-8 characters, and at least one prompt near the longest context the benchmarks use. Results are judged per category (§11), so each category must be present.
 - **FR-4 — Stored, not rerun.** Expected outputs are generated by running the oracle locally and kept out of version control, because full logits in two precisions make them gigabytes. What regenerates them (the prompt set, the oracle's pinned dependencies and the pinned model revision) is version-controlled. The harnesses never run the oracle, so a test run never depends on Python or on a reference library's version.
 
 ## 5. Correctness harness
 
-- **FR-5 — Full comparison.** The harness compares the engine against every stored expected output and reports pass or fail per prompt and per check: token IDs, logits, top-1 token, greedy continuation, and intermediate values, each against the 64-bit reference (FR-2). It also reports, without judging, the engine's distance to the 32-bit reference, so the disagreement between the two references stays visible.
+- **FR-5 — Full comparison.** The harness compares the engine against every stored expected output and reports pass or fail per prompt and per check: token IDs, logits, top-1 token, greedy continuation, and intermediate values, each against the 64-bit reference (FR-2), and the engine's adjusted distribution for each sampling setting against the stored one (FR-31, S-9). It also reports, without judging, the engine's distance to the 32-bit reference, so the disagreement between the two references stays visible.
 - **FR-6 — Locates divergence.** On failure, the harness reports the first diverging position and, where intermediate values are available, the first diverging layer.
 - **FR-7 — One command, offline.** The harness runs with a single command, without network access and without Python.
 
@@ -99,12 +101,17 @@ A release that violates any of these is defective by definition.
 - **FR-16 — Greedy generation.** Given a prompt and a maximum number of new tokens, the engine generates by always selecting the highest-scoring token, and stops at the maximum or at the model's end-of-sequence token.
 - **FR-17 — Streamed output.** Each generated token's text is emitted as soon as it is produced, subject to FR-15.
 - **FR-18 — Context limit enforced.** A request whose prompt plus maximum new tokens exceeds the model's context length is rejected with an error. Silent truncation would change the output without telling the user.
+- **FR-26 — Sampling controls.** Generation accepts four controls and applies them to the logits of each step in this order, the reference library's order: repetition penalty (FR-27), temperature, top-k, top-p; then the next token is drawn from the resulting distribution. Temperature divides the logits. Top-k keeps the k highest-scoring tokens. Top-p keeps the smallest set of highest-probability tokens whose probabilities sum to at least p. Each control has a neutral value that changes nothing, and a temperature of 0 means greedy selection (FR-16). A fixed order is required because the controls do not commute: the same settings in another order draw from a different distribution. Sampled generation stops where FR-16 stops greedy generation: at the maximum number of new tokens or at the end-of-sequence token.
+- **FR-27 — Repetition penalty.** For every token already in the context, prompt and generated alike, a positive logit is divided by the penalty and a negative logit is multiplied by it, as the reference library does. This definition is chosen over a count-based penalty so that the oracle can check it (FR-31).
+- **FR-28 — Seeded generation.** The same build, model, prompt, settings and seed produce the same tokens, and the seed used is reported, so a sampled run can be replayed. Reproduction across releases is not promised: pinning the random number generator forever would bind every future release to one algorithm, and a replay is only needed against the build that produced the run.
+- **FR-29 — Greedy is unchanged.** With no sampling option set, or a temperature of 0, the output is identical to the previous release's greedy output and still passes §11 (S-1 to S-4). Sampling is added beside the greedy path, not in place of it, so the correctness proven so far keeps its meaning.
 - **FR-25 — Faster matrix-vector product.** The matrix-vector product, about 94% of a decode step in 0.1.0 (release note 0.1.1; the 0.1.0 note's 98.6% came from a dry run on a cooler machine), runs faster than in the previous release, in safe single-threaded in-house code (HC-1). The release note reports the kernel's and the engine's speed against the previous release's recorded rows (FR-9) and what the change was worth; there is no numeric target, so a disappointing result is a recorded negative result (§12), not a defect. Output must still pass §11 (HC-4). It stays single-threaded and free of `unsafe` so that this release measures one technique alone.
 
 ## 10. Command-line interface and logging
 
 - **FR-19 — Generate command.** A single command takes a model location, a prompt (as an argument or from standard input) and a maximum number of new tokens, and streams generated text to standard output.
 - **FR-20 — Clean output stream.** Errors and diagnostics go to standard error only, so standard output contains generated text and nothing else.
+- **FR-30 — Sampling options.** The generate command accepts an option for each control of FR-26 and for the seed (FR-28). A value outside a control's valid range (for example a negative temperature, a top-p outside 0 to 1, or a penalty of 0 or less) is rejected with an error naming the option and the value, in the manner of FR-12: a clamped value would run a different distribution from the one requested.
 - **FR-21 — Run statistics on request.** On request, the command reports token counts, time to first token and generation throughput on standard error.
 - **FR-22 — System log.** The engine reports what it does as log events: model loading, tokenization, each generation step, timings and errors. The library never prints; the program using it decides where events go.
 - **FR-23 — Verbosity levels.** By default only warnings and errors are logged. A `--verbose` option raises the level step by step: run summary and timings; then each decode step (position, chosen token, top candidates, step time); then per-layer detail inside each step. The highest level lets the decode loop be followed directly.
@@ -118,6 +125,8 @@ The thresholds below are initial values; tune with the first measured comparison
 - **S-2 — Intermediate agreement.** Every stored intermediate value matches the 64-bit reference's within 1e-4 relative to the largest magnitude in its tensor. A relative bound is used because values grow across layers. A tensor is one layer's output for one prompt, and its largest magnitude, in the 64-bit reference, is taken over all positions; an all-zero reference tensor fails, because a relative error is undefined.
 - **S-3 — Top-token agreement.** The highest-scoring token matches the 64-bit reference's at every position, except near-ties where the 64-bit reference's two highest logits differ by less than 1e-3; there either token passes.
 - **S-4 — Greedy agreement.** The greedy continuation matches the 64-bit reference's token for token. If a near-tie (S-3) occurs during the continuation, comparison stops at that position and the harness reports it, because the two sequences may legitimately diverge from there.
+- **S-9 — Sampling distribution agreement.** For every prompt and setting in the stored set (FR-31), the largest absolute difference between the engine's adjusted distribution and the stored one is within a tolerance fixed at the first measurement (§13). The engine's distribution is judged, not its draws, because the distribution is the part with a correct answer.
+- **S-10 — Draws follow the distribution.** Over a fixed number of draws with a fixed seed, the observed token frequencies are consistent with the engine's adjusted distribution under a stated statistical test. The seed is fixed so that the test is deterministic: a test that can fail by chance is not a test (FR-28). Not guaranteed: a statistical test over finitely many draws cannot rule out a small bias; it catches a wrong distribution, not a slightly wrong one.
 - **S-5 — Judged per category.** A release passes only if every prompt category (FR-3) passes. Averages are never used, because an aggregate can stay flat while one category fails.
 - **S-6 — Reproducible output.** For identical input, the same build on the same machine produces logits that differ between runs by no more than S-1 allows, and greedy continuations that are identical except at near-ties (S-3). Without this, a benchmark or correctness result cannot be reproduced. Bit-identical output is not required, because parallel computation may change the order of additions between runs.
 - **S-7 — Benchmark conditions.** Every recorded benchmark runs on one designated machine. Each measurement is repeated and reported as the median with its spread, so a single noisy run is never taken as a result.
@@ -136,6 +145,13 @@ These are requirements because the project's second purpose (§1), a measured an
 ## 13. Open Questions
 
 - **Whether a byte the vocabulary cannot represent should be warned about or rejected instead of silently dropped (FR-13).** Resolver: owner, when a release changes tokenization behavior; the engine and the reference agree today.
+
+- **The tolerance for S-9 and the number of draws and the statistical test for S-10.** Resolver: owner, after the first measurement in the release that implements sampling, by the rule used for S-1 (keep a limit when the worst error is at most half of it).
+- **Whether the oracle remains a gate once chat arrives (§1 purpose 3, HC-4).** The owner's view, stated 2026-11-08: the oracle's tight matching served the stage of proving the engine equal to the library, and later features and optimizations need not match it. Resolver: owner, at the Requirements bump that plans chat. Until then HC-4 and S-1 to S-4 stand unchanged.
+
+### Resolved since 0.5
+
+- **Order of the sampling controls, the repetition penalty definition, and whether a seed reproduces across releases (FR-26 to FR-28).** Decided by the owner on 2026-11-08: the reference library's order; the library's definition; reproducible within a build only. Min-p and stopping on a string were considered and left out (§2.3).
 
 ### Resolved since 0.4
 
