@@ -23,8 +23,8 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**. Po
 
 ## 10.1 The reader accepts F64 (FR-4, FR-7, Spec §11)
 
-- [ ] **Tests first**, in `fixture_reader.rs`, seen to fail: an F64 file parses with exact values; a dtype different from the one asked for fails naming the file and the command that regenerates it (`GENERATE_COMMAND`); a missing f64 file fails the same way; a truncated or malformed one fails with a message, not a panic; the shapes of an f64 prompt equal the manifest's.
-- [ ] `read_safetensors` takes the dtype it expects and returns an f32 or f64 tensor accordingly; the tensor type carries which it is.
+- [x] **Tests first**, in `fixture_reader.rs`, seen to fail: an F64 file parses with exact values; a dtype different from the one asked for fails naming the file and the command that regenerates it (`GENERATE_COMMAND`); a missing f64 file fails the same way; a truncated or malformed one fails with a message, not a panic; the shapes of an f64 prompt equal the manifest's.
+- [x] `read_safetensors` takes the dtype it expects and returns an f32 or f64 tensor accordingly; the tensor type carries which it is.
 
 ## 10.2 The manifest's f64 fields (FR-4, FR-7)
 

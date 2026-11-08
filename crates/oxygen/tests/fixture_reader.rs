@@ -7,7 +7,8 @@ mod common;
 use std::path::PathBuf;
 
 use common::fixtures::{
-    discover, parse_safetensors, require_model_dir, workspace_root, DOWNLOAD_COMMAND, GENERATE_COMMAND,
+    discover, parse_safetensors, parse_safetensors_f64, require_model_dir, workspace_root, DOWNLOAD_COMMAND,
+    GENERATE_COMMAND,
 };
 
 /// Builds a safetensors file in memory: (name, dtype, shape, values).
@@ -30,6 +31,57 @@ fn build(tensors: &[(&str, &str, &[usize], &[f32])]) -> Vec<u8> {
     file.extend(header);
     file.extend(data);
     file
+}
+
+/// The same, with 8-byte values.
+fn build64(tensors: &[(&str, &str, &[usize], &[f64])]) -> Vec<u8> {
+    let mut header = serde_json::Map::new();
+    let mut data = Vec::new();
+    for (name, dtype, shape, values) in tensors {
+        let begin = data.len();
+        for v in *values {
+            data.extend_from_slice(&v.to_le_bytes());
+        }
+        header.insert(
+            name.to_string(),
+            serde_json::json!({"dtype": dtype, "shape": shape, "data_offsets": [begin, data.len()]}),
+        );
+    }
+    let header = serde_json::to_vec(&header).unwrap();
+    let mut file = (header.len() as u64).to_le_bytes().to_vec();
+    file.extend(header);
+    file.extend(data);
+    file
+}
+
+#[test]
+fn fr4_reads_f64_tensors_exactly() {
+    // 0.1 and a value one part in 1e12 off 1.0 are not representable in f32: an f64 reader must keep them whole.
+    let values = [0.1f64, 1.0 + 1e-12, -2.5, 3.0e-300];
+    let file = build64(&[("a", "F64", &[2, 2], &values)]);
+    let tensors = parse_safetensors_f64(&file).unwrap();
+    assert_eq!(tensors["a"].shape, [2, 2]);
+    assert_eq!(tensors["a"].data, values, "values are bit-exact, not narrowed to f32");
+}
+
+#[test]
+fn fr4_a_dtype_other_than_the_one_asked_for_is_refused_naming_both() {
+    let f64_file = build64(&[("a", "F64", &[1], &[1.0])]);
+    let error = parse_safetensors(&f64_file).unwrap_err();
+    assert!(error.contains("F64") && error.contains("F32"), "{error}");
+
+    let f32_file = build(&[("a", "F32", &[1], &[1.0])]);
+    let error = parse_safetensors_f64(&f32_file).unwrap_err();
+    assert!(error.contains("F32") && error.contains("F64"), "{error}");
+}
+
+#[test]
+fn fr4_bad_f64_files_fail_without_panicking() {
+    let good = build64(&[("a", "F64", &[2], &[1.0, 2.0])]);
+    assert!(parse_safetensors_f64(&good[..4]).is_err(), "shorter than the length prefix");
+    assert!(parse_safetensors_f64(&good[..good.len() - 1]).is_err(), "data cut short");
+    let wrong_count = build64(&[("a", "F64", &[3], &[1.0, 2.0])]);
+    assert!(parse_safetensors_f64(&wrong_count).is_err(), "shape disagrees with byte range");
 }
 
 #[test]
