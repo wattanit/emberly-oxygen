@@ -46,7 +46,7 @@ Dependencies: none new. Out of scope: reusing the cache across turns, multi-line
 
 ## 16.10 Compare (FR-8, FR-9)
 
-- [ ] Against 0.2.0's rows; turn time against history length.
+- [x] Against 0.2.0's rows; turn time against history length.
 
 ## 16.11 Release note and SFD settlement
 
