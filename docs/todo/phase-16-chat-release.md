@@ -34,11 +34,11 @@ Dependencies: none new. Out of scope: reusing the cache across turns, multi-line
 
 ## 16.7 Full gate (HC-4)
 
-- [ ] `cargo test --no-fail-fast`, read the whole summary.
+- [x] `cargo test --no-fail-fast`, read the whole summary.
 
 ## 16.8 Version (FR-9)
 
-- [ ] 0.3.0, clean tree.
+- [x] 0.3.0, clean tree.
 
 ## 16.9 Test then bench (FR-8, FR-9, S-7)
 
