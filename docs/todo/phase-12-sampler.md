@@ -43,6 +43,6 @@ Dependencies: none new. Out of scope: wiring into `generate`, the CLI (Phase 13)
 
 ## 12.8 Stop: owner decides
 
-- [ ] The owner decides the tolerance and the boundary rule from the table and the decision points above.
+- [x] Decided by the owner on 2026-11-08: tolerance 1e-5, no cutoff exemption.
 
 **Exit check:** as in the plan's section 3.

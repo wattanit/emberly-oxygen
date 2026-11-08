@@ -18,10 +18,11 @@ pub const INTERMEDIATE_TOLERANCE: f64 = 1e-4;
 pub const NEAR_TIE_GAP: f64 = 1e-3;
 
 /// S-9: largest absolute difference allowed between the engine's adjusted
-/// distribution and the stored one. PROVISIONAL (task 12.5): a value so that the
-/// check can run and the controls can be seen to fail before the first
-/// measurement; the owner decides the real one at task 12.8 (Requirements §13).
-pub const SAMPLING_TOLERANCE: f64 = 1e-2;
+/// distribution and the stored one. Decided by the owner at plan 0.2.0 task
+/// 12.8 by the rule used for S-1: the smallest round decimal at least twice the
+/// worst measured error (1.98e-6), so the worst case uses at most half of it.
+/// Measured on one machine only (Requirements §13).
+pub const SAMPLING_TOLERANCE: f64 = 1e-5;
 
 /// A reference value: f64 (the reference) or f32 (the run the harness reports against).
 pub trait Reference: Copy + Into<f64> {}
