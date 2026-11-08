@@ -65,9 +65,19 @@ All of 0.1.1's rules hold. The ones this release leans on, and what it adds:
 
 Filled in during the phases. Nothing here is tuned; thresholds change only by the owner's decision at task 10.7 and a foundation bump.
 
-- The f64 oracle's run time and the fixtures folder's size before and after (task 9.3). *(to fill)*
-- The f64 reference's own noise: worst logit and intermediate difference between runs at different thread counts, per category (task 9.4). *(to fill)*
-- The difference between the f32 and f64 fixtures per category, and the prompts whose greedy continuations differ (task 9.5). 0.1.1's diagnostic gave the reference up to 7.12e-4 from the truth. *(to fill)*
+- The oracle's run (task 9.3, Apple M4 Max, 12 torch threads): 99 s wall (183 s user) for both precisions on all 12 prompts; the fixtures folder went from about 0.7 GB to 2.0 GB. All 12 f32 files reproduced the 0.1.1 files bit for bit (SHA-256), and the manifest's existing fields are unchanged apart from `generated_at`.
+- The stock f64 reference's own noise (task 9.4; scratchpad script, f64 forward pass of all 12 prompts rerun and compared with the stored f64 file; worst logit absolute difference and worst intermediate relative difference):
+
+  | Category | 12 threads (as generated) | 1 thread |
+  | --- | --- | --- |
+  | english | 0 and 0 | 0 and 0 |
+  | code | 0 and 0 | 0 and 2.0e-17 |
+  | utf8-split | 0 and 0 | 0 and 2.0e-17 |
+  | thai | 0 and 0 | **1.74e-5** and 4.3e-7 |
+  | long | 0 and 0 | **1.65e-5** and 5.9e-7 |
+
+  Same thread count reproduces exactly; one thread differs by up to 1.74e-5 in logits on the thai and long prompts, 1.7% of S-1 and over the 1e-5 (1%) bar of the to-do's decision point 3, so **task 9.4 stopped and went to the owner**. Cause found: the pinned transformers computes RMSNorm (`modeling_llama.py` line 63), the attention softmax (line 197) and the rotary tables (line 111) in float32 even in a float64 model, so the "f64" run still contains f32 rounding that depends on thread count. A scratchpad variant with RMSNorm and softmax forced to float64 (RoPE tables left as the library makes them) differs from the stock f64 run by up to 7.3e-5 in logits (7% of S-1), and from itself at 1 and 12 threads by 2.2e-6 in logits and 4.0e-8 relative in intermediates.
+- The difference between the f32 and stock f64 fixtures (task 9.5; worst logit absolute, worst intermediate relative): english 2.88e-4 and 3.45e-5, thai 3.34e-4 and 1.61e-5, code 3.54e-4 and 4.27e-5, utf8-split **7.13e-4** and 2.81e-5, long 2.92e-4 and 2.96e-5. 0.1.1's diagnostic gave 7.12e-4 for the same prompt, so it reappears. Against the patched variant (RMSNorm and softmax in f64) the f32 fixtures differ by 3.08e-4, 3.28e-4, 3.28e-4, 3.93e-4 and 6.39e-4 in logits (code, english, long, thai, utf8-split). The f32 and stock f64 greedy continuations are identical for all 12 prompts, so no near-tie arises in them.
 - Worst logit and intermediate error of the 16-sum engine per category, against the f64 and f32 references, with the margin to each limit (task 10.6). 0.1.1's figures against f32: english 3.14e-4 and 3.66e-5, thai 2.79e-4 and 1.51e-5, code 3.18e-4 and 4.02e-5, utf8-split 9.90e-4 and 2.70e-5, long 3.18e-4 and 2.99e-5. *(to fill)*
 - Test suite time with the larger fixtures, against 28 s (task 10.6). *(to fill)*
 - Workloads and kernel shapes against 0.1.1's rows (task 10.10). *(to fill)*
@@ -81,6 +91,9 @@ Recorded here and absorbed by the upstream owner at the next bump; the upstream 
 | Before Phase 9 | Specification 0.3 status | The Specification is `draft` and this plan pins it so; the status is the owner's to set. The pin is updated here if the status or version changes. |
 | Before Phase 9 | Requirements FR-25 | FR-25 says the matrix-vector product was "about 98.6% of a decode step in 0.1.0". Release 0.1.1's like-for-like figure from the recorded rows is 94%; 98.6% came from a dry run on a cooler machine (release note 0.1.1). Suggest the next Requirements bump correct the figure. The Specification §4 was corrected in 0.3. |
 
+| Task 9.4 | Requirements FR-2; Specification §10 | **FR-2 says the 64-bit run is "exact in arithmetic", and §10 says the library keeps only its RoPE tables in f32. Both are wrong:** the pinned library also computes RMSNorm and the attention softmax in float32 in a float64 model (task 9.4, §4). Whatever the owner decides below, FR-2's "Not guaranteed" sentence and §10's reference-limits bullet need correcting, which needs a Requirements bump because 0.3 is approved. |
+
 ## 6. Open Questions
 
+- **Which float64 reference S-1 to S-4 are judged against, now that the library's own f64 run is only partly f64 (task 9.4).** Options and a recommendation are in the to-do's decision point 4. Resolver: owner. Blocks task 9.4's exit and Phase 10.
 - **Whether S-1 to S-4's thresholds hold against the f64 reference (Requirements §13, Specification §19).** Resolver: owner, at task 10.7, from §4's measurements.
