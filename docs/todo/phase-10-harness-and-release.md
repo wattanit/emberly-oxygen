@@ -56,9 +56,11 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**. Po
 
 ## 10.7 The owner decides the thresholds (S-1 to S-4, Requirements §13)
 
-- [ ] **Stop.** Present plan §4's table against decision point 1's rule. The owner decides: keep, tighten or loosen S-1 to S-4.
-- [ ] If kept: record the decision in plan §4 and §6; the Open Question moves to resolved in the next foundation bump.
-- [ ] If changed: a Requirements bump (0.4) is drafted and approved first, the Specification pins it, the constants and the control's size follow it, and tasks 10.5 and 10.6 are repeated.
+- [x] **Stop.** Present plan §4's table against decision point 1's rule. The owner decides: keep, tighten or loosen S-1 to S-4.
+- [x] If kept: record the decision in plan §4 and §6; the Open Question moves to resolved in the next foundation bump.
+- [x] If changed: *not applicable.* a Requirements bump (0.4) is drafted and approved first, the Specification pins it, the constants and the control's size follow it, and tasks 10.5 and 10.6 are repeated.
+
+*Decided by the owner on 2026-11-08: kept, with the rule of decision point 1 giving the same answer (S-1 at 35%, S-2 at 10% of the limit).*
 
 ## 10.8 Prepare the measurement (FR-9, Spec §16)
 

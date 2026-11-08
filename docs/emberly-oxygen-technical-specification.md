@@ -282,9 +282,10 @@ Acceptance policy: an engine dependency must be general plumbing under HC-1; any
 
 ## 19. Open Items
 
-- **Whether S-1 to S-4's thresholds hold against the f64 reference (Requirements §13).** Resolver: owner, from M8's measurement.
 
 ### Resolved since 0.2
+
+- **Whether S-1 to S-4's thresholds hold against the f64 reference (Requirements §13).** They hold and are kept, by the owner's decision of 2026-11-08: the 16-sum engine's worst logit error is 3.50e-4 (35% of S-1) and its worst relative intermediate error 9.97e-6 (10% of S-2) against the f64 reference (plan 0.1.2 §4).
 
 - **Which partial-sum width is best (§4).** 16, by the sweep of release 0.1.1 (plan 0.1.1 §4, release note 0.1.1).
 - **Whether release 0.1.2 re-runs the benchmark (§16, step 2).** Yes, decided by the owner on 2026-11-08: the version changes, so the record gets rows for it, taken by the same procedure as every release. The engine is unchanged, so the rows also show how repeatable 0.1.1's were; the release note says so and does not claim a speed change.
