@@ -53,6 +53,14 @@ pub mod kernels {
         crate::ops::matvec_lanes::<N>(weight, input, output);
     }
 
+    /// One full sampling step on a step's logits: the controls, the softmax and
+    /// the draw, with a fresh generator seeded by `seed` and `context` as the
+    /// repetition penalty's context. For the benchmark's sampling cost group
+    /// (Spec §12) and its test.
+    pub fn sample_token(logits: &[f32], context: &[u32], sampling: &crate::Sampling, seed: u64) -> u32 {
+        crate::sampling::Sampler::new(sampling, seed, context).choose(logits).token
+    }
+
     /// The matrix-vector product exactly as release 0.1.0 computed it: one
     /// running sum per output element, added in index order. Kept as a
     /// reference point for tests and the benchmark's kernel group (FR-25,

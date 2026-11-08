@@ -30,11 +30,11 @@ Dependencies: none new. Out of scope: chat, the instruct model, any change to th
 
 ## 13.5 Full gate (HC-4)
 
-- [ ] `cargo test --no-fail-fast`, whole summary read; record the time.
+- [x] `cargo test --no-fail-fast`, whole summary read; record the time.
 
 ## 13.6 Sampling cost benchmark (FR-8)
 
-- [ ] The group in `benches/`; the workloads stay greedy.
+- [x] The group in `benches/`; the workloads stay greedy.
 
 ## 13.7 Version (FR-9)
 
