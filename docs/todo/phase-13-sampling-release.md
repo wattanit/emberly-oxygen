@@ -50,11 +50,11 @@ Dependencies: none new. Out of scope: chat, the instruct model, any change to th
 
 ## 13.10 Release note and README (Requirements §12)
 
-- [ ] `docs/releases/0.2.0.md`, README status.
+- [x] `docs/releases/0.2.0.md`, README status.
 
 ## 13.11 Settle the SFD (G-14, G-16, G-24, G-25)
 
-- [ ] Requirements 0.7 and Specification 0.5 absorb the plan's section 6; compliance review; pins current; the owner approves the statuses.
+- [x] Requirements 0.6 and Specification 0.4 absorb the plan's section 6 in place (no bump); compliance review; pins current; the owner approved the statuses again (2026-11-08).
 
 ## 13.12 Owner's review; stop and ask
 

@@ -4,7 +4,7 @@ Nov 8, 2026 · @Wattanit
 
 **Target release:** 0.2.0\
 **Owner:** Wattanit\
-**Built against:** Emberly Oxygen — Requirements 0.6 (upstream, approved on 2026-11-08), Emberly Oxygen — Technical Specification 0.4 (upstream, approved on 2026-11-08)
+**Built against:** Emberly Oxygen — Requirements 0.6 (upstream; approved on 2026-11-08, edited in place with the owner's permission with what the work found, §6, and approved again on 2026-11-08 after a compliance review), Emberly Oxygen — Technical Specification 0.4 (upstream; the same)
 
 This is a living working document, not part of the SFD suite: it has no document version or status and is edited in place as work proceeds. It expands the Technical Specification's milestones M9 and M10 into three phases with ordered tasks and exit checks. It owns sequencing and task breakdown only; WHAT stays in the Requirements and HOW stays in the Specification, and every task cites the IDs it satisfies.
 
@@ -24,7 +24,7 @@ All of 0.1.2's rules hold. The ones this release leans on, and what it adds:
 - **Every test names the HC, FR or S item it verifies** (Specification §17).
 - **No new Rust dependency, and no new Python dependency.** The generator is written in this project (Specification §8, §15); the oracle already has `torch`, `transformers` and `safetensors`.
 - **Throwaway scripts stay out of the repository.** A script written to check something once (the textbook recomputation of task 11.3, the published generator vectors of task 12.1) lives in the scratchpad; its result goes in §4 with how it was produced.
-- **The SFD is settled before any merge.** Task 13.11 comes before the question of merging: feedback absorbed by version bumps, a compliance review, the owner's approval of the statuses, pins current.
+- **The SFD is settled before any merge.** Task 13.11 comes before the question of merging: what the work found is written into the Requirements and Specification this release was built against, in place and not by a version bump (a version pins what was built, and a decision made and implemented in it belongs in it); then a compliance review and the owner's approval of the statuses, pins current.
 - **Work happens on `release/0.2.0`.** The owner pushes; nothing is pushed, tagged or merged to `develop` or `main` without the owner's explicit order at that moment (standing rule, 2026-11-06).
 
 ## 2. Phase 11 — Sampling reference (first part of M9)
@@ -74,7 +74,7 @@ All of 0.1.2's rules hold. The ones this release leans on, and what it adds:
 | 13.8 | Run `cargo test --no-fail-fast`, then `cargo bench` straight after, at the default log level (Specification §16). A failing test run stops here. | FR-8, FR-9, S-7 |
 | 13.9 | Record the comparison with 0.1.2's rows in §5 (the greedy workloads should be unchanged; say so as 0.1.2 did, and do not claim a speed change) and what a sampled step costs next to a forward step. | FR-8, FR-9 |
 | 13.10 | Release note `docs/releases/0.2.0.md` and the README (what changed, why it was expected to help, what was measured, what was learned, negative results). | Requirements §12 |
-| 13.11 | **Settle the SFD before the merge question:** absorb §6's rows into Requirements 0.7 and Specification 0.5 (bumps), run the sfd-standard compliance review over both, update every pin here and in the release note, and ask the owner to approve the statuses. | G-14, G-16, G-24, G-25 |
+| 13.11 | **Settle the SFD before the merge question:** absorb §6's rows in place into Requirements 0.6 and Specification 0.4 (no version bump; their status goes back to draft until the owner approves them again), run the sfd-standard compliance review over both, check every pin here and in the release note, and ask the owner to approve the statuses. | G-14, G-16, G-24, G-25 |
 | 13.12 | Owner's review of the rows and the note. Then **stop and ask** before merging or tagging `v0.2.0`: neither happens without the owner's explicit order. | Spec §16 |
 
 **Exit check:** greedy output identical to 0.1.2's; S-9 and S-10 pass with the owner's tolerance; the new controls fail; `results/benchmarks.jsonl` holds the 0.2.0 rows from a clean tree; the release note exists; both foundation documents are approved and pinned.
@@ -116,16 +116,16 @@ Filled in as the phases land. Machine: the benchmark machine (Apple M4 Max), as 
 
 ## 6. Upstream feedback
 
-Recorded here and absorbed by the upstream owner at the next bump; the upstream documents are not edited from this one. This section is a permanent record.
+Recorded here for the upstream owner to absorb; the upstream documents are not edited from this one. This section is a permanent record. **All rows below were absorbed in place into Requirements 0.6 and Specification 0.4 at task 13.11, by the owner's rule that a decision made and implemented in a version is written into that version.**
 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
-| Before Phase 11 | Requirements 0.6 companion pin | The header pinned Specification 0.3 when it was approved, before Specification 0.4 existed; the pin went stale (G-16). At the owner's order to approve the Specification, the pin was changed to 0.4 in place, a header-only edit with no text change. The next Requirements bump records it. |
+| Before Phase 11 | Requirements 0.6 companion pin | The header pinned Specification 0.3 when it was approved, before Specification 0.4 existed; the pin went stale (G-16). At the owner's order to approve the Specification, the pin was changed to 0.4 in place, a header-only edit with no text change. Recorded in Requirements 0.6's feedback table. |
 | Before Phase 11 | Requirements FR-26 | Top-k keeps every token tied with the k-th highest logit, as the reference library does (Specification §8), so more than k tokens can survive. FR-26 says "keeps the k highest-scoring tokens". Suggest a clause on ties. |
 | Before Phase 11 | Requirements FR-26, FR-29 | Temperature 0 takes the argmax of the raw logits and ignores the other controls, with a warning, so FR-29's "identical to the previous release's greedy output" stays literally true (Specification §8). FR-26 says only that temperature 0 means greedy. Suggest it say the other controls are ignored. |
-| Before Phase 11 | Requirements S-9 | Whether a setting whose top-k or top-p cutoff the engine's rounding could cross is judged or only reported (Specification §19). S-9 says "every prompt and setting". Decided at task 12.8: no exemption, S-9 stays as written, and the Specification drops its exemption sentence and its §19 item at the next bump. |
+| Before Phase 11 | Requirements S-9 | Whether a setting whose top-k or top-p cutoff the engine's rounding could cross is judged or only reported (Specification §19). S-9 says "every prompt and setting". Decided at task 12.8: no exemption, S-9 stays as written, and the Specification drops its exemption sentence and its §19 item. |
 | Task 12.4 | Specification §17 | The negative control `SwappedSamplingOrder` is described as "temperature applied after top-k". Temperature divides by a positive number, which does not change the ranking, so it commutes with top-k and that swap gives the same distribution: S-9 could never fail on it. The implemented fault applies top-p before temperature, which does change the result (0.050 on `thai-medium`). §17 needs the description corrected. |
-| Task 12.7 | Specification §11, §19 | The cutoff-margin exemption (S-9 reports and does not judge a setting whose cutoff the engine's rounding could cross) was not needed: no cutoff was crossed, and the smallest margins are 4.3 times the worst last-position logit error and 49 times the matching probability error. The owner decided at 12.8 not to keep it (§5), so §11's sentence and the §19 item are removed at the next bump. |
+| Task 12.7 | Specification §11, §19 | The cutoff-margin exemption (S-9 reports and does not judge a setting whose cutoff the engine's rounding could cross) was not needed: no cutoff was crossed, and the smallest margins are 4.3 times the worst last-position logit error and 49 times the matching probability error. The owner decided at 12.8 not to keep it (§5), so §11's sentence and the §19 item were removed from 0.4. |
 | Task 13.1 | Specification §8 | §8 says `generate` takes a `Sampling`, and that the CLI takes a seed from the clock when none is given. Implemented differently, so the greedy path and its callers stay untouched (FR-29): `generate` keeps its signature (greedy) and calls the new `generate_with(…, &Sampling, …)`; with sampling on, `generate_with` requires a seed and rejects the request naming it, and the CLI is the one that picks a clock seed (task 13.3). `Generation` carries the seed. §8 should say so. |
 
 ## 7. Open Questions

@@ -2,7 +2,7 @@
 
 A decoder-only LLM inference engine written from scratch in Rust, to understand every part by building it. It starts naive and improves one version at a time; the first target is SmolLM2-135M on CPU. The foundation documents in `docs/` are the source of truth: [Requirements](docs/emberly-oxygen-requirements.md), [Technical Specification](docs/emberly-oxygen-technical-specification.md), and the [roadmap](docs/high-level-roadmap.md) for direction.
 
-Status: release 0.1.2 is built and measured on the branch `release/0.1.2`, awaiting the owner's review and the tag; the last tagged release is 0.1.1 (`v0.1.1`), which made generation 4.3× to 6.2× faster than the baseline 0.1.0 with 16 independent partial sums in the matrix-vector product. 0.1.2 changes one thing, and not the engine: the correctness gate now judges the engine against a float64 reference instead of PyTorch's float32 output, because 0.1.1 found that the float32 reference itself is up to 7.1e-4 from the true value. Against the float64 reference the engine's worst logit error is 35% of S-1's limit and its worst intermediate error 10% of S-2's, with the thresholds unchanged; the distance to the float32 reference is still reported. Speed is the same as 0.1.1's. The kernels contain no `unsafe`, no intrinsics and no threads; the only `unsafe` in the engine is the memory-map call in the model loader. See the [0.1.2 release note](docs/releases/0.1.2.md), the [0.1.1 release note](docs/releases/0.1.1.md) and the [0.1.0 release note](docs/releases/0.1.0.md) for the baseline.
+Status: release 0.2.0 is built and measured on the branch `release/0.2.0`, awaiting the owner's review and the tag; the last tagged release is 0.1.2 (`v0.1.2`). 0.2.0 adds sampled generation: temperature, top-k, top-p and a repetition penalty, applied in the reference library's order and drawn from a seeded generator written in this project, so a run can be replayed (within a build). Greedy generation is unchanged and so is its speed: the benchmark's greedy workloads reproduce 0.1.2's rows to within 1.6%. Sampling is judged by the distribution it draws from (the engine's adjusted distribution matches the oracle's stored one to 2e-6 against a limit of 1e-5) and by a chi-square test on its draws, not by matching a reference's tokens. A sampled step costs 0.16 to 0.93 ms on top of a forward step of about 8.5 ms. The kernels contain no `unsafe`, no intrinsics and no threads; the only `unsafe` in the engine is the memory-map call in the model loader. See the [0.2.0 release note](docs/releases/0.2.0.md), the [0.1.2](docs/releases/0.1.2.md), [0.1.1](docs/releases/0.1.1.md) and [0.1.0](docs/releases/0.1.0.md) notes for the history.
 
 ## Setup on a new machine
 
@@ -27,18 +27,21 @@ uv run python download.py
 # 3. Generate the expected outputs into fixtures/smollm2-135m/ (about 100 seconds: float32 and float64)
 uv run python generate.py
 
-# 4. Check the prompt set against the model's tokenizer (optional)
+# 4. Generate the sampling distributions into the same folder (about 1 second, 23 MB; reads step 3's float64 files)
+uv run python sampling_reference.py
+
+# 5. Check the prompt set against the model's tokenizer (optional)
 uv run python validate_prompts.py
 
-# 5. Generate the tokenizer's comparison corpus (about 1 MB, a few seconds)
+# 6. Generate the tokenizer's comparison corpus (about 1 MB, a few seconds)
 uv run python tokenizer_corpus.py
 cd ..
 
-# 6. Build and test the engine
+# 7. Build and test the engine
 cargo test
 ```
 
-`models/` and `fixtures/` are git-ignored. The prompt set, the oracle's lockfile and the pinned model commit are committed, so steps 2 and 3 rebuild them on any machine.
+`models/` and `fixtures/` are git-ignored. The prompt set, the oracle's lockfile and the pinned model commit are committed, so steps 2 to 4 rebuild them on any machine.
 
 ## Oracle scripts
 
@@ -66,7 +69,7 @@ Run them from `oracle/` with `uv run python <script>`. They find the repository 
 
 ```sh
 cargo build                   # debug build
-cargo test                    # every test (optimized, debug assertions on); 25 to 30 s, of which the harness running the 12 prompts in parallel threads takes about 13
+cargo test                    # every test (optimized, debug assertions on); about 25 s, of which the harness running the 12 prompts in parallel threads takes about 13
 cargo test --no-fail-fast     # same, but keeps running other test files after one fails
 cargo build --release         # optimized build; the binary is target/release/emberly-oxygen
 ```
@@ -78,7 +81,7 @@ The correctness harness never downloads files and never runs Python: if `models/
 ## Command-line tool
 
 ```sh
-emberly-oxygen generate --model <DIR> --max-new-tokens <N> [--stats] [-v|-vv|-vvv] [--log-file <PATH>] [PROMPT]
+emberly-oxygen generate --model <DIR> --max-new-tokens <N> [--temperature <T>] [--top-k <K>] [--top-p <P>] [--repetition-penalty <R>] [--seed <N>] [--stats] [-v|-vv|-vvv] [--log-file <PATH>] [PROMPT]
 ```
 
 For example, after `cargo build --release`:
@@ -87,27 +90,36 @@ For example, after `cargo build --release`:
 target/release/emberly-oxygen generate --model models/smollm2-135m --max-new-tokens 32 "The quick brown fox"
 ```
 
-It generates greedily (always the highest-scoring token) and streams the text to standard output as it is produced. Standard output carries the generated text and nothing else; everything else goes to standard error.
+By default it generates greedily (always the highest-scoring token); with `--temperature` above 0 it samples. It streams the text to standard output as it is produced. Standard output carries the generated text and nothing else; everything else goes to standard error.
 
 | Option | What it does |
 | --- | --- |
 | `--model <DIR>` | Model directory with `config.json`, `model.safetensors` and `tokenizer.json`. Required. |
 | `--max-new-tokens <N>` | The most tokens to generate. Required. Generation also stops at the end-of-sequence token, which is not printed. `0` checks the prompt and prints nothing. |
+| `--temperature <T>` | Divides the logits by `T`. `0`, the default, is greedy selection, and then the other sampling options are ignored with a warning. Above `0` the run is sampled and its seed is printed. |
+| `--top-k <K>` | Sample only among the `K` highest-scoring tokens; tokens tied with the `K`-th stay. `0`, the default, is off. |
+| `--top-p <P>` | Sample only among the smallest set of most likely tokens whose probabilities add up to at least `P`, `0 < P <= 1`. `1`, the default, is off. |
+| `--repetition-penalty <R>` | For every token already in the prompt or the output, divide a positive score and multiply a negative one by `R`, as the reference library does; `R > 0`. `1`, the default, is off. |
+| `--seed <N>` | Seed of the random number generator. The same seed, prompt, settings and build give the same text; the same seed across releases is not promised. When sampling without one, a seed is taken from the clock. Sampling always prints `seed: <N>` to standard error before any text, so a run can be replayed. |
 | `PROMPT` | The prompt. Without it, all of standard input is read exactly as given, so `echo hello \| ...` sends `hello` with a trailing newline; use `printf` or `echo -n` to leave it out. Input that is not UTF-8 is an error. |
 | `--stats` | Prints to standard error: model load time, prompt and generated token counts, time to first token and generation throughput. The first generated token counts as prompt work: time to first token runs from receiving the prompt to choosing the first token, and throughput is the tokens after the first per second after it. |
 | `-v`, `-vv`, `-vvv` | Log to standard error: `-v` model summary, prompt token count and a run summary with timings; `-vv` adds one line per decode step (position, token, its text, the top 5 candidates, step time; `next` is the token chosen); `-vvv` adds one line per layer per step (residual-stream norms and the position each head attends to most). Each line shows where it happened, for example `generate:step{pos=3}:layer{idx=0}`. By default only warnings and errors are logged. |
 | `--log-file <PATH>` | Writes the log to this file instead of standard error. The file is created before any work. `-vvv` writes 30 lines per token, so use it for long runs. |
 
-Exit codes: `0` on success; `1` on an error (missing or unsupported model files, an empty prompt, a prompt plus `--max-new-tokens` longer than the model's context, input that is not UTF-8, a log file that cannot be created, or standard output closed early), with the message on standard error and any text already generated left printed; `2` on a usage error such as a missing option or an unknown flag.
+Controls apply in the reference library's order: repetition penalty, temperature, top-k, top-p; then one token is drawn. An invalid value (a negative temperature, a top-p outside 0 to 1, a penalty of 0 or less) is an error that names the option and the value.
+
+Exit codes: `0` on success; `1` on an error (missing or unsupported model files, an empty prompt, an invalid sampling value, a prompt plus `--max-new-tokens` longer than the model's context, input that is not UTF-8, a log file that cannot be created, or standard output closed early), with the message on standard error and any text already generated left printed; `2` on a usage error such as a missing option or an unknown flag.
 
 ## Benchmark
 
 ```sh
-cargo bench                   # about 4 minutes; appends to results/benchmarks.jsonl
+cargo bench                   # about 5 minutes; appends to results/benchmarks.jsonl
 cargo bench --bench benchmarks -- --dry-run   # the same, printing the rows instead of appending them (the plain `cargo bench -- --dry-run` fails: the library's own test binary rejects the flag)
 ```
 
 The harness runs two workloads, a 32-token and a 512-token prompt each followed by 128 generated tokens (texts in `crates/oxygen/benches/prompts.json`), every run in a fresh process: one warm-up and five recorded runs, reported as median, minimum and maximum. It measures time to first token, prompt and generation throughput, model load time and peak memory, and then times the engine's matrix-vector product at each of the model's matrix shapes against `matrixmultiply`, the 0.1.0 index-order loop and partial-sum widths 4, 8, 16 and 32. Each row carries its conditions: version, commit, whether the tree was dirty, machine, build profile and time. It refuses a build with debug assertions and needs neither network nor Python.
+
+It also times, in its own process, the matrix-vector kernel at every shape in the model and, since 0.2.0, one sampling step on a vocabulary-sized logit vector for each control (`cargo bench --bench benchmarks -- --sampling-only --dry-run` runs just that group). The two workloads stay greedy, so their rows remain comparable with every earlier release's.
 
 Recorded results come from the benchmark machine only (an Apple M4 Max), after `cargo test` has passed; rows from anywhere else, or with `"dirty": true`, are not results.
 
