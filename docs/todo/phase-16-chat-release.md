@@ -22,7 +22,7 @@ Dependencies: none new. Out of scope: reusing the cache across turns, multi-line
 
 ## 16.4 Seeded chat (FR-37, FR-28)
 
-- [ ] Same seed replays, another differs, one generator across turns.
+- [x] Same seed replays, another differs, one generator across turns.
 
 ## 16.5 Chat command (FR-38, FR-37, FR-20)
 

@@ -185,3 +185,62 @@ fn fr36_the_limit_counts_the_history_not_only_the_new_message() {
     assert!(matches!(&error, Error::Rejected(m) if m.contains("context length")), "{error}");
     assert_eq!(chat.messages().len(), 1);
 }
+
+fn seeded(seed: u64) -> Sampling {
+    Sampling { temperature: 0.8, seed: Some(seed), ..Sampling::default() }
+}
+
+/// The ids of each reply in a two-turn conversation with this seed.
+fn two_turns(m: &Model, t: &Tokenizer, seed: u64) -> (Vec<u32>, Vec<u32>) {
+    let mut chat = Chat::new(m, t, None, &seeded(seed), 24).unwrap();
+    let (a, _) = turn(&mut chat, "Tell me about the sea.");
+    let (b, _) = turn(&mut chat, "And about the sky?");
+    (a.ids, b.ids)
+}
+
+// FR-37, FR-28: the same seed and the same messages replay the same replies.
+#[test]
+fn fr37_fr28_the_same_seed_and_messages_replay_the_same_replies() {
+    let (m, t) = load();
+    assert_eq!(two_turns(&m, &t, 7), two_turns(&m, &t, 7));
+}
+
+// FR-37, FR-28: another seed gives other replies (24 tokens at temperature 0.8).
+#[test]
+fn fr37_fr28_another_seed_gives_other_replies() {
+    let (m, t) = load();
+    let (a1, a2) = two_turns(&m, &t, 7);
+    let (b1, b2) = two_turns(&m, &t, 8);
+    assert_ne!(a1, b1);
+    assert_ne!(a2, b2);
+}
+
+// FR-37: one generator serves the whole conversation, so the second reply is drawn from where
+// the first left off, not from a generator started again: a standalone run of the same prompt
+// with the same seed, which starts a fresh generator, draws differently.
+#[test]
+fn fr37_one_generator_serves_every_turn() {
+    let (m, t) = load();
+    let mut chat = Chat::new(&m, &t, None, &seeded(7), 24).unwrap();
+    let (_, first_reply) = turn(&mut chat, "Tell me about the sea.");
+    let (second, _) = turn(&mut chat, "And about the sky?");
+    let prompt = render(
+        &[
+            Message::new(Role::User, "Tell me about the sea."),
+            Message::new(Role::Assistant, first_reply),
+            Message::new(Role::User, "And about the sky?"),
+        ],
+        true,
+    );
+    let fresh = emberly_oxygen::generate_with(&m, &t, &prompt, 24, &seeded(7), &mut |_| {}).unwrap();
+    assert_ne!(second.ids, fresh.ids, "the chat's second reply continued its generator");
+}
+
+// FR-28: the conversation reports its seed once, and each turn reports the same one.
+#[test]
+fn fr28_every_turn_reports_the_conversations_seed() {
+    let (m, t) = load();
+    let mut chat = Chat::new(&m, &t, None, &seeded(99), 4).unwrap();
+    assert_eq!(turn(&mut chat, "hi").0.seed, Some(99));
+    assert_eq!(turn(&mut chat, "again").0.seed, Some(99));
+}
