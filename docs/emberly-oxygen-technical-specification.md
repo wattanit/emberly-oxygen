@@ -283,11 +283,11 @@ Acceptance policy: an engine dependency must be general plumbing under HC-1; any
 ## 19. Open Items
 
 - **Whether S-1 to S-4's thresholds hold against the f64 reference (Requirements §13).** Resolver: owner, from M8's measurement.
-- **Whether release 0.1.2 re-runs the benchmark (§16, step 2).** The engine, the benchmark harness and the workloads are unchanged from 0.1.1, so a new run would record the same code under a new version string; the release note would instead point to 0.1.1's rows for speed. Resolver: owner. Running it anyway keeps §16's procedure uniform at the cost of seven identical-code rows.
 
 ### Resolved since 0.2
 
 - **Which partial-sum width is best (§4).** 16, by the sweep of release 0.1.1 (plan 0.1.1 §4, release note 0.1.1).
+- **Whether release 0.1.2 re-runs the benchmark (§16, step 2).** Yes, decided by the owner on 2026-11-08: the version changes, so the record gets rows for it, taken by the same procedure as every release. The engine is unchanged, so the rows also show how repeatable 0.1.1's were; the release note says so and does not claim a speed change.
 
 ### Resolved since 0.1
 
