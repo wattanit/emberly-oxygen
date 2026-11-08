@@ -135,4 +135,3 @@ Recorded here and absorbed by the upstream owner at the next bump; the upstream 
 
 - ~~**Whether S-1 to S-4's thresholds hold against the f64 reference.**~~ **Resolved by the owner at task 10.7 (2026-11-08):** kept; §4 and §5.
 - ~~**Which float64 reference S-1 to S-4 are judged against, now that the library's own f64 run is only partly f64 (task 9.4).** Options and a recommendation are in the to-do's decision point 4. Resolver: owner. Blocks task 9.4's exit and Phase 10.~~ **Resolved by the owner (2026-11-08): option B**; §4 and §5.
-- **Whether S-1 to S-4's thresholds hold against the f64 reference (Requirements §13, Specification §19).** Resolver: owner, at task 10.7, from §4's measurements.
