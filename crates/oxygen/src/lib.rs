@@ -15,6 +15,9 @@ mod ops;
 // Used by sampled generation from task 13.1; until then only its tests call it.
 #[allow(dead_code)]
 mod rng;
+// Wired into generation in task 13.1.
+#[allow(dead_code)]
+mod sampling;
 mod safetensors;
 mod tensor;
 #[cfg(test)]
@@ -28,6 +31,7 @@ pub use error::Error;
 pub use fault::Fault;
 pub use generate::{generate, Generation, Stats};
 pub use model::{Capture, Model, Session};
+pub use sampling::Sampling;
 pub use tensor::Tensor;
 pub use tokenizer::{StreamDecoder, Tokenizer};
 
