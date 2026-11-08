@@ -7,8 +7,8 @@ mod common;
 use std::path::PathBuf;
 
 use common::fixtures::{
-    discover, parse_safetensors, parse_safetensors_f64, require_model_dir, workspace_root, DOWNLOAD_COMMAND,
-    GENERATE_COMMAND, SAMPLING_COMMAND,
+    discover, discover_chat, parse_safetensors, parse_safetensors_f64, require_model_dir, workspace_root, CHAT_COMMAND,
+    DOWNLOAD_COMMAND, GENERATE_COMMAND, SAMPLING_COMMAND,
 };
 
 /// Builds a safetensors file in memory: (name, dtype, shape, values).
@@ -387,6 +387,149 @@ fn fr31_real_sampling_distributions_sum_to_one() {
                 assert!(dist.iter().all(|p| p.is_finite() && *p >= 0.0));
                 assert!(entry.margins[&prompt.id].contains_key(&setting.name));
             }
+        }
+    }
+}
+
+/// A `chat.json` as the oracle writes it (Spec §10, FR-39): one conversation of
+/// two positions over a vocabulary of three.
+fn tiny_chat() -> serde_json::Value {
+    serde_json::json!({
+        "model_id": "i",
+        "dims": {"vocab": 3},
+        "reply_tokens": 4,
+        "eos_token_id": 2,
+        "conversations": [{
+            "id": "c",
+            "messages": [{"role": "user", "content": "hi"}],
+            "rendered": "x",
+            "token_ids": [1, 5],
+            "prompt_top2_gaps": [0.5, 0.25],
+            "reply_ids": [7, 2],
+            "reply_text": "a",
+            "reply_top2_gaps": [0.5, 0.5],
+            "stopped_at_eos": true,
+            "tensors_file": "c.f64.safetensors"
+        }]
+    })
+}
+
+fn chat_root(name: &str, chat: &serde_json::Value) -> PathBuf {
+    let root = temp_dir(name);
+    std::fs::create_dir_all(root.join("i")).unwrap();
+    std::fs::write(root.join("i/chat.json"), chat.to_string()).unwrap();
+    root
+}
+
+#[test]
+fn fr39_missing_chat_fixtures_name_the_oracle_command() {
+    let root = temp_dir("no-chat");
+    let error = discover_chat(&root).unwrap_err();
+    assert!(error.contains(CHAT_COMMAND), "{error}");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), "{}").unwrap();
+    let error = discover_chat(&root).unwrap_err();
+    assert!(error.contains(CHAT_COMMAND), "a manifest folder is not a chat folder: {error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr39_the_manifest_discovery_passes_over_the_chat_folder_and_not_the_reverse() {
+    let root = chat_root("both-kinds", &tiny_chat());
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), tiny_manifest(true).to_string()).unwrap();
+    let manifests = discover(&root).unwrap();
+    assert_eq!(manifests.len(), 1);
+    assert!(manifests[0].dir.ends_with("m"));
+    let chats = discover_chat(&root).unwrap();
+    assert_eq!(chats.len(), 1);
+    assert!(chats[0].dir.ends_with("i"));
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr39_a_chat_file_missing_a_field_names_the_command() {
+    let mut chat = tiny_chat();
+    chat["conversations"][0].as_object_mut().unwrap().remove("rendered");
+    let root = chat_root("chat-missing-field", &chat);
+    let error = discover_chat(&root).unwrap_err();
+    assert!(error.contains("malformed") && error.contains("rendered") && error.contains(CHAT_COMMAND), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr39_a_missing_logits_file_fails_naming_it_and_the_command() {
+    let root = chat_root("chat-missing-file", &tiny_chat());
+    let all = discover_chat(&root).unwrap();
+    let error = all[0].load_logits(&all[0].chat.conversations[0]).unwrap_err();
+    assert!(error.contains("c.f64.safetensors") && error.contains(CHAT_COMMAND), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr39_logits_of_the_wrong_shape_are_refused() {
+    let root = chat_root("chat-wrong-shape", &tiny_chat());
+    // Two positions over three tokens are expected; three positions are stored.
+    std::fs::write(root.join("i/c.f64.safetensors"), build64(&[("logits", "F64", &[3, 3], &[0.0; 9])])).unwrap();
+    let all = discover_chat(&root).unwrap();
+    let error = all[0].load_logits(&all[0].chat.conversations[0]).unwrap_err();
+    assert!(error.contains("logits") && error.contains("shape") && error.contains("[2, 3]"), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr39_a_file_without_logits_or_in_the_wrong_precision_is_refused() {
+    let root = chat_root("chat-bad-file", &tiny_chat());
+    std::fs::write(root.join("i/c.f64.safetensors"), build64(&[("other", "F64", &[2, 3], &[0.0; 6])])).unwrap();
+    let all = discover_chat(&root).unwrap();
+    let error = all[0].load_logits(&all[0].chat.conversations[0]).unwrap_err();
+    assert!(error.contains("logits") && error.contains("missing"), "{error}");
+
+    std::fs::write(root.join("i/c.f64.safetensors"), build(&[("logits", "F32", &[2, 3], &[0.0; 6])])).unwrap();
+    let error = all[0].load_logits(&all[0].chat.conversations[0]).unwrap_err();
+    assert!(error.contains("F32") && error.contains("F64"), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr39_the_conversations_and_logits_are_read_exactly() {
+    let root = chat_root("chat-reads", &tiny_chat());
+    let values = [0.1f64, 1.0 + 1e-12, -2.5, 3.0e-300, 4.0, 5.5];
+    std::fs::write(root.join("i/c.f64.safetensors"), build64(&[("logits", "F64", &[2, 3], &values)])).unwrap();
+    let all = discover_chat(&root).unwrap();
+    let chat = &all[0].chat;
+    assert_eq!((chat.model_id.as_str(), chat.dims.vocab, chat.reply_tokens, chat.eos_token_id), ("i", 3, 4, 2));
+    let c = &chat.conversations[0];
+    assert_eq!((c.id.as_str(), c.messages[0].role.as_str(), c.messages[0].content.as_str()), ("c", "user", "hi"));
+    assert_eq!((c.token_ids.as_slice(), c.reply_ids.as_slice(), c.stopped_at_eos), (&[1, 5][..], &[7, 2][..], true));
+    assert_eq!((c.prompt_top2_gaps.as_slice(), c.reply_top2_gaps.as_slice()), (&[0.5, 0.25][..], &[0.5, 0.5][..]));
+    let logits = all[0].load_logits(c).unwrap();
+    assert_eq!(logits.shape, vec![2, 3]);
+    assert_eq!(logits.data, values.to_vec(), "f64 values are kept whole");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr39_real_chat_fixtures_are_consistent() {
+    let root = workspace_root().join("fixtures");
+    let all = discover_chat(&root).unwrap_or_else(|e| panic!("{e}"));
+    assert!(discover(&root).unwrap().iter().all(|f| f.manifest.model_id != all[0].chat.model_id), "the chat model has no manifest");
+    for fixtures in &all {
+        let chat = &fixtures.chat;
+        let ids: Vec<&str> = chat.conversations.iter().map(|c| c.id.as_str()).collect();
+        for wanted in ["no-system", "with-system", "multi-turn", "thai"] {
+            assert!(ids.contains(&wanted), "conversation {wanted} is missing: {ids:?}");
+        }
+        for c in &chat.conversations {
+            let positions = c.token_ids.len();
+            assert!(c.rendered.starts_with("<|im_start|>") && c.rendered.ends_with("<|im_start|>assistant\n"), "{}", c.id);
+            assert_eq!(c.prompt_top2_gaps.len(), positions, "{}", c.id);
+            assert_eq!(c.reply_top2_gaps.len(), c.reply_ids.len(), "{}", c.id);
+            assert_eq!(c.reply_ids.last() == Some(&chat.eos_token_id), c.stopped_at_eos, "{}", c.id);
+            assert!(c.reply_ids.len() <= chat.reply_tokens, "{}", c.id);
+            let logits = fixtures.load_logits(c).unwrap();
+            assert_eq!(logits.shape, vec![positions, chat.dims.vocab], "{}", c.id);
+            assert!(logits.data.iter().all(|v| v.is_finite()), "{}", c.id);
         }
     }
 }

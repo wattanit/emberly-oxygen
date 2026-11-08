@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 pub const GENERATE_COMMAND: &str = "cd oracle && uv run python generate.py";
 pub const SAMPLING_COMMAND: &str = "cd oracle && uv run python sampling_reference.py";
+pub const CHAT_COMMAND: &str = "cd oracle && uv run python chat_reference.py";
 pub const DOWNLOAD_COMMAND: &str = "cd oracle && uv run python download.py";
 
 /// The files the engine loads from a model directory (Spec §5).
@@ -77,6 +78,53 @@ pub struct SamplingMargins {
 pub struct SamplingEntry {
     pub settings: Vec<SamplingSetting>,
     pub margins: HashMap<String, HashMap<String, SamplingMargins>>,
+}
+
+/// One message of a stored conversation (Spec §10).
+#[derive(Debug, Clone, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// One stored conversation (FR-39): the messages, the library's rendering of
+/// them with the generation prompt, its token ids, the f64 reference's greedy
+/// reply, and the top-two gaps that decide a near-tie.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Conversation {
+    pub id: String,
+    pub messages: Vec<ChatMessage>,
+    pub rendered: String,
+    pub token_ids: Vec<u32>,
+    pub prompt_top2_gaps: Vec<f64>,
+    pub reply_ids: Vec<u32>,
+    pub reply_text: String,
+    pub reply_top2_gaps: Vec<f64>,
+    pub stopped_at_eos: bool,
+    pub tensors_file: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ChatDims {
+    pub vocab: usize,
+}
+
+/// `chat.json`: the instruct model's chat fixtures, which are not a manifest and
+/// are never judged by S-1 to S-4 (Requirements §13).
+#[derive(Debug, Deserialize)]
+pub struct Chat {
+    pub model_id: String,
+    pub dims: ChatDims,
+    pub reply_tokens: usize,
+    pub eos_token_id: u32,
+    pub conversations: Vec<Conversation>,
+}
+
+/// A fixture folder holding `chat.json`.
+#[derive(Debug)]
+pub struct ChatFixtures {
+    pub dir: PathBuf,
+    pub chat: Chat,
 }
 
 #[derive(Debug, Deserialize)]
@@ -196,6 +244,62 @@ pub fn discover(fixtures_root: &Path) -> Result<Vec<Fixtures>, String> {
             Ok(Fixtures { dir, manifest })
         })
         .collect()
+}
+
+/// Finds every `<root>/*/chat.json` (FR-39). A folder with a manifest is not
+/// looked at here, and a folder with only `chat.json` is not looked at by
+/// `discover`, so no model is judged by a check meant for the other.
+pub fn discover_chat(fixtures_root: &Path) -> Result<Vec<ChatFixtures>, String> {
+    let mut dirs: Vec<PathBuf> = fs::read_dir(fixtures_root)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.join("chat.json").is_file())
+        .collect();
+    if dirs.is_empty() {
+        return Err(format!(
+            "no chat fixtures found in {}; generate them with: {CHAT_COMMAND}",
+            fixtures_root.display()
+        ));
+    }
+    dirs.sort();
+    dirs.into_iter()
+        .map(|dir| {
+            let path = dir.join("chat.json");
+            let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+            let chat = serde_json::from_str(&text).map_err(|e| {
+                format!("{}: malformed chat file: {e}; regenerate with: {CHAT_COMMAND}", path.display())
+            })?;
+            Ok(ChatFixtures { dir, chat })
+        })
+        .collect()
+}
+
+impl ChatFixtures {
+    /// Loads one conversation's f64 logits, `[positions, vocab]`.
+    pub fn load_logits(&self, conversation: &Conversation) -> Result<Tensor64, String> {
+        let path = self.dir.join(&conversation.tensors_file);
+        if !path.is_file() {
+            return Err(format!(
+                "{}: file named by chat.json is missing; regenerate with: {CHAT_COMMAND}",
+                path.display()
+            ));
+        }
+        let mut tensors =
+            read_typed::<f64>(&path).map_err(|e| format!("{e}; regenerate with: {CHAT_COMMAND}"))?;
+        let logits = tensors
+            .remove("logits")
+            .ok_or_else(|| format!("{}: tensor logits is missing; regenerate with: {CHAT_COMMAND}", path.display()))?;
+        let shape = [conversation.token_ids.len(), self.chat.dims.vocab];
+        if logits.shape != shape {
+            return Err(format!(
+                "{}: tensor logits has shape {:?}, chat.json implies {shape:?}; regenerate with: {CHAT_COMMAND}",
+                path.display(),
+                logits.shape
+            ));
+        }
+        Ok(logits)
+    }
 }
 
 impl Fixtures {

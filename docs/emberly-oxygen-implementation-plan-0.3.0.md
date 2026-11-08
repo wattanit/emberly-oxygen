@@ -95,6 +95,8 @@ Filled in as the phases land. Machine: the benchmark machine (Apple M4 Max), as 
   | `thai` | 110 | 43.3 MB | 64 tokens, cut by the maximum, inside a character (the decoded text ends in U+FFFD) | no | 0.0185 / 0.481 |
 
   The folder is **101 MB** (four logits files and `chat.json`, 21 KB). No reply step has a top-two gap under 1e-3, so no near-tie falls inside any reply. Two of the four replies hit the 64-token maximum and not `<|im_end|>`, so the harness will see both endings; the Thai one is also a reply cut in the middle of a character, which exercises streaming.
+- **Task 14.6 (done).** The harness reads `chat.json` and the logits files (`discover_chat`, `ChatFixtures::load_logits`). Eight tests, written first and seen to fail against stubs: missing chat fixtures, the two discoveries ignoring each other's folders, a missing field, a missing logits file, a wrong shape, a missing logits tensor or an F32 file, an exact read of values f32 cannot hold, and the real fixtures' consistency (four conversations, shapes `[positions, 49152]`, reply ends at `<|im_end|>` exactly when it stopped there). **312 tests pass, 0 fail** (304 at 0.2.0, so 8 new); the greedy and sampling harness is untouched.
+- **Phase 14 exit check (passed).** All four conversations have rendering, ids, logits and a reply; the hand-written renderings equal the library's; the base fixtures are unchanged (bit-identical rerun); the harness reads the files; `cargo test` passes with no existing test changed.
 
 ## 6. Upstream feedback
 

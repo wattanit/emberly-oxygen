@@ -30,4 +30,4 @@ Dependencies: none new. Out of scope: the renderer and the S-11 check (Phase 15)
 
 ## 14.6 Harness reads the files (FR-4, FR-7)
 
-- [ ] Tests first: missing folder, file, shape, field; then the reader.
+- [x] Tests first: missing folder, file, shape, field; then the reader.
