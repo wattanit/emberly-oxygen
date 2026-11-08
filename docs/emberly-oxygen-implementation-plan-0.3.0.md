@@ -83,12 +83,15 @@ All of 0.2.0's rules hold. The ones this release leans on, and what it adds:
 
 Filled in as the phases land. Machine: the benchmark machine (Apple M4 Max), as before. Baseline: 304 tests at 0.2.0.
 
+- **Task 14.1 (done).** The instruct model is in `models/smollm2-135m-instruct/` at revision `12fd25f`: `config.json` 861 bytes, `model.safetensors` 269,060,552 bytes (the base model's size to the byte), `tokenizer.json` 2,104,556 bytes (also the base's size), and `tokenizer_config.json` 3,764 bytes. Its `tokenizer.json` is equal to the base model's as JSON; `config.json` differs in `bos_token_id` (0 → 1), `eos_token_id` (0 → 2), `pad_token_id` (absent → 2), `mlp_bias` (absent → false), `transformers_version` and a `transformers.js_config` block, as Specification §3 says. The base model downloads exactly as before.
+
 ## 6. Upstream feedback
 
 Recorded here for the upstream owner; the approved documents are not edited from this plan without the owner's permission. This section is a permanent record.
 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
+| Task 14.1 | Specification §10 | The oracle needs a fourth file for the instruct model, `tokenizer_config.json`, which holds the chat template; the engine never reads it and §5's model directory (three files) is unchanged. `download.py` fetches it as an oracle-only file. §10 should say the instruct download includes it. |
 
 ## 7. Open Questions
 

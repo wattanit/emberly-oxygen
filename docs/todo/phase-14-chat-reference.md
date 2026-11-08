@@ -10,7 +10,7 @@ Dependencies: none new. Out of scope: the renderer and the S-11 check (Phase 15)
 
 ## 14.1 Download the instruct model (FR-11, FR-32)
 
-- [ ] Model argument in `download.py`; fetch at the pinned revision; record the tokenizer and config comparison.
+- [x] Model argument in `download.py`; fetch at the pinned revision; record the tokenizer and config comparison.
 
 ## 14.2 Share the f64 setup (FR-2)
 
