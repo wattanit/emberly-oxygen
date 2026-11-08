@@ -18,7 +18,7 @@ Dependencies: none new. Out of scope: reusing the cache across turns, multi-line
 
 ## 16.3 Context limit (FR-36, FR-18)
 
-- [ ] Rejected before computation, state unchanged, later turn works.
+- [x] Rejected before computation, state unchanged, later turn works.
 
 ## 16.4 Seeded chat (FR-37, FR-28)
 

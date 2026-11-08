@@ -132,3 +132,56 @@ fn fr35_a_reply_is_stored_exactly_as_streamed_whitespace_included() {
     assert_ne!(streamed, streamed.trim(), "this prompt and maximum end the reply in a newline: {streamed:?}");
     assert_eq!(chat.messages()[1].content, streamed);
 }
+
+/// A user message of about `n` tokens: "word " repeated.
+fn long_message(n: usize) -> String {
+    "word ".repeat(n)
+}
+
+// FR-36, FR-18: a turn that cannot fit is rejected before anything is computed, the
+// conversation is as it was, and a later turn works.
+#[test]
+fn fr36_a_turn_that_cannot_fit_is_rejected_at_once_and_leaves_the_conversation_alone() {
+    let (m, t) = load();
+    let mut chat = Chat::new(&m, &t, None, &greedy(), 64).unwrap();
+    let (_, first) = turn(&mut chat, "What is the capital of France?");
+    let before = chat.messages().to_vec();
+
+    let started = std::time::Instant::now();
+    let mut streamed = String::new();
+    let error = chat.turn(&long_message(9000), &mut |x| streamed.push_str(x)).unwrap_err();
+    assert!(matches!(&error, Error::Rejected(m) if m.contains("context length")), "{error}");
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "rejected before computing 9000 positions");
+    assert!(streamed.is_empty(), "nothing was generated");
+    assert_eq!(chat.messages(), before, "the rejected turn left no trace");
+
+    let (_, again) = turn(&mut chat, "And of Italy?");
+    assert_eq!(chat.messages().len(), 4);
+    assert!(!first.is_empty() && !again.is_empty());
+}
+
+// FR-36: a rejected turn draws nothing from the conversation's generator, so a seeded chat
+// replies exactly as one that never had the rejected turn.
+#[test]
+fn fr36_a_rejected_turn_leaves_the_generator_where_it_was() {
+    let (m, t) = load();
+    let seeded = Sampling { temperature: 0.8, seed: Some(42), ..Sampling::default() };
+    let mut plain = Chat::new(&m, &t, None, &seeded, 24).unwrap();
+    let (a, _) = turn(&mut plain, "Tell me about the sea.");
+
+    let mut rejected = Chat::new(&m, &t, None, &seeded, 24).unwrap();
+    rejected.turn(&long_message(9000), &mut |_| {}).unwrap_err();
+    let (b, _) = turn(&mut rejected, "Tell me about the sea.");
+    assert_eq!(a.ids, b.ids);
+}
+
+// FR-36: the limit is on the whole rendered conversation, so a conversation that has grown
+// long enough rejects a message that would have fitted at the start.
+#[test]
+fn fr36_the_limit_counts_the_history_not_only_the_new_message() {
+    let (m, t) = load();
+    let mut chat = Chat::new(&m, &t, Some(long_message(8150)), &greedy(), 64).unwrap();
+    let error = chat.turn("hi", &mut |_| {}).unwrap_err();
+    assert!(matches!(&error, Error::Rejected(m) if m.contains("context length")), "{error}");
+    assert_eq!(chat.messages().len(), 1);
+}
