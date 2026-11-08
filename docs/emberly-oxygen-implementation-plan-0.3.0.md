@@ -141,8 +141,11 @@ Recorded here for the upstream owner; the approved documents are not edited from
 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
-| Task 14.5 | Specification §10 | §10 estimates a conversation at "about 100 to 300 tokens" and the folder at "tens of megabytes". The four conversations are 29 to 110 positions and the folder is 101 MB, because each f64 position is 0.39 MB. The sentence should give the measured size. |
 | Task 14.1 | Specification §10 | The oracle needs a fourth file for the instruct model, `tokenizer_config.json`, which holds the chat template; the engine never reads it and §5's model directory (three files) is unchanged. `download.py` fetches it as an oracle-only file. §10 should say the instruct download includes it. |
+| Task 14.5 | Specification §10 | §10 estimates a conversation at "about 100 to 300 tokens" and the folder at "tens of megabytes". The four conversations are 29 to 110 positions and the folder is 101 MB, because each f64 position is 0.39 MB. The sentence should give the measured size. |
+| Task 16.5 | Requirements FR-36 | FR-36 says a rejected turn leaves the conversation as it was "so the user can continue with a shorter message or a smaller maximum". In the chat command the maximum is fixed at the start (`--max-new-tokens`) and `Chat` has no way to change it, so only a shorter message (or a new chat) is possible. Either FR-36 should say "a shorter message", or a later release adds a way to change the maximum. |
+| Task 16.5 | Specification §9 | The chat command writes a newline to standard error when the input ends, so the shell prompt does not start after the last `> `. §9 does not mention it; it costs nothing and has a test. |
+| Task 16.9 | Specification §12 | §12 says re-running the greedy workloads "shows that chat left the greedy path alone (FR-29)". The rows alone cannot show it: this release's rows read 1.4% to 4.9% below 0.2.0's, and a same-session rerun of the 0.2.0 build showed that the session swings by that much (plan §5). What shows it is the guard test (identical ids) and the same-session comparison; §12 should say so. |
 
 ## 7. Open Questions
 
