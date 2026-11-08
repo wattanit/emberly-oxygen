@@ -51,18 +51,19 @@ pub(crate) struct Choice {
 }
 
 /// Draws one token per step from the adjusted distribution (FR-26, FR-28).
-/// Owns the generator and the context the repetition penalty counts: the
-/// prompt, then every token it has chosen.
-pub(crate) struct Sampler {
+/// Borrows the generator, so a chat can keep one generator across its turns
+/// (FR-37), and owns the context the repetition penalty counts: the prompt,
+/// then every token it has chosen.
+pub(crate) struct Sampler<'r> {
     sampling: Sampling,
-    rng: Rng,
+    rng: &'r mut Rng,
     context: Vec<u32>,
 }
 
-impl Sampler {
+impl<'r> Sampler<'r> {
     /// `sampling` must already be valid (`Sampling::validate`).
-    pub(crate) fn new(sampling: &Sampling, seed: u64, prompt: &[u32]) -> Self {
-        Sampler { sampling: *sampling, rng: Rng::new(seed), context: prompt.to_vec() }
+    pub(crate) fn new(sampling: &Sampling, rng: &'r mut Rng, prompt: &[u32]) -> Self {
+        Sampler { sampling: *sampling, rng, context: prompt.to_vec() }
     }
 
     /// Draws the next token from the logits of the step just taken. Exactly one
@@ -434,7 +435,8 @@ mod tests {
 
     /// Draws `n` tokens with a fixed seed from one fixed logit vector and counts them.
     fn counts(logits: &[f32], sampling: &Sampling, seed: u64, n: u64) -> Vec<u64> {
-        let mut sampler = Sampler::new(sampling, seed, &[]);
+        let mut rng = Rng::new(seed);
+        let mut sampler = Sampler::new(sampling, &mut rng, &[]);
         let mut counts = vec![0u64; logits.len()];
         for _ in 0..n {
             counts[sampler.choose(logits).token as usize] += 1;

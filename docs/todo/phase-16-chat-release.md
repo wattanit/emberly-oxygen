@@ -10,7 +10,7 @@ Dependencies: none new. Out of scope: reusing the cache across turns, multi-line
 
 ## 16.1 Step loop with a caller's generator (FR-29, FR-28)
 
-- [ ] Tests first: existing outputs identical; then the refactor.
+- [x] Tests first: existing outputs identical; then the refactor.
 
 ## 16.2 Chat and turn (FR-34, FR-35, FR-29)
 

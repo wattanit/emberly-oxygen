@@ -60,7 +60,8 @@ pub mod kernels {
     /// repetition penalty's context. For the benchmark's sampling cost group
     /// (Spec §12) and its test.
     pub fn sample_token(logits: &[f32], context: &[u32], sampling: &crate::Sampling, seed: u64) -> u32 {
-        crate::sampling::Sampler::new(sampling, seed, context).choose(logits).token
+        let mut rng = crate::rng::Rng::new(seed);
+        crate::sampling::Sampler::new(sampling, &mut rng, context).choose(logits).token
     }
 
     /// The matrix-vector product exactly as release 0.1.0 computed it: one
