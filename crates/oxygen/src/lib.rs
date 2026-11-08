@@ -31,7 +31,7 @@ pub use error::Error;
 pub use fault::Fault;
 pub use generate::{generate, Generation, Stats};
 pub use model::{Capture, Model, Session};
-pub use sampling::Sampling;
+pub use sampling::{distribution, Sampling};
 pub use tensor::Tensor;
 pub use tokenizer::{StreamDecoder, Tokenizer};
 

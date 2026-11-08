@@ -99,6 +99,38 @@ pub(crate) fn apply_top_p(logits: &mut [f32], p: f32) {
     }
 }
 
+/// The distribution the next token is drawn from (FR-26, Spec §8): the
+/// controls applied to a copy of the step's logits in the reference library's
+/// order (penalty, temperature, top-k, top-p), then the softmax in f64. A
+/// temperature of 0 is greedy selection: a point mass on the highest raw logit,
+/// the lowest id on a tie, with the other controls ignored (FR-29). Public so
+/// the harness can compare it with the oracle's stored distribution (FR-31,
+/// S-9) without drawing.
+pub fn distribution(logits: &[f32], context: &[u32], sampling: &Sampling) -> Result<Vec<f64>, Error> {
+    sampling.validate()?;
+    if sampling.temperature == 0.0 {
+        let mut best = 0;
+        for (i, &l) in logits.iter().enumerate() {
+            if l > logits[best] {
+                best = i;
+            }
+        }
+        let mut point = vec![0.0; logits.len()];
+        point[best] = 1.0;
+        return Ok(point);
+    }
+    let mut scores = logits.to_vec();
+    if sampling.repetition_penalty != 1.0 {
+        apply_repetition_penalty(&mut scores, context, sampling.repetition_penalty);
+    }
+    if sampling.temperature != 1.0 {
+        apply_temperature(&mut scores, sampling.temperature);
+    }
+    apply_top_k(&mut scores, sampling.top_k);
+    apply_top_p(&mut scores, sampling.top_p);
+    Ok(softmax_f64(&scores))
+}
+
 /// Softmax in f64 of f32 logits; a logit of negative infinity gets probability 0.
 pub(crate) fn softmax_f64(logits: &[f32]) -> Vec<f64> {
     let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -266,5 +298,55 @@ mod tests {
         apply_top_k(&mut l, 2);
         apply_top_p(&mut l, 0.7);
         assert_eq!(kept(&l), [1, 3]);
+    }
+
+    fn sampling(temperature: f32, top_k: usize, top_p: f32, penalty: f32) -> Sampling {
+        Sampling { temperature, top_k, top_p, repetition_penalty: penalty, seed: None }
+    }
+
+    #[test]
+    fn fr26_with_neutral_controls_the_distribution_is_the_softmax() {
+        // softmax of [0, ln 3] is [0.25, 0.75]
+        let d = distribution(&[0.0, 3.0f32.ln()], &[], &sampling(1.0, 0, 1.0, 1.0)).unwrap();
+        assert!((d[0] - 0.25).abs() < 1e-7 && (d[1] - 0.75).abs() < 1e-7, "{d:?}");
+        assert!((d.iter().sum::<f64>() - 1.0).abs() < 1e-12);
+    }
+
+    // FR-26, FR-29: temperature 0 is greedy, ties go to the lowest id, and the
+    // other controls are ignored.
+    #[test]
+    fn fr29_temperature_zero_is_a_point_mass_on_the_argmax_whatever_else_is_set() {
+        let d = distribution(&[1.0, 5.0, 5.0, 2.0], &[], &sampling(0.0, 0, 1.0, 1.0)).unwrap();
+        assert_eq!(d, [0.0, 1.0, 0.0, 0.0], "ties go to the lowest id (FR-16)");
+        // A penalty that would change the raw argmax is ignored under temperature 0.
+        let d = distribution(&[1.0, 5.0, 4.0], &[1], &sampling(0.0, 2, 0.5, 100.0)).unwrap();
+        assert_eq!(d, [0.0, 1.0, 0.0]);
+    }
+
+    // FR-26: the order is penalty, temperature, top-k, top-p. Top-p must see the
+    // temperature-scaled probabilities. At T = 0.5 on [2, 1, 0, -1] the
+    // probabilities are about [.865, .117, .016, .002], so p = 0.9 keeps two
+    // tokens; at T = 1 (top-p first) it would keep three.
+    #[test]
+    fn fr26_top_p_is_applied_after_temperature() {
+        let d = distribution(&[2.0, 1.0, 0.0, -1.0], &[], &sampling(0.5, 0, 0.9, 1.0)).unwrap();
+        let (a, b) = (4.0f64.exp(), 2.0f64.exp());
+        assert_eq!(d[2], 0.0);
+        assert_eq!(d[3], 0.0);
+        assert!((d[0] - a / (a + b)).abs() < 1e-6 && (d[1] - b / (a + b)).abs() < 1e-6, "{d:?}");
+    }
+
+    // The penalty comes before top-k: [3.0, 2.9] with token 0 penalized by 2
+    // becomes [1.5, 2.9], so top-k 1 keeps token 1; top-k first would keep token 0.
+    #[test]
+    fn fr26_the_penalty_is_applied_before_top_k() {
+        let d = distribution(&[3.0, 2.9], &[0], &sampling(1.0, 1, 1.0, 2.0)).unwrap();
+        assert_eq!(d, [0.0, 1.0]);
+    }
+
+    #[test]
+    fn fr26_an_invalid_setting_is_rejected_before_anything_is_computed() {
+        let error = distribution(&[1.0, 2.0], &[], &sampling(-1.0, 0, 1.0, 1.0)).unwrap_err();
+        assert!(matches!(error, Error::Rejected(m) if m.contains("temperature")));
     }
 }
