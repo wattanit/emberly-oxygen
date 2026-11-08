@@ -2,13 +2,16 @@ use std::time::{Duration, Instant};
 
 use tracing::Level;
 
-use crate::{Error, Model, Session, Tokenizer};
+use crate::sampling::Sampler;
+use crate::{Error, Model, Sampling, Session, Tokenizer};
 
 /// What [`generate`] returns: the generated token IDs and how long it took.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Generation {
     pub ids: Vec<u32>,
     pub stats: Stats,
+    /// The seed the draws used; `None` for greedy generation (FR-28).
+    pub seed: Option<u64>,
 }
 
 /// Timings of one generation (FR-21, Spec §12). The first generated token's
@@ -57,7 +60,36 @@ pub fn generate(
     max_new_tokens: usize,
     on_text: &mut dyn FnMut(&str),
 ) -> Result<Generation, Error> {
+    generate_with(model, tokenizer, prompt, max_new_tokens, &Sampling::default(), on_text)
+}
+
+/// Generation with sampling settings (Spec §8, FR-26 to FR-29). With the
+/// default settings, or a temperature of 0, it is greedy and identical to
+/// [`generate`]. Otherwise each token is drawn from the adjusted distribution by
+/// a generator seeded from `sampling.seed`, which is then required (so the run
+/// can be replayed, FR-28) and returned in [`Generation::seed`]. Invalid
+/// settings are rejected before any computation (FR-30).
+pub fn generate_with(
+    model: &Model,
+    tokenizer: &Tokenizer,
+    prompt: &str,
+    max_new_tokens: usize,
+    sampling: &Sampling,
+    on_text: &mut dyn FnMut(&str),
+) -> Result<Generation, Error> {
     let _generate = tracing::info_span!("generate").entered();
+    sampling.validate()?;
+    let sampling_on = sampling.temperature != 0.0;
+    let seed = if sampling_on {
+        Some(sampling.seed.ok_or_else(|| {
+            Error::Rejected("sampling needs a seed so that the run can be replayed: set one".into())
+        })?)
+    } else {
+        if sampling.top_k != 0 || sampling.top_p != 1.0 || sampling.repetition_penalty != 1.0 {
+            tracing::warn!("temperature 0 is greedy selection: top-k, top-p and the repetition penalty are ignored");
+        }
+        None
+    };
     let start = Instant::now();
     let config = model.config();
     let prompt_ids = tokenizer.encode(prompt)?;
@@ -82,13 +114,14 @@ pub fn generate(
             time_to_first_token: None,
             generation_time: Duration::ZERO,
         };
-        return Ok(Generation { ids: Vec::new(), stats });
+        return Ok(Generation { ids: Vec::new(), stats, seed });
     }
 
     let mut steps = Steps {
         session: model.session(false),
         tokenizer,
         debug: tracing::enabled!(Level::DEBUG),
+        sampler: seed.map(|seed| Sampler::new(sampling, seed, &prompt_ids)),
     };
     let last = prompt_ids.len() - 1;
     let mut next = 0;
@@ -134,7 +167,7 @@ pub fn generate(
         generation_tokens_per_s = stats.generation_tokens_per_second().map(rate),
         "run summary"
     );
-    Ok(Generation { ids, stats })
+    Ok(Generation { ids, stats, seed })
 }
 
 /// The decode loop's forward steps, each in its own span and, at debug
@@ -143,6 +176,8 @@ struct Steps<'a> {
     session: Session<'a>,
     tokenizer: &'a Tokenizer,
     debug: bool,
+    /// `None` for greedy generation, which takes the argmax as it always has.
+    sampler: Option<Sampler>,
 }
 
 impl Steps<'_> {
@@ -154,7 +189,12 @@ impl Steps<'_> {
         let start = self.debug.then(Instant::now);
         let logits = self.session.step(token)?;
         let step_ms = start.map(|s| ms(s.elapsed()));
-        let next = argmax(&logits);
+        let next = match &mut self.sampler {
+            None => argmax(&logits),
+            // A prompt step before the last chooses nothing, so it draws nothing.
+            Some(_) if !chooses => 0,
+            Some(sampler) => sampler.choose(&logits).token,
+        };
         if let Some(step_ms) = step_ms {
             let text = self.text(token);
             let top5 = self.top5(&logits);
@@ -539,7 +579,7 @@ mod tests {
     #[test]
     fn top5_orders_ties_by_id() {
         let (model, tokenizer) = (zero_model(4), tokenizer());
-        let steps = Steps { session: model.session(false), tokenizer: &tokenizer, debug: true };
+        let steps = Steps { session: model.session(false), tokenizer: &tokenizer, debug: true, sampler: None };
         let mut logits = vec![0.0; VOCAB];
         logits[200] = 2.0;
         logits[100] = 1.0;

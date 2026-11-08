@@ -12,11 +12,7 @@ mod generate;
 mod kv_cache;
 mod model;
 mod ops;
-// Used by sampled generation from task 13.1; until then only its tests call it.
-#[allow(dead_code)]
 mod rng;
-// Wired into generation in task 13.1.
-#[allow(dead_code)]
 mod sampling;
 mod safetensors;
 mod tensor;
@@ -29,7 +25,7 @@ pub use config::Config;
 pub use error::Error;
 #[cfg(feature = "negative-controls")]
 pub use fault::Fault;
-pub use generate::{generate, Generation, Stats};
+pub use generate::{generate, generate_with, Generation, Stats};
 pub use model::{Capture, Model, Session};
 pub use sampling::{distribution, Sampling};
 #[cfg(feature = "negative-controls")]

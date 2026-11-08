@@ -14,7 +14,7 @@ Dependencies: none new. Out of scope: chat, the instruct model, any change to th
 
 ## 13.1 Generation (FR-26, FR-28, FR-29)
 
-- [ ] Tests first: same seed same tokens; different seed different tokens; temperature 0 with all controls set equals default; greedy harness untouched. Then `generate` takes `Sampling`.
+- [x] Tests first: same seed same tokens; different seed different tokens; temperature 0 with all controls set equals default; greedy harness untouched. Then `generate` takes `Sampling`.
 
 ## 13.2 Draw test (S-10)
 

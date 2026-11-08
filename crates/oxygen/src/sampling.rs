@@ -1,6 +1,7 @@
 //! Sampling settings and the sampler (Spec §8, FR-26 to FR-30).
 
 use crate::fault::Fault;
+use crate::rng::Rng;
 use crate::Error;
 
 /// How the next token is chosen (FR-26). The default is greedy (FR-29).
@@ -36,6 +37,58 @@ impl Sampling {
             return reject("repetition-penalty", self.repetition_penalty, "must be a finite number greater than 0");
         }
         Ok(())
+    }
+}
+
+/// What one draw chose, with what the debug log reports about it (Spec §14).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Choice {
+    pub token: u32,
+    /// The chosen token's probability in the adjusted distribution.
+    pub probability: f64,
+    /// How many tokens the controls left with a non-zero probability.
+    pub kept: usize,
+}
+
+/// Draws one token per step from the adjusted distribution (FR-26, FR-28).
+/// Owns the generator and the context the repetition penalty counts: the
+/// prompt, then every token it has chosen.
+pub(crate) struct Sampler {
+    sampling: Sampling,
+    rng: Rng,
+    context: Vec<u32>,
+}
+
+impl Sampler {
+    /// `sampling` must already be valid (`Sampling::validate`).
+    pub(crate) fn new(sampling: &Sampling, seed: u64, prompt: &[u32]) -> Self {
+        Sampler { sampling: *sampling, rng: Rng::new(seed), context: prompt.to_vec() }
+    }
+
+    /// Draws the next token from the logits of the step just taken. Exactly one
+    /// number is drawn, whatever the log level (S-8). The token joins the context.
+    pub(crate) fn choose(&mut self, logits: &[f32]) -> Choice {
+        let distribution = distribution(logits, &self.context, &self.sampling).expect("settings were validated");
+        let draw = self.rng.next_f64();
+        let mut cumulative = 0.0;
+        let mut chosen = None;
+        let mut last_possible = 0;
+        let mut kept = 0;
+        for (token, &p) in distribution.iter().enumerate() {
+            if p > 0.0 {
+                kept += 1;
+                last_possible = token;
+            }
+            cumulative += p;
+            // Summed in token-ID order: the first token whose running sum exceeds the draw.
+            if chosen.is_none() && cumulative > draw {
+                chosen = Some(token);
+            }
+        }
+        // The sum can fall just short of 1 in f64, so a draw near 1 takes the last possible token.
+        let token = chosen.unwrap_or(last_possible);
+        self.context.push(token as u32);
+        Choice { token: token as u32, probability: distribution[token], kept }
     }
 }
 
