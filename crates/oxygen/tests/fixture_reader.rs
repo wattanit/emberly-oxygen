@@ -148,23 +148,69 @@ fn fr7_a_malformed_manifest_names_the_file() {
     std::fs::remove_dir_all(&root).unwrap();
 }
 
-#[test]
-fn fr7_a_manifest_naming_a_missing_tensors_file_fails_naming_it() {
-    let root = temp_dir("missing-tensors");
-    std::fs::create_dir_all(root.join("m")).unwrap();
-    let manifest = serde_json::json!({
+/// A one-prompt manifest, with or without the oracle's `f64_` fields (Spec §10).
+fn tiny_manifest(with_f64: bool) -> serde_json::Value {
+    let mut prompt = serde_json::json!({
+        "id": "p", "category": "english", "text": "x", "token_ids": [1],
+        "prompt_top2_gaps": [1.0], "continuation_ids": [1], "continuation_text": "x",
+        "continuation_top2_gaps": [1.0], "stopped_at_eos": false,
+        "tensors_file": "p.safetensors"
+    });
+    if with_f64 {
+        let extra = serde_json::json!({
+            "f64_tensors_file": "p.f64.safetensors", "f64_prompt_top2_gaps": [1.0],
+            "f64_continuation_ids": [1], "f64_continuation_text": "x",
+            "f64_continuation_top2_gaps": [1.0], "f64_stopped_at_eos": false
+        });
+        prompt.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+    }
+    serde_json::json!({
         "model_id": "m",
         "dims": {"layers": 1, "hidden": 1, "vocab": 1},
         "continuation_tokens": 1,
         "eos_token_id": 0,
-        "prompts": [{
-            "id": "p", "category": "english", "text": "x", "token_ids": [1],
-            "prompt_top2_gaps": [1.0], "continuation_ids": [1], "continuation_text": "x",
-            "continuation_top2_gaps": [1.0], "stopped_at_eos": false,
-            "tensors_file": "p.safetensors"
-        }]
-    });
-    std::fs::write(root.join("m/manifest.json"), manifest.to_string()).unwrap();
+        "prompts": [prompt]
+    })
+}
+
+#[test]
+fn fr7_a_manifest_without_the_f64_fields_names_the_oracle_command() {
+    let root = temp_dir("no-f64-fields");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), tiny_manifest(false).to_string()).unwrap();
+    let error = discover(&root).unwrap_err();
+    assert!(error.contains("f64_") && error.contains(GENERATE_COMMAND), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr7_a_missing_f64_file_fails_naming_it_and_the_command() {
+    let root = temp_dir("missing-f64");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), tiny_manifest(true).to_string()).unwrap();
+    let all = discover(&root).unwrap();
+    let error = all[0].load_reference(&all[0].manifest.prompts[0]).unwrap_err();
+    assert!(error.contains("p.f64.safetensors") && error.contains(GENERATE_COMMAND), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr4_an_f32_file_where_the_f64_file_is_named_is_refused() {
+    let root = temp_dir("f32-as-f64");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), tiny_manifest(true).to_string()).unwrap();
+    std::fs::write(root.join("m/p.f64.safetensors"), build(&[("logits", "F32", &[1, 1], &[1.0])])).unwrap();
+    let all = discover(&root).unwrap();
+    let error = all[0].load_reference(&all[0].manifest.prompts[0]).unwrap_err();
+    assert!(error.contains("F32") && error.contains("F64") && error.contains(GENERATE_COMMAND), "{error}");
+    std::fs::remove_dir_all(&root).unwrap();
+}
+
+#[test]
+fn fr7_a_manifest_naming_a_missing_tensors_file_fails_naming_it() {
+    let root = temp_dir("missing-tensors");
+    std::fs::create_dir_all(root.join("m")).unwrap();
+    std::fs::write(root.join("m/manifest.json"), tiny_manifest(true).to_string()).unwrap();
     let all = discover(&root).unwrap();
     let error = all[0].load_tensors(&all[0].manifest.prompts[0]).unwrap_err();
     assert!(error.contains("p.safetensors") && error.contains(GENERATE_COMMAND), "{error}");
@@ -204,5 +250,15 @@ fn fr4_real_fixture_shapes_match_the_manifest() {
         assert_eq!(t.layer_outputs.shape[0], fixtures.manifest.dims.layers);
         assert_eq!(prompt.prompt_top2_gaps.len(), positions);
         assert!(t.logits.data.iter().all(|v| v.is_finite()));
+
+        // The f64 reference has the same shapes and is F64 on disk (FR-2, FR-4).
+        let r = fixtures.load_reference(prompt).unwrap();
+        assert_eq!(r.logits.shape, t.logits.shape);
+        assert_eq!(r.layer_outputs.shape, t.layer_outputs.shape);
+        assert_eq!(r.embeddings.shape, t.embeddings.shape);
+        assert_eq!(r.final_norm_output.shape, t.final_norm_output.shape);
+        assert_eq!(prompt.f64_prompt_top2_gaps.len(), positions);
+        assert_eq!(prompt.f64_continuation_top2_gaps.len(), prompt.f64_continuation_ids.len());
+        assert!(r.logits.data.iter().all(|v| v.is_finite()));
     }
 }

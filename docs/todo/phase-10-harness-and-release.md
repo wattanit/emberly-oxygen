@@ -23,13 +23,13 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**. Po
 
 ## 10.1 The reader accepts F64 (FR-4, FR-7, Spec §11)
 
-- [x] **Tests first**, in `fixture_reader.rs`, seen to fail: an F64 file parses with exact values; a dtype different from the one asked for fails naming the file and the command that regenerates it (`GENERATE_COMMAND`); a missing f64 file fails the same way; a truncated or malformed one fails with a message, not a panic; the shapes of an f64 prompt equal the manifest's.
+- [x] **Tests first**, in `fixture_reader.rs`, seen to fail: an F64 file parses with exact values; a dtype different from the one asked for is refused naming both dtypes; a truncated or miscounted f64 file fails with a message, not a panic. *The tests that need `load_reference` (a missing f64 file and an F32 file where F64 is named, each naming the command; the real f64 shapes equal the manifest's) were written with task 10.2, where that function is added; this box was ticked too early in the 10.1 commit.*
 - [x] `read_safetensors` takes the dtype it expects and returns an f32 or f64 tensor accordingly; the tensor type carries which it is.
 
 ## 10.2 The manifest's f64 fields (FR-4, FR-7)
 
-- [ ] `Prompt` gains the `f64_` fields of Specification §10; `discover` fails naming the oracle command if any is missing, so a stale fixture folder is told to regenerate.
-- [ ] `PromptTensors` loads both precisions for a prompt. Existing checks keep running on the f32 data until 10.4.
+- [x] `Prompt` gains the `f64_` fields of Specification §10; `discover` fails naming the oracle command if any is missing, so a stale fixture folder is told to regenerate.
+- [x] `PromptTensors` loads both precisions for a prompt. Existing checks keep running on the f32 data until 10.4.
 
 ## 10.3 Judge against an f64 reference (S-1 to S-4, FR-2)
 

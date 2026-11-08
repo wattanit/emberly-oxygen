@@ -33,6 +33,14 @@ pub struct Prompt {
     pub continuation_top2_gaps: Vec<f32>,
     pub stopped_at_eos: bool,
     pub tensors_file: String,
+    /// The 64-bit reference's side of the record (Spec §10): the file of its
+    /// tensors, its continuation and the top-two gaps S-3 and S-4 use.
+    pub f64_tensors_file: String,
+    pub f64_prompt_top2_gaps: Vec<f64>,
+    pub f64_continuation_ids: Vec<u32>,
+    pub f64_continuation_text: String,
+    pub f64_continuation_top2_gaps: Vec<f64>,
+    pub f64_stopped_at_eos: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +104,8 @@ pub struct Tensors<T> {
 
 /// The 32-bit run's tensors.
 pub type PromptTensors = Tensors<f32>;
+/// The 64-bit run's tensors: the reference (Requirements FR-2).
+pub type ReferenceTensors = Tensors<f64>;
 
 pub fn workspace_root() -> PathBuf {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -139,7 +149,12 @@ pub fn discover(fixtures_root: &Path) -> Result<Vec<Fixtures>, String> {
             let path = dir.join("manifest.json");
             let text = fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
             let manifest = serde_json::from_str(&text)
-                .map_err(|e| format!("{}: malformed manifest: {e}", path.display()))?;
+                .map_err(|e| {
+                    format!(
+                        "{}: malformed manifest: {e}; fixtures made before the f64 reference lack its fields, regenerate with: {GENERATE_COMMAND}",
+                        path.display()
+                    )
+                })?;
             Ok(Fixtures { dir, manifest })
         })
         .collect()
@@ -150,6 +165,11 @@ impl Fixtures {
     /// ones are about 135 MB each.
     pub fn load_tensors(&self, prompt: &Prompt) -> Result<PromptTensors, String> {
         self.load(prompt, &prompt.tensors_file)
+    }
+
+    /// Loads one prompt's 64-bit reference tensors, the ones S-1 to S-4 judge by.
+    pub fn load_reference(&self, prompt: &Prompt) -> Result<ReferenceTensors, String> {
+        self.load(prompt, &prompt.f64_tensors_file)
     }
 
     fn load<T: Element>(&self, prompt: &Prompt, file: &str) -> Result<Tensors<T>, String> {
