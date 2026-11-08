@@ -244,3 +244,52 @@ fn s4_length_mismatches_fail() {
     assert_eq!(failed_at(&greedy_check(&[1, 2, 3, 4], &[1, 2, 3], &gaps)), Some(3), "engine ran on");
     assert!(greedy_check(&[1, 2, 3], &[1, 2, 3], &[1.0]).is_failure(), "gap list too short");
 }
+
+// --- S-9: sampling distributions ---------------------------------------------
+
+#[test]
+fn s9_identical_distributions_pass_with_zero_error() {
+    let d = [0.25, 0.75, 0.0];
+    let n = distribution_error(&d, &d);
+    assert_eq!(n.verdict, Verdict::Pass);
+    assert_eq!(n.max_error, 0.0);
+}
+
+#[test]
+fn s9_boundary_at_the_tolerance() {
+    let reference = [0.5, 0.5, 0.0];
+    let over = [0.5 + 1.0001 * SAMPLING_TOLERANCE, 0.5 - 1.0001 * SAMPLING_TOLERANCE, 0.0];
+    assert_eq!(failed_at(&distribution_error(&over, &reference).verdict), Some(0));
+    let under = [0.5 + 0.9999 * SAMPLING_TOLERANCE, 0.5 - 0.9999 * SAMPLING_TOLERANCE, 0.0];
+    let n = distribution_error(&under, &reference);
+    assert_eq!(n.verdict, Verdict::Pass);
+    assert!((n.max_error - 0.9999 * SAMPLING_TOLERANCE).abs() < 1e-15);
+}
+
+#[test]
+fn s9_the_failure_names_the_token_with_the_largest_difference() {
+    let reference = [0.1, 0.2, 0.7];
+    let engine = [0.1, 0.2 + 0.5 * SAMPLING_TOLERANCE, 0.7 - 5.0 * SAMPLING_TOLERANCE];
+    let n = distribution_error(&engine, &reference);
+    // Token 2 differs most; the first token over the tolerance is also token 2.
+    assert_eq!(failed_at(&n.verdict), Some(2));
+    assert!((n.max_error - 5.0 * SAMPLING_TOLERANCE).abs() < 1e-15);
+}
+
+#[test]
+fn s9_a_missing_probability_is_a_difference_not_a_skip() {
+    // The engine kept a token the reference removed (or the reverse): the whole probability counts.
+    let reference = [0.0, 1.0];
+    let engine = [0.5, 0.5];
+    let n = distribution_error(&engine, &reference);
+    assert_eq!(failed_at(&n.verdict), Some(0));
+    assert_eq!(n.max_error, 0.5);
+}
+
+#[test]
+fn s9_shape_mismatch_and_non_finite_values_fail_without_panicking() {
+    assert!(distribution_error(&[1.0], &[0.5, 0.5]).verdict.is_failure());
+    assert!(distribution_error(&[], &[]).verdict.is_failure());
+    assert!(distribution_error(&[f64::NAN, 1.0], &[0.5, 0.5]).verdict.is_failure());
+    assert!(distribution_error(&[f64::INFINITY, 0.0], &[0.5, 0.5]).verdict.is_failure());
+}

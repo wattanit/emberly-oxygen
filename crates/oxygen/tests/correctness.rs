@@ -17,15 +17,15 @@ use std::thread;
 
 use common::compare::greedy_check;
 use common::fixtures::{discover, require_model_dir, workspace_root, Fixtures, Prompt};
-use common::harness::{check_prompt, Check, CheckResult};
-use common::report::render;
-use emberly_oxygen::{generate, Model, Tokenizer};
+use common::harness::{check_prompt, check_prompt_with_run, check_sampling, run_engine, Check, CheckResult, SamplingResult};
+use common::report::{render, render_with_sampling};
+use emberly_oxygen::{distribution, generate, Model, Tokenizer};
 
 #[test]
 fn correctness_harness() {
-    let results = check_all(|_| true, true);
+    let (results, sampling) = check_all(|_| true, true);
 
-    let report = render(&results);
+    let report = render_with_sampling(&results, &sampling);
     assert!(
         report.failed.is_empty(),
         "{} of {} categories failed (S-5)\n\n{}",
@@ -41,10 +41,13 @@ fn correctness_harness() {
 #[test]
 fn parallel_table_equals_sequential_table() {
     let short = |p: &Prompt| ["english-short", "utf8-split-emoji", "english-medium"].contains(&p.id.as_str());
-    let sequential = check_all(short, false);
+    let (sequential, sequential_sampling) = check_all(short, false);
     assert_eq!(sequential.len(), 3 * Check::ALL.len(), "three prompts, every check");
-    let (sequential, parallel) = (render(&sequential).text, render(&check_all(short, true)).text);
-    assert_eq!(parallel, sequential);
+    let (parallel, parallel_sampling) = check_all(short, true);
+    assert_eq!(
+        render_with_sampling(&parallel, &parallel_sampling).text,
+        render_with_sampling(&sequential, &sequential_sampling).text
+    );
 }
 
 /// FR-6, S-4: a continuation shifted by one token fails at its first token,
@@ -111,35 +114,50 @@ fn fr5_the_f32_distance_is_reported_and_never_fails_a_prompt() {
     assert!(report.text.contains("against the f32 reference (reported, never judged)"), "{}", report.text);
 }
 
-/// Runs every check on the prompts `keep` selects, one thread per prompt when
-/// `parallel`, and returns the results in manifest order either way.
-fn check_all(keep: impl Fn(&Prompt) -> bool, parallel: bool) -> Vec<CheckResult> {
+/// Runs every check, and S-9's sampling check, on the prompts `keep` selects, one
+/// thread per prompt when `parallel`, and returns the results in manifest order
+/// either way.
+fn check_all(keep: impl Fn(&Prompt) -> bool, parallel: bool) -> (Vec<CheckResult>, Vec<SamplingResult>) {
     let root = workspace_root();
     let all = discover(&root.join("fixtures")).unwrap_or_else(|e| panic!("{e}"));
 
     let mut results: Vec<CheckResult> = Vec::new();
+    let mut sampling: Vec<SamplingResult> = Vec::new();
     for fixtures in &all {
         let (model, tokenizer) = load(&root, fixtures);
         let prompts: Vec<&Prompt> = fixtures.manifest.prompts.iter().filter(|p| keep(p)).collect();
         let check = |prompt: &Prompt| {
             let reference = fixtures.load_reference(prompt).unwrap_or_else(|e| panic!("{e}"));
             let f32_reference = fixtures.load_tensors(prompt).unwrap_or_else(|e| panic!("{e}"));
-            check_prompt(fixtures, prompt, &reference, &f32_reference, &tokenizer, &model)
+            let stored = fixtures.load_sampling(prompt).unwrap_or_else(|e| panic!("{e}"));
+            // One engine run serves every check, S-9's included.
+            let run = run_engine(&model, &prompt.token_ids);
+            let checks = check_prompt_with_run(fixtures, prompt, &reference, &f32_reference, &tokenizer, &model, &run);
+            let sampled = match &run {
+                Ok(run) => check_sampling(fixtures, prompt, &stored, run, &distribution).unwrap_or_else(|e| panic!("{e}")),
+                // The failed run already fails every numeric check of this prompt.
+                Err(_) => Vec::new(),
+            };
+            (checks, sampled)
         };
         if parallel {
             thread::scope(|s| {
                 let handles: Vec<_> = prompts.iter().map(|&p| s.spawn(move || check(p))).collect();
                 for handle in handles {
-                    results.extend(handle.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)));
+                    let (checks, sampled) = handle.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+                    results.extend(checks);
+                    sampling.extend(sampled);
                 }
             });
         } else {
             for prompt in prompts {
-                results.extend(check(prompt));
+                let (checks, sampled) = check(prompt);
+                results.extend(checks);
+                sampling.extend(sampled);
             }
         }
     }
-    results
+    (results, sampling)
 }
 
 fn load(root: &std::path::Path, fixtures: &Fixtures) -> (Model, Tokenizer) {

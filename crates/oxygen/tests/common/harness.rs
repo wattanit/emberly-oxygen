@@ -2,7 +2,9 @@
 //! check (FR-5). Nothing is skipped: a check the engine cannot perform yet is
 //! run anyway and fails, so the gate is seen to fail.
 
-use emberly_oxygen::{generate, Capture, Model, Tokenizer};
+use std::collections::HashMap;
+
+use emberly_oxygen::{generate, Capture, Error, Model, Sampling, Tokenizer};
 
 use super::compare::{
     greedy_check, intermediate_error, logit_error, top1_check, Numeric, Reference, Verdict,
@@ -212,6 +214,23 @@ pub fn check_prompt(
     tokenizer: &Tokenizer,
     model: &Model,
 ) -> Vec<CheckResult> {
+    // The forward pass is fed the reference token IDs, so a tokenizer failure
+    // does not hide the model's results.
+    let run = run_engine(model, &prompt.token_ids);
+    check_prompt_with_run(fixtures, prompt, reference, f32_reference, tokenizer, model, &run)
+}
+
+/// [`check_prompt`] on an engine run already made, so the sampling check (S-9)
+/// can read the same run's logits instead of running the prompt twice.
+pub fn check_prompt_with_run(
+    fixtures: &Fixtures,
+    prompt: &Prompt,
+    reference: &ReferenceTensors,
+    f32_reference: &PromptTensors,
+    tokenizer: &Tokenizer,
+    model: &Model,
+    run: &Result<EngineRun, String>,
+) -> Vec<CheckResult> {
     let dims = &fixtures.manifest.dims;
     let result = |check, verdict, max_error, f32_error| CheckResult {
         model_id: fixtures.manifest.model_id.clone(),
@@ -222,10 +241,7 @@ pub fn check_prompt(
         max_error,
         f32_error,
     };
-    // The forward pass is fed the reference token IDs, so a tokenizer failure
-    // does not hide the model's results.
-    let run = run_engine(model, &prompt.token_ids);
-    let (logits, top1, inter, f32_logits, f32_inter) = match &run {
+    let (logits, top1, inter, f32_logits, f32_inter) = match run {
         Ok(run) => (
             logit_error(&run.logits, &reference.logits.data, dims.vocab),
             top1_check(&run.logits, &reference.logits.data, dims.vocab, &prompt.f64_prompt_top2_gaps),
@@ -251,4 +267,79 @@ pub fn check_prompt(
         result(Check::Intermediates, inter.verdict, Some(inter.max_error), Some(f32_inter)),
         result(Check::Greedy, greedy(tokenizer, model, prompt), None, None),
     ]
+}
+
+/// One setting's S-9 result for one prompt (FR-5, S-9): the largest probability
+/// difference from the stored distribution, and how near the setting sits to its
+/// cutoffs, so a cutoff the engine's rounding could cross is visible.
+#[derive(Debug, Clone)]
+pub struct SamplingResult {
+    pub model_id: String,
+    pub prompt: String,
+    pub category: String,
+    pub setting: String,
+    pub max_error: f64,
+    pub verdict: Verdict,
+    pub top_k_margin: Option<f64>,
+    pub top_p_margin: Option<f64>,
+}
+
+/// How the engine's adjusted distribution is computed: the library's
+/// `distribution`, or a faulted one for the negative controls.
+pub type DistributionFn = dyn Fn(&[f32], &[u32], &Sampling) -> Result<Vec<f64>, Error>;
+
+/// S-9 for one prompt: for every stored setting, the engine's adjusted
+/// distribution at the prompt's last position (computed from the engine's own
+/// logits, with the prompt's token IDs as the repetition-penalty context)
+/// against the stored one. A missing stored distribution or an engine run
+/// without logits is an error, not a pass.
+pub fn check_sampling(
+    fixtures: &Fixtures,
+    prompt: &Prompt,
+    stored: &HashMap<String, Vec<f64>>,
+    run: &EngineRun,
+    distribution: &DistributionFn,
+) -> Result<Vec<SamplingResult>, String> {
+    let entry = fixtures.sampling()?;
+    let vocab = fixtures.manifest.dims.vocab;
+    if run.logits.len() < vocab || run.logits.len() % vocab != 0 {
+        return Err(format!("{}: the engine produced {} logits, not whole positions of {vocab}", prompt.id, run.logits.len()));
+    }
+    let last = &run.logits[run.logits.len() - vocab..];
+    let margins = entry.margins.get(&prompt.id);
+    let mut results = Vec::new();
+    for setting in &entry.settings {
+        let reference = stored
+            .get(&setting.name)
+            .ok_or_else(|| format!("{}: no stored distribution for setting {}", prompt.id, setting.name))?;
+        let sampling = Sampling {
+            temperature: setting.temperature.unwrap_or(1.0) as f32,
+            top_k: setting.top_k.unwrap_or(0),
+            top_p: setting.top_p.unwrap_or(1.0) as f32,
+            repetition_penalty: setting.repetition_penalty.unwrap_or(1.0) as f32,
+            seed: None,
+        };
+        let numeric = match distribution(last, &prompt.token_ids, &sampling) {
+            Ok(engine) => super::compare::distribution_error(&engine, reference),
+            Err(e) => fail(e.to_string()),
+        };
+        let verdict = match numeric.verdict {
+            Verdict::Fail { position, message } => {
+                Verdict::Fail { position, message: format!("setting {}: {message}", setting.name) }
+            }
+            other => other,
+        };
+        let m = margins.and_then(|m| m.get(&setting.name));
+        results.push(SamplingResult {
+            model_id: fixtures.manifest.model_id.clone(),
+            prompt: prompt.id.clone(),
+            category: prompt.category.clone(),
+            setting: setting.name.clone(),
+            max_error: numeric.max_error,
+            verdict,
+            top_k_margin: m.and_then(|m| m.top_k_margin_logit),
+            top_p_margin: m.and_then(|m| m.top_p_margin_prob),
+        });
+    }
+    Ok(results)
 }

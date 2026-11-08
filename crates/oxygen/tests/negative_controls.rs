@@ -119,3 +119,63 @@ fn s1_the_perturbation_exceeds_the_limit_in_force_and_touches_one_logit() {
     assert!(size > LOGIT_TOLERANCE, "perturbation {size:e} does not exceed S-1's limit {LOGIT_TOLERANCE:e}");
     assert!(size < 3.0 * LOGIT_TOLERANCE, "perturbation {size:e} is no longer just over S-1's limit {LOGIT_TOLERANCE:e}: re-size it");
 }
+
+// --- Sampling controls (S-9) -----------------------------------------------------
+//
+// The distribution check must be seen to fail (Spec §17). Each fault changes how
+// the engine's adjusted distribution is computed, and S-9 must fail on a setting
+// that exercises it. With no fault the same prompt passes every setting, so a
+// fault that did nothing would itself be caught.
+
+use common::harness::{check_sampling, SamplingResult};
+
+/// The prompt the sampling controls use. Not `english-short`: there the inverted
+/// penalty moves the distribution by only 7.7e-3, because the tokens it hits
+/// carry little probability, while on `thai-medium` it moves it by 0.85 and the
+/// combined setting keeps 7 tokens, so a swapped order shows (plan 0.2.0 §5).
+const SAMPLING_PROMPT: &str = "thai-medium";
+
+/// One prompt's S-9 results with the given fault (or none) in the distribution function.
+fn sampling_run(fault: Option<Fault>) -> Vec<SamplingResult> {
+    let root = workspace_root();
+    let fixtures = discover(&root.join("fixtures")).unwrap_or_else(|e| panic!("{e}")).into_iter().next().expect("no fixtures");
+    let model_dir = root.join("models").join(&fixtures.manifest.model_id);
+    require_model_dir(&model_dir).unwrap_or_else(|e| panic!("{e}"));
+    let model = Model::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
+    let prompt = fixtures.manifest.prompts.iter().find(|p| p.id == SAMPLING_PROMPT).expect("prompt missing");
+    let stored = fixtures.load_sampling(prompt).unwrap_or_else(|e| panic!("{e}"));
+    let engine = run_engine(&model, &prompt.token_ids).unwrap_or_else(|e| panic!("{e}"));
+    let distribution = move |l: &[f32], c: &[u32], s: &emberly_oxygen::Sampling| match fault {
+        Some(fault) => emberly_oxygen::distribution_with_fault(l, c, s, fault),
+        None => emberly_oxygen::distribution(l, c, s),
+    };
+    check_sampling(&fixtures, prompt, &stored, &engine, &distribution).unwrap_or_else(|e| panic!("{e}"))
+}
+
+fn failing_settings(results: &[SamplingResult]) -> Vec<&str> {
+    results.iter().filter(|r| r.verdict.is_failure()).map(|r| r.setting.as_str()).collect()
+}
+
+#[test]
+fn s9_without_a_fault_every_sampling_setting_passes() {
+    let results = sampling_run(None);
+    assert!(results.len() >= 5, "each control alone and a combination");
+    assert!(failing_settings(&results).is_empty(), "{:?}", failing_settings(&results));
+}
+
+#[test]
+fn s9_a_swapped_sampling_order_fails_the_combined_setting() {
+    let results = sampling_run(Some(Fault::SwappedSamplingOrder));
+    // Top-p before temperature only differs where both are set.
+    assert_eq!(failing_settings(&results), ["combined"]);
+    let combined = results.iter().find(|r| r.setting == "combined").unwrap();
+    assert!(combined.max_error > 1e-2, "the fault should be far over any tolerance: {:e}", combined.max_error);
+}
+
+#[test]
+fn s9_an_inverted_penalty_fails_the_penalty_settings() {
+    let results = sampling_run(Some(Fault::PenaltyWrongSign));
+    let failing = failing_settings(&results);
+    assert!(failing.contains(&"penalty-1.3") && failing.contains(&"combined"), "{failing:?}");
+    assert!(!failing.contains(&"temperature-0.7") && !failing.contains(&"top-k-40"), "{failing:?}");
+}

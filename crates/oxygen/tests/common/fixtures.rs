@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 pub const GENERATE_COMMAND: &str = "cd oracle && uv run python generate.py";
+pub const SAMPLING_COMMAND: &str = "cd oracle && uv run python sampling_reference.py";
 pub const DOWNLOAD_COMMAND: &str = "cd oracle && uv run python download.py";
 
 /// The files the engine loads from a model directory (Spec §5).
@@ -41,6 +42,41 @@ pub struct Prompt {
     pub f64_continuation_text: String,
     pub f64_continuation_top2_gaps: Vec<f64>,
     pub f64_stopped_at_eos: bool,
+    /// The file of this prompt's stored sampling distributions (FR-31); absent
+    /// in fixtures made before sampling, so the greedy checks still run on them.
+    #[serde(default)]
+    pub sampling_file: Option<String>,
+}
+
+/// One sampling setting the oracle stored distributions for (Spec §10). A
+/// control that is absent takes its neutral value.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SamplingSetting {
+    pub name: String,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub top_k: Option<usize>,
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    #[serde(default)]
+    pub repetition_penalty: Option<f64>,
+}
+
+/// How near a prompt's setting sits to its cutoffs, and how many tokens it keeps.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SamplingMargins {
+    pub top_k_margin_logit: Option<f64>,
+    pub top_p_margin_prob: Option<f64>,
+    pub support: usize,
+}
+
+/// The manifest's `sampling` entry: the settings, and per prompt ID and setting
+/// name the margins.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SamplingEntry {
+    pub settings: Vec<SamplingSetting>,
+    pub margins: HashMap<String, HashMap<String, SamplingMargins>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +86,8 @@ pub struct Manifest {
     pub continuation_tokens: usize,
     pub eos_token_id: u32,
     pub prompts: Vec<Prompt>,
+    #[serde(default)]
+    pub sampling: Option<SamplingEntry>,
 }
 
 /// A fixture folder: where it is and what its manifest says.
@@ -170,6 +208,51 @@ impl Fixtures {
     /// Loads one prompt's 64-bit reference tensors, the ones S-1 to S-4 judge by.
     pub fn load_reference(&self, prompt: &Prompt) -> Result<ReferenceTensors, String> {
         self.load(prompt, &prompt.f64_tensors_file)
+    }
+
+    /// The manifest's sampling entry. Fixtures made before the sampling reference
+    /// have none, which fails here, naming the command, and not in `discover`.
+    pub fn sampling(&self) -> Result<&SamplingEntry, String> {
+        self.manifest.sampling.as_ref().ok_or_else(|| {
+            format!(
+                "{}: the manifest has no sampling entry; generate the sampling reference with: {SAMPLING_COMMAND}",
+                self.dir.join("manifest.json").display()
+            )
+        })
+    }
+
+    /// Loads one prompt's stored adjusted distributions, one per setting, each
+    /// the length of the vocabulary (FR-31).
+    pub fn load_sampling(&self, prompt: &Prompt) -> Result<HashMap<String, Vec<f64>>, String> {
+        let entry = self.sampling()?;
+        let file = prompt.sampling_file.as_deref().ok_or_else(|| {
+            format!("{}: prompt {} names no sampling file; generate it with: {SAMPLING_COMMAND}", self.dir.display(), prompt.id)
+        })?;
+        let path = self.dir.join(file);
+        if !path.is_file() {
+            return Err(format!(
+                "{}: file named by the manifest is missing; generate it with: {SAMPLING_COMMAND}",
+                path.display()
+            ));
+        }
+        let mut tensors = read_typed::<f64>(&path).map_err(|e| format!("{e}; generate it with: {SAMPLING_COMMAND}"))?;
+        let mut out = HashMap::new();
+        for setting in &entry.settings {
+            let t = tensors.remove(&setting.name).ok_or_else(|| {
+                format!("{}: the distribution for setting {} is missing", path.display(), setting.name)
+            })?;
+            if t.shape != [self.manifest.dims.vocab] {
+                return Err(format!(
+                    "{}: distribution {} has shape {:?}, the vocabulary implies [{}]",
+                    path.display(),
+                    setting.name,
+                    t.shape,
+                    self.manifest.dims.vocab
+                ));
+            }
+            out.insert(setting.name.clone(), t.data);
+        }
+        Ok(out)
     }
 
     fn load<T: Element>(&self, prompt: &Prompt, file: &str) -> Result<Tensors<T>, String> {

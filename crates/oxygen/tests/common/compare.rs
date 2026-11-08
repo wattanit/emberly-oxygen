@@ -17,6 +17,13 @@ pub const INTERMEDIATE_TOLERANCE: f64 = 1e-4;
 /// token passes.
 pub const NEAR_TIE_GAP: f64 = 1e-3;
 
+/// S-9: largest absolute difference allowed between the engine's adjusted
+/// distribution and the stored one. Decided by the owner at plan 0.2.0 task
+/// 12.8 by the rule used for S-1: the smallest round decimal at least twice the
+/// worst measured error (1.98e-6), so the worst case uses at most half of it.
+/// Measured on one machine only (Requirements §13).
+pub const SAMPLING_TOLERANCE: f64 = 1e-5;
+
 /// A reference value: f64 (the reference) or f32 (the run the harness reports against).
 pub trait Reference: Copy + Into<f64> {}
 impl<T: Copy + Into<f64>> Reference for T {}
@@ -192,4 +199,37 @@ pub fn greedy_check(engine: &[u32], reference: &[u32], gaps: &[f64]) -> Verdict 
         return fail(reference.len(), format!("engine produced {} tokens, reference has {}", engine.len(), reference.len()));
     }
     Verdict::Pass
+}
+
+/// S-9: the engine's adjusted distribution matches the stored one, the largest
+/// absolute difference over the vocabulary being at most [`SAMPLING_TOLERANCE`].
+/// A token one side removed and the other kept counts its whole probability.
+/// The failure names the token with the largest difference.
+pub fn distribution_error(engine: &[f64], reference: &[f64]) -> Numeric {
+    if engine.is_empty() || engine.len() != reference.len() {
+        return numeric_fail(
+            None,
+            format!("engine distribution has {} values, reference has {}", engine.len(), reference.len()),
+        );
+    }
+    if let Some(token) = engine.iter().position(|p| !p.is_finite()) {
+        return numeric_fail(token, "engine distribution contains NaN or infinity");
+    }
+    let mut worst = (0usize, 0f64);
+    for (token, (e, r)) in engine.iter().zip(reference).enumerate() {
+        let difference = (e - r).abs();
+        if difference > worst.1 {
+            worst = (token, difference);
+        }
+    }
+    let (token, max_error) = worst;
+    let verdict = if max_error > SAMPLING_TOLERANCE {
+        fail(
+            token,
+            format!("probability error {max_error:e} at token {token} exceeds {SAMPLING_TOLERANCE:e}"),
+        )
+    } else {
+        Verdict::Pass
+    };
+    Numeric { max_error, verdict }
 }

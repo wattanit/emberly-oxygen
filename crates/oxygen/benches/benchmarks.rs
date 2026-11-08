@@ -24,6 +24,13 @@
 //! The kernel group (HC-2) times the in-house matrix-vector product against
 //! `matrixmultiply`'s at every matrix size in the model, in this process, and
 //! records one line per size with `"group": "kernels"`.
+//!
+//! The sampling group (Spec §12) times one sampling step on a vocabulary-sized
+//! logit vector for each control alone and for all four, in this process, one
+//! line per setting with `"group": "sampling"`. It measures the sampling code
+//! only: the two workloads still run greedy, so their rows stay comparable with
+//! every earlier release's (FR-9, FR-29). `cargo bench -- --sampling-only
+//! --dry-run` runs just this group and prints its rows.
 
 #[path = "support/record.rs"]
 mod record;
@@ -38,7 +45,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::hint::black_box;
 use std::time::Duration;
 
-use emberly_oxygen::{generate, kernels, Model, Tensor, Tokenizer};
+use emberly_oxygen::{generate, kernels, Model, Sampling, Tensor, Tokenizer};
 use serde_json::{json, Value};
 
 const WARMUP_RUNS: usize = 1;
@@ -119,6 +126,10 @@ fn parent() {
     let dry_run = std::env::args().any(|a| a == "--dry-run");
     // Taken before any run, so the commit and dirty flag describe the code measured.
     let conditions = conditions();
+    if std::env::args().any(|a| a == "--sampling-only") {
+        write_rows(&sampling_rows(&conditions), dry_run);
+        return;
+    }
     let workloads = workloads();
     // The prompts must be exactly the lengths Spec §12 names, or the rows
     // would not measure the same work as the series they join.
@@ -159,6 +170,7 @@ fn parent() {
         rows.push(record::row(&conditions, fields, &results));
     }
     rows.extend(kernel_rows(&conditions));
+    rows.extend(sampling_rows(&conditions));
     write_rows(&rows, dry_run);
 }
 
@@ -268,6 +280,45 @@ fn kernel_rows(conditions: &record::Conditions) -> Vec<Value> {
             "variants": record::KERNEL_VARIANTS,
         });
         rows.push(record::row(conditions, fields, &results));
+    }
+    rows
+}
+
+/// The size of SmolLM2-135M's vocabulary: the length of one step's logits.
+const VOCAB: usize = 49152;
+
+/// One sampling step (the controls, the softmax and the draw) for each setting of
+/// the sampling reference's kind, on logits spread over a realistic range and a
+/// 32-token context (Spec §12). The forward step it follows takes about 8.5 ms
+/// (the short workload's generation throughput), so the release note can state
+/// what a sampled step adds.
+fn sampling_rows(conditions: &record::Conditions) -> Vec<Value> {
+    let logits: Vec<f32> = pseudo_random(VOCAB, 77).iter().map(|v| v * 6.0).collect();
+    let context: Vec<u32> = (0..32).map(|i| (i * 1531 % VOCAB) as u32).collect();
+    let neutral = Sampling { temperature: 1.0, top_k: 0, top_p: 1.0, repetition_penalty: 1.0, seed: Some(1) };
+    let settings: [(&str, Sampling); 6] = [
+        ("neutral", neutral),
+        ("temperature-0.7", Sampling { temperature: 0.7, ..neutral }),
+        ("top-k-40", Sampling { top_k: 40, ..neutral }),
+        ("top-p-0.9", Sampling { top_p: 0.9, ..neutral }),
+        ("penalty-1.3", Sampling { repetition_penalty: 1.3, ..neutral }),
+        ("combined", Sampling { temperature: 0.7, top_k: 40, top_p: 0.9, repetition_penalty: 1.3, seed: Some(1) }),
+    ];
+    println!("sampling: one step on {VOCAB} logits, median microseconds over {RECORDED_RUNS} runs");
+    let mut rows = Vec::new();
+    for (name, sampling) in settings {
+        let ns = time_calls(|| {
+            black_box(kernels::sample_token(black_box(&logits), black_box(&context), &sampling, 1));
+        });
+        let spread = stats::spread(&ns).unwrap_or_else(|| fail("sampling: no usable timings"));
+        println!("  {name:<16} {:>10.1} us  (min {:.1}, max {:.1})", spread.median / 1000.0, spread.min / 1000.0, spread.max / 1000.0);
+        let fields = json!({
+            "group": "sampling",
+            "setting": name,
+            "vocab": VOCAB,
+            "context_tokens": context.len(),
+        });
+        rows.push(record::row(conditions, fields, &[("ns_per_step", spread)]));
     }
     rows
 }

@@ -12,6 +12,8 @@ mod generate;
 mod kv_cache;
 mod model;
 mod ops;
+mod rng;
+mod sampling;
 mod safetensors;
 mod tensor;
 #[cfg(test)]
@@ -23,8 +25,11 @@ pub use config::Config;
 pub use error::Error;
 #[cfg(feature = "negative-controls")]
 pub use fault::Fault;
-pub use generate::{generate, Generation, Stats};
+pub use generate::{generate, generate_with, Generation, Stats};
 pub use model::{Capture, Model, Session};
+pub use sampling::{distribution, Sampling};
+#[cfg(feature = "negative-controls")]
+pub use sampling::distribution_with_fault;
 pub use tensor::Tensor;
 pub use tokenizer::{StreamDecoder, Tokenizer};
 
@@ -46,6 +51,14 @@ pub mod kernels {
     /// tests and the benchmark can try other widths.
     pub fn matvec_lanes<const N: usize>(weight: &Tensor, input: &[f32], output: &mut [f32]) {
         crate::ops::matvec_lanes::<N>(weight, input, output);
+    }
+
+    /// One full sampling step on a step's logits: the controls, the softmax and
+    /// the draw, with a fresh generator seeded by `seed` and `context` as the
+    /// repetition penalty's context. For the benchmark's sampling cost group
+    /// (Spec §12) and its test.
+    pub fn sample_token(logits: &[f32], context: &[u32], sampling: &crate::Sampling, seed: u64) -> u32 {
+        crate::sampling::Sampler::new(sampling, seed, context).choose(logits).token
     }
 
     /// The matrix-vector product exactly as release 0.1.0 computed it: one

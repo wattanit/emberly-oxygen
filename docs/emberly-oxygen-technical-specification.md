@@ -2,11 +2,11 @@
 
 Oct 27, 2026 · @Wattanit
 
-**Version:** 0.3\
+**Version:** 0.4\
 **Status:** approved\
 **Date:** 2026-11-08\
 **Owner:** Wattanit\
-**Upstream:** Emberly Oxygen — Requirements 0.5
+**Upstream:** Emberly Oxygen — Requirements 0.6
 
 This document owns HOW Emberly Oxygen is built: layout, data models, subsystems, dependencies, testing strategy and milestones. It defers WHAT and WHY to the Requirements, whose IDs it cites for every choice that satisfies one.
 
@@ -30,7 +30,9 @@ emberly-oxygen/             workspace root
         tokenizer/          byte-level BPE encode/decode and streaming (§6)
         forward.rs          transformer forward pass (§7)
         kv_cache.rs         key-value cache (§3)
-        generate.rs         greedy generation and streaming (§8)
+        generate.rs         generation and streaming (§8)
+        sampling.rs         sampling controls and the sampler (§8)
+        rng.rs              seeded random number generator (§8)
         error.rs            the error type (§14)
         fault.rs            negative-control faults (§17)
       tests/                correctness harness (§11)
@@ -40,7 +42,7 @@ emberly-oxygen/             workspace root
         main.rs             entry point: run the command, map errors to exit codes
         cli.rs              argument definitions and the generate command (§9)
       tests/                command-line tests (§9)
-  oracle/                   Python reference oracle (§10)
+  oracle/                   Python reference oracle, including the sampling reference (§10)
   fixtures/                 expected outputs, git-ignored, one folder per model
   models/                   downloaded model files, git-ignored
   results/                  cumulative benchmark record (§12)
@@ -53,7 +55,7 @@ emberly-oxygen/             workspace root
 
 ## 2. Execution model
 
-- **Single-threaded and synchronous.** One request, one sequence, one thread, no async runtime. This is the simplest correct model and the baseline later releases measure against. It stays single-threaded in 0.2 so that the kernel change (§4) is measured alone (FR-25); S-6 already permits parallel arithmetic when a release introduces it.
+- **Single-threaded and synchronous.** One request, one sequence, one thread, no async runtime. This is the simplest correct model and the baseline later releases measure against. It stays single-threaded in release 0.1.1 so that the kernel change (§4) is measured alone (FR-25); S-6 already permits parallel arithmetic when a release introduces it.
 - **Prompt tokens go through the generation path.** The prompt is fed one token at a time through the same forward pass used for generation; batched prompt processing is out of scope (Requirements §2.3). One code path means one thing to verify.
 - **Past keys and values are cached.** Each layer stores the key and value vectors of every processed position, so each new token computes only its own row. Recomputing the whole prefix per token would make the 512-token benchmark prompt (§12) quadratically slow and teaches nothing the cache does not; the cache is part of the baseline, not an optimization.
 - **Streaming by callback.** Generation calls a caller-supplied function with each completed piece of text (FR-17), so the CLI prints as tokens arrive and the harnesses collect output without a separate code path.
@@ -135,20 +137,29 @@ The residual stream `x` is never normalized in place; only the copies fed into a
 
 1. Encode the prompt. Reject it before any computation if the prompt is empty or prompt length plus maximum new tokens exceeds `max_position_embeddings` (FR-18).
 2. Feed the prompt tokens through the forward pass in order (§2).
-3. Take the highest logit as the next token; on an exact tie, the lowest ID wins, as the reference's argmax does (FR-16).
+3. Choose the next token. With greedy settings (below), take the highest logit; on an exact tie, the lowest ID wins, as the reference's argmax does (FR-16). Otherwise sample (below, FR-26).
 4. If the token is the configuration's `eos_token_id`, stop; the token is returned among the generated IDs, because the oracle's continuation includes it and S-4 compares IDs, but its text is not passed to the callback, since standard output is generated text and the end-of-sequence token is a control signal (FR-17, FR-20).
 5. Otherwise pass the token to the streaming decoder and emit any completed text to the callback (FR-17). Stop after the maximum number of new tokens; flush the decoder.
 
+**Sampling (FR-26 to FR-29).** `generate_with` takes a `Sampling { temperature, top_k, top_p, repetition_penalty, seed }`; its default is greedy. `generate` keeps its signature and is the greedy case, a call of `generate_with` with the default, so every existing caller and the greedy harness are untouched and a caller that passes nothing gets the 0.1.2 behavior (FR-29). With sampling on, `generate_with` requires a seed and rejects the request naming it, so a run can always be replayed (FR-28). The settings are validated before any computation and an invalid value is rejected as a rejected request naming the option and the value (FR-30, §14): temperature finite and at least 0, top-k at least 0, top-p greater than 0 and at most 1, penalty greater than 0.
+
+- **Neutral values.** Temperature 0 is greedy selection; top-k 0, top-p 1 and penalty 1 change nothing. The default is temperature 0, so with no sampling option set generation is greedy (FR-29).
+- **Temperature 0 ignores the other controls.** Greedy selection takes the argmax of the raw logits, so the output is the previous release's greedy output whatever else is set (FR-29); if another control is not neutral, a warning says it was ignored, so a setting that does nothing is never silent.
+- **Order, per step (FR-26).** On a copy of the step's f32 logits: (1) repetition penalty (FR-27): for each distinct token already in the context, prompt and generated, a positive logit is divided by the penalty and a negative one multiplied by it; (2) divide every logit by the temperature; (3) top-k: tokens whose logit is below the k-th highest are removed, so tokens tied with the k-th are kept, as the reference does; (4) top-p: the probabilities (softmax of what remains) are sorted ascending and a token is removed when the running sum up to and including it is at most 1 − p, which keeps the smallest set of highest-probability tokens whose sum is at least p, and always keeps at least one token; then (5) the distribution is the softmax of the remaining logits, and one token is drawn from it.
+- **Arithmetic.** The controls run in f32, as the logits are. The softmax, the cumulative sum and the draw run in f64, because the final probabilities are compared with an f64 reference (S-9) and 49152 terms are cheap to sum exactly enough. The distribution is a public function of the logits, the context and the settings, so the harness can compare it with the stored one (FR-31, S-9) without drawing.
+- **The draw.** The random number generator is xoshiro256**, seeded from the 64-bit seed by SplitMix64, written in this project (HC-1: no `rand` crate, because the generator is part of what the project exists to understand). It produces a uniform f64 from the top 53 bits of one output. One draw is consumed per sampled token and none for a greedy one, so the number of draws never depends on logging (S-8). The chosen token is the first whose cumulative probability, summed in token-ID order, exceeds the draw. The algorithm is the Specification's choice: Requirements FR-28 promises reproduction within a build only, so a later release may replace it.
+- **The seed.** When sampling and no seed is given, the CLI takes one from the system clock, and it always prints `seed: <n>` to standard error (FR-20) before any text, so the run can be replayed (FR-28). `Generation` carries the seed used, `None` for greedy generation.
 - The last generated token is not fed back through the forward pass, since nothing would use its logits; the context check in step 1 still counts it (FR-18). A maximum of zero new tokens is allowed: the prompt is checked and nothing is computed.
 - `generate` returns `Generation { ids, stats }`. `Stats` holds the prompt and generated token counts, time to first token and generation time, with the two throughputs as methods. The CLI may use only the public API (§1), and time to first token cannot be seen through the text callback (the first token may complete no text, or be end-of-sequence), so the library reports it. Time to first token runs from receiving the prompt string, so it includes encoding, to choosing the first token. The first generated token's cost counts as prompt work: prompt throughput is prompt tokens over that time, and generation throughput is the tokens after the first over the time after it, absent for a single token (FR-8, FR-21).
 
 ## 9. Command-line interface
 
 ```
-emberly-oxygen generate --model <dir> --max-new-tokens <n> [--stats] [-v|-vv|-vvv] [--log-file <path>] [PROMPT]
+emberly-oxygen generate --model <dir> --max-new-tokens <n> [--temperature <t>] [--top-k <k>] [--top-p <p>] [--repetition-penalty <r>] [--seed <n>] [--stats] [-v|-vv|-vvv] [--log-file <path>] [PROMPT]
 ```
 
 - The prompt is read from standard input when no argument is given (FR-19).
+- The four sampling options and `--seed` map onto `Sampling` (§8, FR-30); each defaults to its neutral value, and the library rejects an invalid value, so the exit code is 1 and the message names the option and the value (§14). A value that is not a number of the option's type (text, or a negative `--top-k` or `--seed`) is rejected by the argument parser instead, as a usage error with exit code 2 that also names the option and the value.
 - Generated text goes to standard output and nothing else; errors go to standard error with a non-zero exit code (FR-20).
 - `--stats` prints, to standard error, the model load time (timed by the CLI around both loads) followed by prompt token count, generated token count, time to first token and generation tokens per second, defined as in §8 (FR-21).
 - A write error on standard output, such as a reader closing the pipe, makes the text callback exit with code 1, so generation stops at once instead of running to the maximum (FR-20). The CLI package's own tests run the built binary and check FR-19 to FR-21.
@@ -165,6 +176,7 @@ The oracle lives in `oracle/`, a Python project managed by `uv` with a lockfile 
 - **Honesty note.** In the reference library, the last entry of the library's hidden states is taken after the final norm, not straight from the last layer. The oracle therefore captures every layer's raw output with forward hooks (checked equal to the library's own hidden states for all other layers) and stores the final-norm output separately as `final_norm_output`; the harness compares that against the engine's normalized output.
 - **Top-two gaps** are stored for the prompt positions as well as for the continuation, because the near-tie test of S-3 applies at every position. S-3 and S-4 use the f64 gaps.
 - **The reference's own limits.** The library computes its rotary sines and cosines in f32 even in a f64 model (it casts the angles to f32 and the results back, in the pinned version), and they are left as the library makes them: they are the model as published, so the f64 reference shares the engine's f32 RoPE tables (§4), where a true f64 angle would be a different angle (at position 5000 its cosine differs by 8.4e-5). The reference is independent of the engine but not of the reference library: it carries that library's definition of the model, including the f32 rotary tables. Measured in plan 0.1.2: the library's unmodified f64 run changed by up to 1.7e-5 in logits with the thread count and differs by up to 7.3e-5 from the run with RMSNorm and softmax in 64-bit, which is why the oracle makes that replacement; with it, a rerun at another thread count differs by about 2e-6 in logits. Any residual noise is measured again whenever the oracle's library versions change.
+- **Sampling reference (FR-31).** `oracle/sampling_reference.py` reads the f64 fixtures already stored, so it does not rerun the model. For each prompt and each setting in `oracle/sampling_settings.json` it takes the f64 logits at the prompt's last position and the prompt's token IDs, applies the reference library's `RepetitionPenaltyLogitsProcessor`, `TemperatureLogitsWarper`, `TopKLogitsWarper` and `TopPLogitsWarper` in the order of §8, and writes the softmax in f64 as `<id>.sampling.safetensors` (one vocabulary-sized f64 tensor per setting). It checks first that the processors keep f64 (the same kind of start-up check as the model's, shown to fail if a processor narrowed). The manifest gains a `sampling` entry listing the settings and, per setting, the smallest margin to a cutoff (the gap between the k-th and the next logit for top-k; the probability just above and below p for top-p), so the harness can tell a cutoff the engine's rounding might cross. The settings file holds each control alone and one combination: a temperature below 1, a top-k, a top-p, a penalty above 1, and all four together (initial; tune with use). Each distribution is about 0.4 MB, so the 60 of the prompt set are about 23 MB.
 - **Further outputs.** `oracle/tokenizer_corpus.py` writes `fixtures/<model-id>/tokenizer-corpus.json` (§6), `oracle/unicode_classes.py` writes the committed character classes (§6), and `oracle/rope_reference.py` prints the reference's rotary cosines and sines at positions 1 and 5000 as Rust constants for the RoPE test, because f32 angles must agree with the reference's (§4): at position 5000 an f64 cosine differs from the reference's by 8.4e-5.
 
 Logits dominate fixture size: about 200 KB per position in f32 and twice that in f64, so a long prompt is about 100 MB in f32 and about 200 MB in f64, and the fixtures folder grows from about 0.7 GB to about 2 GB. Fixtures are therefore kept out of git: \`fixtures/\` is git-ignored and filled by running the oracle locally. What regenerates them is committed instead: the prompt set, the oracle's lockfile and the pinned model commit. The f32 fixtures generated on a different machine may differ from another machine's in the rounding of the f32 reference itself, and against which the engine's error in release 0.1.1 reached 99% of S-1; that is why S-1 is judged against the f64 fixtures, whose machine-to-machine differences are expected to be orders of magnitude smaller (measured, plan 0.1.2). The manifest records which machine produced them.
@@ -178,6 +190,7 @@ Rust integration tests in `tests/`, run with `cargo test`; the test profile is c
 - Beside each logit and intermediate error it also measures the engine's distance to the f32 fixtures and reports it, per category, in the same table. This figure never fails a prompt (FR-5). The token encoding, decoding and streaming checks read the manifest's existing fields, which are the 32-bit run's: they test the tokenizer, whose result does not depend on the arithmetic, and the two runs' continuations were identical on every prompt when measured (plan 0.1.2 §4).
 - For `utf8-split` prompts it streams the expected continuation through the streaming decoder and checks that the concatenated chunks equal the full decode and that no chunk contains a replacement character the full decode lacks (FR-15).
 - A tensor, for S-2, is one layer's `[positions, hidden]` output for one prompt, and its largest magnitude is taken over all positions; a per-position maximum would be stricter. An all-zero reference tensor fails. A near-tie is an f64 reference gap strictly less than 1e-3, and in the greedy comparison the gap before each continuation token decides: the first near-tie stops the comparison, tokens before it must match, and the token at it may be either (S-3, S-4).
+- **Sampling checks (S-9, S-10).** Per prompt and setting, the harness computes the engine's adjusted distribution from the engine's own logits at the last prompt position (§8) and reports the largest absolute probability difference from the stored distribution, judged by the tolerance of Requirements S-9 (1e-5). Every setting is judged; the smallest margin to each cutoff is reported beside the errors so a cutoff the engine's rounding could cross would be visible. The draw test (S-10) is a unit-level test: for a fixed logit vector, a fixed seed and 200,000 draws, token counts are compared with the distribution by a chi-square statistic over tokens pooled until each expects at least 5 draws, and the test passes when the statistic is at most df + 4·sqrt(2·df), a normal approximation with a tail of about 3e-5 (initial; tune with use). The seed is fixed, so the result is the same on every run.
 - It prints a pass/fail table by prompt and by category; any failing category fails the run (S-5). Each failure reports the first diverging position and, for intermediates, the first diverging layer (FR-6).
 - Model files are found in `models/<model-id>/` (git-ignored, filled by the oracle's download script). If they are missing, the run fails naming the path; it never downloads (FR-7). Missing fixtures, f32 or f64, fail the run the same way, naming the oracle command that generates them.
 
@@ -197,17 +210,18 @@ A custom harness in `benches/`, run with `cargo bench`, which builds with the op
 - **Repetition.** Each workload runs 5 times; median, minimum and maximum are recorded (S-7).
 - **Record (FR-9).** One JSON line per workload is appended to `results/benchmarks.jsonl`: package version, commit and whether the tree was dirty, CPU model, core count, memory, OS, build profile, timestamp, and results.
 - **Kernel baseline (HC-2).** A separate group times the in-house matrix-vector product against the test-only linear algebra crate (`matrixmultiply`, single-threaded) at the model's five matrix shapes. It agrees with both before timing and records one row per shape with ns per call and GFLOP/s. The group is reached through the `bench-kernels` Cargo feature, off by default, which adds the public module `emberly_oxygen::kernels`; only the library's self-referencing dev-dependency enables it, so a normal build never contains it.
-- **Reference points for the kernel.** `matrixmultiply` is a weak yardstick for a matrix-vector product: built for matrix-matrix work, it is only about 1.25× faster than the 0.1.0 loop at most shapes and slower at the 49152×576 output projection, because it repacks the matrix on every call. The kernel group therefore also times the 0.1.0 index-order loop and the partial-sum widths swept, 4, 8, 16 and 32 (FR-25), so the speed-up is shown against the engine's own history. A dedicated matrix-vector library is not added as a baseline in 0.2: it would be a new dependency (§15) and the earlier loop already shows the ceiling.
+- **Reference points for the kernel.** `matrixmultiply` is a weak yardstick for a matrix-vector product: built for matrix-matrix work, it is only about 1.25× faster than the 0.1.0 loop at most shapes and slower at the 49152×576 output projection, because it repacks the matrix on every call. The kernel group therefore also times the 0.1.0 index-order loop and the partial-sum widths swept, 4, 8, 16 and 32 (FR-25), so the speed-up is shown against the engine's own history. A dedicated matrix-vector library is not added as a baseline in release 0.1.1: it would be a new dependency (§15) and the earlier loop already shows the ceiling.
 - **Comparability.** The workloads and procedure are unchanged from 0.1.0, so every release's rows are compared with the previous release's in the record, and 0.1.0's are the baseline (FR-9, FR-25).
+- **Sampling cost.** A kernel-style group times one sampling step on a 49152-logit vector with every control neutral (the baseline of the draw and the softmax), for each control alone and for all four, so the release note can state what a sampled step costs next to a forward step. It is a measurement of the new code only: the two workloads run greedy, as in every earlier release, so their rows stay comparable (FR-9, FR-29).
 - **Definitions.** Throughput and time to first token are as defined in §8.
 
 ## 13. Configuration
 
-There is no configuration file. Run settings come from command-line flags (§9) and model settings from the model's own `config.json` (§3); nothing else is configurable, because nothing else is required.
+There is no configuration file. Run settings, sampling included, come from command-line flags (§9) and model settings from the model's own `config.json` (§3); nothing else is configurable, because nothing else is required.
 
 ## 14. Error handling and logging
 
-- The library returns one error type with a variant per failure class: I/O, malformed file, unsupported model or tokenizer component (naming the field and value, FR-12), tensor mismatch (naming the tensor), and request rejected (empty prompt, context exceeded, FR-18).
+- The library returns one error type with a variant per failure class: I/O, malformed file, unsupported model or tokenizer component (naming the field and value, FR-12), tensor mismatch (naming the tensor), and request rejected (empty prompt, context exceeded, FR-18, or an invalid sampling value, FR-30).
 - User input never causes a panic. Panics are reserved for broken internal invariants, which are bugs.
 - The binary prints the error to standard error and exits with code 1; command-line usage errors exit with code 2 (FR-20). Text already streamed before a mid-generation error stays printed; the error follows on standard error.
 
@@ -217,7 +231,7 @@ There is no configuration file. Run settings come from command-line flags (§9) 
 | --- | --- | --- |
 | none | warn | warnings and errors |
 | `-v` | info | model and configuration summary, load time, prompt token count, run summary with throughput |
-| `-vv` | debug | one event per forward step: position, the token fed, its text, top 5 candidates with logits, step time; a step whose result is taken also names the chosen token as `next`; prompt-feeding steps are marked as such. Since the last generated token is never fed (§8), a run has prompt tokens plus generated tokens minus one step events |
+| `-vv` | debug | one event per forward step: position, the token fed, its text, top 5 candidates with logits, step time; a step whose result is taken also names the chosen token as `next` and, when sampling, its probability and the number of tokens left after the filters (computed only at this level, S-8); prompt-feeding steps are marked as such. Since the last generated token is never fed (§8), a run has prompt tokens plus generated tokens minus one step events |
 | `-vvv` | trace | per layer within each step: residual-stream norm after attention and after the MLP, and for each head the position receiving the most attention weight |
 
 - Generation, steps and layers are nested spans (`generate` → `step{pos}` → `layer{idx}`), so every event carries its place in the decode loop.
@@ -265,6 +279,8 @@ Acceptance policy: an engine dependency must be general plumbing under HC-1; any
 - **Negative controls.** The harness must be seen to fail. A Cargo feature, `negative-controls`, off by default, adds the enum `Fault` (`InterleavedRope`, `PerturbedLogit { position }`, `NoFinalNorm`) and `Model::inject_fault`; in a normal build `Fault` has no values, so no faulty arithmetic is compiled in. The library's self-referencing dev-dependency enables the feature, so plain `cargo test` always runs the controls and none is skipped for a missing flag, while `cargo build` never contains them. A test asserts that the harness fails on each fault. With no fault injected the feature changes no result. A check that has never failed has not been shown to work. The new kernel (§4) must leave all three controls failing as before, and so must the move to the f64 reference: the controls are run against it, and the `PerturbedLogit` size is checked to exceed the S-1 limit in force, so that a change of limit cannot leave a control that no longer fails.
 - **Kernel tests.** The new matrix-vector product is checked against the 0.1.0 index-order loop and against `matrixmultiply` on random inputs at the model's shapes and at lengths that are not a multiple of 8, including lengths below 8 (the tail), within an absolute tolerance far below S-1 (HC-2, FR-25).
 - **Reference tests.** The comparison functions are given a reference value that f32 cannot represent and must measure the error against the unrounded value (S-1, FR-2); the f64 fixtures are checked to have the manifest's shapes and dtype (FR-4); the oracle's own start-up check that the 64-bit RMSNorm and softmax are active (§10) is run whenever the oracle is; and a test shows that the f32 distance never turns a passing prompt into a failing one (FR-5).
+- **Sampling tests.** Each control against hand-computed small distributions (FR-26, FR-27): the penalty's sign rule, top-k with a tie at the cutoff, top-p at its boundary and with p small enough to keep one token. The generator against published xoshiro256** outputs for a known seed. Seeded reproduction: the same seed gives the same tokens, a different seed gives different tokens (FR-28). Validation rejects each invalid value, naming the option (FR-30). Greedy is unchanged: the whole existing harness runs untouched, and temperature 0 with every other control set produces the same IDs as the default (FR-29). The chi-square test of §11 (S-10) is shown able to fail by feeding it draws from a different distribution.
+- **Sampling negative controls.** `Fault` gains `SwappedSamplingOrder` (top-p applied before temperature) and `PenaltyWrongSign` (the penalty is inverted: positive logits are multiplied and negative ones divided); S-9 must fail on each, so the distribution check is seen to fail. The swap is top-p and temperature because temperature divides by a positive number, which keeps the ranking, so it commutes with top-k and swapping those two changes nothing S-9 could see. The controls run on a prompt where both faults are far over the tolerance (`thai-medium`: 0.05 and 0.85), not one where a fault is weak (the inverted penalty moves `english-short` by only 7.7e-3), and on a combined setting that keeps several tokens. With no fault every setting passes.
 - Every test names the HC, FR or S item it verifies, so coverage of the Requirements can be listed mechanically.
 
 ## 18. Milestones
@@ -277,9 +293,14 @@ Acceptance policy: an engine dependency must be general plumbing under HC-1; any
 - **M6 — Baseline.** First benchmark record on the benchmark machine, release note written, tagged 0.1.0. *Proves the progression has a starting point.*
 - **M7 — Faster kernel.** The matrix-vector product with independent partial sums (§4) passes the unchanged harness in every category and leaves the negative controls failing; the kernel group and both workloads are recorded against 0.1.0's rows; release note written, tagged 0.1.1 (FR-25). *Proves the speed-up is real and costs nothing in correctness.*
 - **M8 — Float64 reference.** The oracle writes f64 fixtures beside the f32 ones, the reference's own run-to-run noise is measured, the harness judges S-1 to S-4 against the f64 fixtures and reports the f32 distance beside them, the thresholds are decided by the owner from the measurement, the negative controls fail against the new reference, and the release note is written and tagged 0.1.2 (FR-1, FR-2, FR-5). *Proves the gate measures correctness, not agreement with one library's rounding.*
+- **M9 — Sampling reference.** The oracle writes the sampling distributions and cutoff margins; the harness compares the engine's adjusted distribution with them and the sampling negative controls fail (FR-27, FR-31, S-9). *Proves the sampling gate can fail.*
+- **M10 — Sampling.** Seeded generation and the CLI options work, greedy is unchanged and the existing harness passes untouched, the draw test passes, the benchmark is recorded, the release note is written and the release is tagged 0.2.0 (FR-26 to FR-30, S-10). *Proves sampling is correct, reproducible and costs the greedy path nothing.*
 
 ## 19. Open Items
 
+### Resolved since 0.3
+
+- **How S-9 treats a setting whose cutoff the engine's rounding could cross (§11).** It judges every setting, by the owner's decision of 2026-11-08: the engine's error at the position S-9 uses is at most 5.05e-5 in logits, the smallest cutoff margins are 4.3 (top-k) and 49 (top-p) times the matching errors, and no cutoff was crossed (plan 0.2.0 §5). Requirements S-9 stays as written and now carries its tolerance, 1e-5.
 
 ### Resolved since 0.2
 
@@ -292,6 +313,16 @@ Acceptance policy: an engine dependency must be general plumbing under HC-1; any
 
 - **Tokenizer components.** SmolLM2's `tokenizer.json` was read at M3; §6 states what it uses.
 - **Benchmark platform.** The benchmark machine is an Apple M4 Max on macOS 26.3 (Requirements §13), so §12's Linux-or-macOS assumption holds.
+
+### Feedback absorbed in 0.4
+
+From plan 0.2.0 §6 (G-25). Every row addressed to this document, absorbed or rejected:
+
+| Plan row | Disposition |
+| --- | --- |
+| Task 12.4, §17 | Absorbed into §17: the swapped-order control is top-p before temperature, with the reason (temperature and top-k commute). |
+| Task 12.7, §11, §19 | Absorbed: the exemption sentence is removed from §11 and the §19 item is resolved (ledger above). |
+| Task 13.1, §8 | Absorbed into §8: `generate` keeps its signature and `generate_with` takes the settings and requires a seed; the CLI picks a clock seed. |
 
 ### Feedback absorbed in 0.3
 

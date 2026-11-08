@@ -237,3 +237,22 @@ fn fr25_the_engine_uses_16_sums() {
     let pin = Tensor::new(vec![1, 16], w).unwrap();
     assert_eq!(run(kernels::matvec, &pin, &[1.0; 16]), [7.0]);
 }
+
+// --- The sampling step (Spec §12): the benchmark's sampling cost group times
+// `kernels::sample_token`, a full step: the controls, the softmax and the draw.
+
+#[test]
+fn sampling_step_draws_a_token_the_controls_allow_and_repeats_for_a_seed() {
+    use emberly_oxygen::Sampling;
+    let logits = Rng(7).vec(1000);
+    let argmax = logits.iter().enumerate().fold(0, |b, (i, v)| if *v > logits[b] { i } else { b }) as u32;
+    let top_one = Sampling { temperature: 1.0, top_k: 1, top_p: 1.0, repetition_penalty: 1.0, seed: Some(1) };
+    for seed in 0..5 {
+        assert_eq!(kernels::sample_token(&logits, &[], &top_one, seed), argmax, "top-k 1 allows only the highest");
+    }
+    let wide = Sampling { top_k: 0, ..top_one };
+    let a: Vec<u32> = (0..20).map(|s| kernels::sample_token(&logits, &[1, 2, 3], &wide, s)).collect();
+    let b: Vec<u32> = (0..20).map(|s| kernels::sample_token(&logits, &[1, 2, 3], &wide, s)).collect();
+    assert_eq!(a, b, "the same seed gives the same token");
+    assert!(a.iter().any(|t| *t != a[0]), "different seeds give different tokens: {a:?}");
+}
