@@ -84,6 +84,7 @@ All of 0.2.0's rules hold. The ones this release leans on, and what it adds:
 Filled in as the phases land. Machine: the benchmark machine (Apple M4 Max), as before. Baseline: 304 tests at 0.2.0.
 
 - **Task 14.1 (done).** The instruct model is in `models/smollm2-135m-instruct/` at revision `12fd25f`: `config.json` 861 bytes, `model.safetensors` 269,060,552 bytes (the base model's size to the byte), `tokenizer.json` 2,104,556 bytes (also the base's size), and `tokenizer_config.json` 3,764 bytes. Its `tokenizer.json` is equal to the base model's as JSON; `config.json` differs in `bos_token_id` (0 → 1), `eos_token_id` (0 → 2), `pad_token_id` (absent → 2), `mlp_bias` (absent → false), `transformers_version` and a `transformers.js_config` block, as Specification §3 says. The base model downloads exactly as before.
+- **Task 14.2 (done).** `oracle/reference_common.py` now holds `machine`, `top2_gaps`, `float64_pure_ops` and its start-up check; `generate.py` imports them. Reran `generate.py` into the scratchpad (about 4 minutes): all 24 tensor files, f32 and f64, are **bit-identical** to the stored ones (worst difference 0), and the manifest differs only in `generated_at` and in the `sampling` entry and `sampling_file` fields, which `sampling_reference.py` added later. The base fixtures are unchanged.
 
 ## 6. Upstream feedback
 

@@ -14,7 +14,7 @@ Dependencies: none new. Out of scope: the renderer and the S-11 check (Phase 15)
 
 ## 14.2 Share the f64 setup (FR-2)
 
-- [ ] Move the context manager and start-up check to a module both scripts import; confirm the base fixtures are unchanged.
+- [x] Move the context manager and start-up check to a module both scripts import; confirm the base fixtures are unchanged.
 
 ## 14.3 Conversations (FR-39)
 
