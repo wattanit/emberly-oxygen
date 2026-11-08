@@ -54,4 +54,4 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**.
 - [x] Both fixture sets exist for every prompt, shapes as in the manifest, and the f64 files are F64.
 - [x] The f32 set is unchanged, or its change is recorded and explained.
 - [x] The f64 reference's noise is recorded and below 1e-5 in logits; the difference between the runs is recorded.
-- [ ] The owner has reviewed the oracle's diff and the numbers; nothing is merged, tagged or pushed.
+- [x] The owner has reviewed the numbers and judged them enough, without reading the oracle's diff (2026-11-08); nothing is merged, tagged or pushed.
