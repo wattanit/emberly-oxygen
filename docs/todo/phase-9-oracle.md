@@ -42,7 +42,7 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**.
 ## 9.4 The reference's own noise (FR-2, S-1)
 
 - [x] Apply decision points 2 and 3. In a scratchpad script (not committed), rerun the f64 forward pass of every prompt with `torch.set_num_threads(1)` and with the default, and compare each result with the stored `<id>.f64.safetensors`: the largest absolute logit difference, and the largest intermediate difference relative to its tensor's largest magnitude (S-2's definition), per category.
-- [x] Record the numbers and the script's command line in plan §4. If the worst logit difference exceeds 1e-5 in any category, stop and ask the owner. *Done: the bar was exceeded (1.74e-5), so this stopped here; decision point 4.*
+- [x] Record the numbers and the script's command line in plan §4. If the worst logit difference exceeds 1e-5 in any category, stop and ask the owner. *Done: the stock library run exceeded the bar (1.74e-5), so this stopped at decision point 4; after option B the reference's worst noise is 2.18e-6 (plan §4).*
 
 ## 9.5 How the two runs differ (FR-2, S-3, S-4)
 
@@ -51,7 +51,7 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**.
 
 ## Exit check
 
-- [ ] Both fixture sets exist for every prompt, shapes as in the manifest, and the f64 files are F64.
-- [ ] The f32 set is unchanged, or its change is recorded and explained.
-- [ ] The f64 reference's noise is recorded and below 1e-5 in logits; the difference between the runs is recorded.
+- [x] Both fixture sets exist for every prompt, shapes as in the manifest, and the f64 files are F64.
+- [x] The f32 set is unchanged, or its change is recorded and explained.
+- [x] The f64 reference's noise is recorded and below 1e-5 in logits; the difference between the runs is recorded.
 - [ ] The owner has reviewed the oracle's diff and the numbers; nothing is merged, tagged or pushed.

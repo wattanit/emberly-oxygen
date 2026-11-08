@@ -65,8 +65,8 @@ All of 0.1.1's rules hold. The ones this release leans on, and what it adds:
 
 Filled in during the phases. Nothing here is tuned; thresholds change only by the owner's decision at task 10.7 and a foundation bump.
 
-- The oracle's run (task 9.3, Apple M4 Max, 12 torch threads): 99 s wall (183 s user) for both precisions on all 12 prompts; the fixtures folder went from about 0.7 GB to 2.0 GB. All 12 f32 files reproduced the 0.1.1 files bit for bit (SHA-256), and the manifest's existing fields are unchanged apart from `generated_at`.
-- The stock f64 reference's own noise (task 9.4; scratchpad script, f64 forward pass of all 12 prompts rerun and compared with the stored f64 file; worst logit absolute difference and worst intermediate relative difference):
+- The oracle's run (task 9.3, Apple M4 Max, 12 torch threads): about 98 s wall (the first run 99 s, the run after option B 97.5 s) for both precisions on all 12 prompts; the fixtures folder went from about 0.7 GB to 2.0 GB. All 12 f32 files reproduced the 0.1.1 files bit for bit (SHA-256), in both runs, and the manifest's existing fields are unchanged apart from `generated_at`.
+- The stock library f64 run's noise (task 9.4, first attempt; kept as the record that led to the owner's decision for option B; scratchpad script, f64 forward pass of all 12 prompts rerun and compared with the stored f64 file; worst logit absolute difference and worst intermediate relative difference):
 
   | Category | 12 threads (as generated) | 1 thread |
   | --- | --- | --- |
@@ -77,7 +77,19 @@ Filled in during the phases. Nothing here is tuned; thresholds change only by th
   | long | 0 and 0 | **1.65e-5** and 5.9e-7 |
 
   Same thread count reproduces exactly; one thread differs by up to 1.74e-5 in logits on the thai and long prompts, 1.7% of S-1 and over the 1e-5 (1%) bar of the to-do's decision point 3, so **task 9.4 stopped and went to the owner**. Cause found: the pinned transformers computes RMSNorm (`modeling_llama.py` line 63), the attention softmax (line 197) and the rotary tables (line 111) in float32 even in a float64 model, so the "f64" run still contains f32 rounding that depends on thread count. A scratchpad variant with RMSNorm and softmax forced to float64 (RoPE tables left as the library makes them) differs from the stock f64 run by up to 7.3e-5 in logits (7% of S-1), and from itself at 1 and 12 threads by 2.2e-6 in logits and 4.0e-8 relative in intermediates.
-- The difference between the f32 and stock f64 fixtures (task 9.5; worst logit absolute, worst intermediate relative): english 2.88e-4 and 3.45e-5, thai 3.34e-4 and 1.61e-5, code 3.54e-4 and 4.27e-5, utf8-split **7.13e-4** and 2.81e-5, long 2.92e-4 and 2.96e-5. 0.1.1's diagnostic gave 7.12e-4 for the same prompt, so it reappears. Against the patched variant (RMSNorm and softmax in f64) the f32 fixtures differ by 3.08e-4, 3.28e-4, 3.28e-4, 3.93e-4 and 6.39e-4 in logits (code, english, long, thai, utf8-split). The f32 and stock f64 greedy continuations are identical for all 12 prompts, so no near-tie arises in them.
+- **The reference as released (option B: RMSNorm and softmax forced to float64, rotary tables as published).** Noise, a rerun against the stored f64 files (worst logit absolute difference and worst intermediate relative difference; scratchpad script `noise_and_diff.py noise <threads>`, run from `oracle/`, with the same replacement and its start-up check):
+
+  | Category | 12 threads (as generated) | 1 thread |
+  | --- | --- | --- |
+  | english | 0 and 0 | 0 and 0 |
+  | code | 0 and 0 | 2.1e-13 and 5.6e-15 |
+  | utf8-split | 0 and 0 | 1.5e-13 and 2.6e-15 |
+  | thai | 0 and 0 | 1.66e-6 and 3.7e-8 |
+  | long | 0 and 0 | **2.18e-6** and 4.0e-8 |
+
+  The worst is 2.18e-6, 0.22% of S-1 and under the 1e-5 bar; it is 8 times smaller than the stock run's. Same thread count reproduces exactly. What remains on the thai and long prompts, the only ones with more than about 100 positions where it appears, is not explained; the rotary tables, which stay in float32, are one candidate, and nothing was done to find out. The start-up check was shown to fail without the replacement.
+- The difference between the f32 fixtures and the reference as released (task 9.5; worst logit absolute, worst intermediate relative; scratchpad `noise_and_diff.py diff`): english 3.28e-4 and 3.44e-5, thai 3.93e-4 and 1.64e-5, code 3.08e-4 and 4.28e-5, utf8-split **6.39e-4** and 2.83e-5, long 3.28e-4 and 2.99e-5. The f32 and f64 greedy continuations are identical for all 12 prompts. Against the stock library f64 run the same figures were as in the next entry.
+- For the record, the difference between the f32 and the stock library f64 fixtures (task 9.5, first attempt; worst logit absolute, worst intermediate relative): english 2.88e-4 and 3.45e-5, thai 3.34e-4 and 1.61e-5, code 3.54e-4 and 4.27e-5, utf8-split **7.13e-4** and 2.81e-5, long 2.92e-4 and 2.96e-5. 0.1.1's diagnostic gave 7.12e-4 for the same prompt, so it reappears. Against the patched variant (RMSNorm and softmax in f64) the f32 fixtures differ by 3.08e-4, 3.28e-4, 3.28e-4, 3.93e-4 and 6.39e-4 in logits (code, english, long, thai, utf8-split). The f32 and stock f64 greedy continuations are identical for all 12 prompts, so no near-tie arises in them.
 - Worst logit and intermediate error of the 16-sum engine per category, against the f64 and f32 references, with the margin to each limit (task 10.6). 0.1.1's figures against f32: english 3.14e-4 and 3.66e-5, thai 2.79e-4 and 1.51e-5, code 3.18e-4 and 4.02e-5, utf8-split 9.90e-4 and 2.70e-5, long 3.18e-4 and 2.99e-5. *(to fill)*
 - Test suite time with the larger fixtures, against 28 s (task 10.6). *(to fill)*
 - Workloads and kernel shapes against 0.1.1's rows (task 10.10). *(to fill)*
