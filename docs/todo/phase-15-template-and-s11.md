@@ -10,7 +10,7 @@ Dependencies: none new. Out of scope: `Chat`, the command (Phase 16).
 
 ## 15.1 Instruct facts (FR-32, FR-33)
 
-- [ ] Test against the real files; model loads; markers encode as IDs 1 and 2.
+- [x] Test against the real files; model loads; markers encode as IDs 1 and 2.
 
 ## 15.2 Renderer (FR-33)
 
