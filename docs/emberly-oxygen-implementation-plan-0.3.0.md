@@ -85,6 +85,16 @@ Filled in as the phases land. Machine: the benchmark machine (Apple M4 Max), as 
 
 - **Task 14.1 (done).** The instruct model is in `models/smollm2-135m-instruct/` at revision `12fd25f`: `config.json` 861 bytes, `model.safetensors` 269,060,552 bytes (the base model's size to the byte), `tokenizer.json` 2,104,556 bytes (also the base's size), and `tokenizer_config.json` 3,764 bytes. Its `tokenizer.json` is equal to the base model's as JSON; `config.json` differs in `bos_token_id` (0 → 1), `eos_token_id` (0 → 2), `pad_token_id` (absent → 2), `mlp_bias` (absent → false), `transformers_version` and a `transformers.js_config` block, as Specification §3 says. The base model downloads exactly as before.
 - **Task 14.2 (done).** `oracle/reference_common.py` now holds `machine`, `top2_gaps`, `float64_pure_ops` and its start-up check; `generate.py` imports them. Reran `generate.py` into the scratchpad (about 4 minutes): all 24 tensor files, f32 and f64, are **bit-identical** to the stored ones (worst difference 0), and the manifest differs only in `generated_at` and in the `sampling` entry and `sampling_file` fields, which `sampling_reference.py` added later. The base fixtures are unchanged.
+- **Tasks 14.4 and 14.5 (done).** `chat_reference.py` ran in 14 s (the model is not rerun for base prompts; four short conversations). Hand check: a scratchpad script (`hand_template.py`) writes each rendering from the template text in `tokenizer_config.json` without Jinja, and all four equal the library's text character for character; the script's own assertions also hold (encoding the rendered text equals `apply_chat_template(tokenize=True)`, `<|im_start|>` is ID 1, `<|im_end|>` is ID 2, the model's `eos_token_id` is 2).
+
+  | Conversation | Positions | f64 logits file | Reply | Stopped at `<|im_end|>` | Smallest top-two gap, prompt / reply |
+  | --- | --- | --- | --- | --- | --- |
+  | `no-system` | 37 | 14.5 MB | 8 tokens: "The capital of France is Paris." | yes | 0.0221 / 0.257 |
+  | `with-system` | 29 | 11.4 MB | 64 tokens, cut by the maximum (a boiling-egg answer) | no | 0.0252 / 0.00435 |
+  | `multi-turn` | 93 | 36.6 MB | 7 tokens: "My name is Ploy." | yes | 0.0252 / 0.838 |
+  | `thai` | 110 | 43.3 MB | 64 tokens, cut by the maximum, inside a character (the decoded text ends in U+FFFD) | no | 0.0185 / 0.481 |
+
+  The folder is **101 MB** (four logits files and `chat.json`, 21 KB). No reply step has a top-two gap under 1e-3, so no near-tie falls inside any reply. Two of the four replies hit the 64-token maximum and not `<|im_end|>`, so the harness will see both endings; the Thai one is also a reply cut in the middle of a character, which exercises streaming.
 
 ## 6. Upstream feedback
 
@@ -92,6 +102,7 @@ Recorded here for the upstream owner; the approved documents are not edited from
 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
+| Task 14.5 | Specification §10 | §10 estimates a conversation at "about 100 to 300 tokens" and the folder at "tens of megabytes". The four conversations are 29 to 110 positions and the folder is 101 MB, because each f64 position is 0.39 MB. The sentence should give the measured size. |
 | Task 14.1 | Specification §10 | The oracle needs a fourth file for the instruct model, `tokenizer_config.json`, which holds the chat template; the engine never reads it and §5's model directory (three files) is unchanged. `download.py` fetches it as an oracle-only file. §10 should say the instruct download includes it. |
 
 ## 7. Open Questions

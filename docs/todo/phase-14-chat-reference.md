@@ -18,15 +18,15 @@ Dependencies: none new. Out of scope: the renderer and the S-11 check (Phase 15)
 
 ## 14.3 Conversations (FR-39)
 
-- [ ] `conversations.json` with `no-system`, `with-system`, `multi-turn`, `thai`.
+- [x] `conversations.json` with `no-system`, `with-system`, `multi-turn`, `thai`.
 
 ## 14.4 Chat reference script (FR-39, FR-4)
 
-- [ ] `chat_reference.py` writes `chat.json` and the f64 logits; renderings checked by hand in the scratchpad.
+- [x] `chat_reference.py` writes `chat.json` and the f64 logits; renderings checked by hand in the scratchpad.
 
 ## 14.5 Run (FR-4)
 
-- [ ] Record time, sizes, token counts, reply endings and text.
+- [x] Record time, sizes, token counts, reply endings and text.
 
 ## 14.6 Harness reads the files (FR-4, FR-7)
 
