@@ -1,0 +1,31 @@
+[
+  {
+    "id": "no-system",
+    "messages": [
+      {"role": "user", "content": "What is the capital of France?"}
+    ]
+  },
+  {
+    "id": "with-system",
+    "messages": [
+      {"role": "system", "content": "You are a pirate. Answer briefly."},
+      {"role": "user", "content": "How do I boil an egg?"}
+    ]
+  },
+  {
+    "id": "multi-turn",
+    "messages": [
+      {"role": "user", "content": "Hi! My name is Ploy."},
+      {"role": "assistant", "content": "Hello Ploy! How can I help you today?"},
+      {"role": "user", "content": "What is 2 plus 2?"},
+      {"role": "assistant", "content": "2 plus 2 is 4."},
+      {"role": "user", "content": "And what is my name?"}
+    ]
+  },
+  {
+    "id": "thai",
+    "messages": [
+      {"role": "user", "content": "สวัสดีครับ ช่วยแนะนำอาหารไทยหนึ่งอย่างหน่อย"}
+    ]
+  }
+]
