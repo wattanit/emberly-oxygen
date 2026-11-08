@@ -3,10 +3,10 @@
 Oct 27, 2026 · @Wattanit
 
 **Version:** 0.3\
-**Status:** draft\
+**Status:** approved\
 **Date:** 2026-11-08\
 **Owner:** Wattanit\
-**Upstream:** Emberly Oxygen — Requirements 0.4
+**Upstream:** Emberly Oxygen — Requirements 0.5
 
 This document owns HOW Emberly Oxygen is built: layout, data models, subsystems, dependencies, testing strategy and milestones. It defers WHAT and WHY to the Requirements, whose IDs it cites for every choice that satisfies one.
 
@@ -164,7 +164,7 @@ The oracle lives in `oracle/`, a Python project managed by `uv` with a lockfile 
 - **Output.** `fixtures/<model-id>/manifest.json` records the model ID and commit, library versions, the generating machine, and per prompt: ID, category, text, token IDs, continuation IDs and text, and top-two gaps. Each prompt has two safetensors files with the same tensor names and shapes: `<id>.safetensors` (f32, the 32-bit run) and `<id>.f64.safetensors` (f64, the reference, stored in 64-bit so the reference is not rounded to 32-bit again). Each holds logits `[positions, vocab]`, embeddings `[positions, hidden]`, layer outputs `[layers, positions, hidden]` and `final_norm_output` (FR-1). The manifest keeps the existing per-prompt fields for the 32-bit run and adds, for the reference, its file name, continuation IDs and text, whether it stopped at the end-of-sequence token, and top-two gaps at the prompt positions and the continuation, all prefixed `f64_`. Fixtures are model-agnostic in shape, so adding a model adds a folder (Requirements §2.2).
 - **Honesty note.** In the reference library, the last entry of the library's hidden states is taken after the final norm, not straight from the last layer. The oracle therefore captures every layer's raw output with forward hooks (checked equal to the library's own hidden states for all other layers) and stores the final-norm output separately as `final_norm_output`; the harness compares that against the engine's normalized output.
 - **Top-two gaps** are stored for the prompt positions as well as for the continuation, because the near-tie test of S-3 applies at every position. S-3 and S-4 use the f64 gaps.
-- **The reference's own limits.** The library computes its rotary sines and cosines in f32 even in a f64 model (it casts the angles to f32 and the results back, in the pinned version), and they are left as the library makes them: they are the model as published, so the f64 reference shares the engine's f32 RoPE tables (§4), where a true f64 angle would be a different angle (at position 5000 its cosine differs by 8.4e-5). The reference is the library's definition of the model in 64-bit arithmetic, not an independent implementation. Measured in plan 0.1.2: the library's unmodified f64 run changed by up to 1.7e-5 in logits with the thread count and differs by up to 7.3e-5 from the run with RMSNorm and softmax in 64-bit, which is why the oracle makes that replacement; with it, a rerun at another thread count differs by about 2e-6 in logits. Any residual noise is measured again whenever the oracle's library versions change.
+- **The reference's own limits.** The library computes its rotary sines and cosines in f32 even in a f64 model (it casts the angles to f32 and the results back, in the pinned version), and they are left as the library makes them: they are the model as published, so the f64 reference shares the engine's f32 RoPE tables (§4), where a true f64 angle would be a different angle (at position 5000 its cosine differs by 8.4e-5). The reference is independent of the engine but not of the reference library: it carries that library's definition of the model, including the f32 rotary tables. Measured in plan 0.1.2: the library's unmodified f64 run changed by up to 1.7e-5 in logits with the thread count and differs by up to 7.3e-5 from the run with RMSNorm and softmax in 64-bit, which is why the oracle makes that replacement; with it, a rerun at another thread count differs by about 2e-6 in logits. Any residual noise is measured again whenever the oracle's library versions change.
 - **Further outputs.** `oracle/tokenizer_corpus.py` writes `fixtures/<model-id>/tokenizer-corpus.json` (§6), `oracle/unicode_classes.py` writes the committed character classes (§6), and `oracle/rope_reference.py` prints the reference's rotary cosines and sines at positions 1 and 5000 as Rust constants for the RoPE test, because f32 angles must agree with the reference's (§4): at position 5000 an f64 cosine differs from the reference's by 8.4e-5.
 
 Logits dominate fixture size: about 200 KB per position in f32 and twice that in f64, so a long prompt is about 100 MB in f32 and about 200 MB in f64, and the fixtures folder grows from about 0.7 GB to about 2 GB. Fixtures are therefore kept out of git: \`fixtures/\` is git-ignored and filled by running the oracle locally. What regenerates them is committed instead: the prompt set, the oracle's lockfile and the pinned model commit. The f32 fixtures generated on a different machine may differ from another machine's in the rounding of the f32 reference itself, and against which the engine's error in release 0.1.1 reached 99% of S-1; that is why S-1 is judged against the f64 fixtures, whose machine-to-machine differences are expected to be orders of magnitude smaller (measured, plan 0.1.2). The manifest records which machine produced them.
@@ -198,7 +198,7 @@ A custom harness in `benches/`, run with `cargo bench`, which builds with the op
 - **Record (FR-9).** One JSON line per workload is appended to `results/benchmarks.jsonl`: package version, commit and whether the tree was dirty, CPU model, core count, memory, OS, build profile, timestamp, and results.
 - **Kernel baseline (HC-2).** A separate group times the in-house matrix-vector product against the test-only linear algebra crate (`matrixmultiply`, single-threaded) at the model's five matrix shapes. It agrees with both before timing and records one row per shape with ns per call and GFLOP/s. The group is reached through the `bench-kernels` Cargo feature, off by default, which adds the public module `emberly_oxygen::kernels`; only the library's self-referencing dev-dependency enables it, so a normal build never contains it.
 - **Reference points for the kernel.** `matrixmultiply` is a weak yardstick for a matrix-vector product: built for matrix-matrix work, it is only about 1.25× faster than the 0.1.0 loop at most shapes and slower at the 49152×576 output projection, because it repacks the matrix on every call. The kernel group therefore also times the 0.1.0 index-order loop and the partial-sum widths swept, 4, 8, 16 and 32 (FR-25), so the speed-up is shown against the engine's own history. A dedicated matrix-vector library is not added as a baseline in 0.2: it would be a new dependency (§15) and the earlier loop already shows the ceiling.
-- **Comparability.** The workloads and procedure are unchanged from 0.1.0, so 0.1.0's rows are the previous release's in the record (FR-9, FR-25).
+- **Comparability.** The workloads and procedure are unchanged from 0.1.0, so every release's rows are compared with the previous release's in the record, and 0.1.0's are the baseline (FR-9, FR-25).
 - **Definitions.** Throughput and time to first token are as defined in §8.
 
 ## 13. Configuration
@@ -269,8 +269,6 @@ Acceptance policy: an engine dependency must be general plumbing under HC-1; any
 
 ## 18. Milestones
 
-&#91;embedded content: milestones · M1 to M7, ending in release 0.1.1\]
-
 - **M1 — Oracle.** The oracle generates fixtures for every prompt category from the committed prompt set. *Proves the reference exists.*
 - **M2 — Harness.** The harness runs against a stub engine, reports per category, and fails cleanly. *Proves the gate can fail.*
 - **M3 — Loading.** Model loading and tokenization pass FR-11 to FR-15. *Proves the engine reads the model as published.*
@@ -301,7 +299,7 @@ From plan 0.1.1 §5 (G-25). Every row addressed to this document, absorbed or re
 
 | Plan row | Disposition |
 | --- | --- |
-| Specification 0.2 status | Not a content change. The status is the owner's act and stays `draft`; the pin in the plans follows it. |
+| Specification 0.2 status | Not a content change. Specification 0.3 was approved by the owner on 2026-11-08, pinning Requirements 0.5; the plans' pins follow. |
 | Task 7.2, §4 | Absorbed into §4 (the combining order is named: sequential from sum 0, then the tail in index order). |
 | Task 7.5, §10, §11 | Absorbed into §10, §11 and §17, with the owner's wider scope (S-1 to S-4 and the near-tie rule against the f64 reference). The reference's RoPE limit is stated in §10, which the plan row did not mention. |
 | Task 8.2, §4, §12 | Absorbed: §4 names 16 sums and the sweep; §12 names the widths swept. |
