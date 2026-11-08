@@ -8,9 +8,9 @@
 
 mod common;
 
-use common::compare::Verdict;
+use common::compare::{Verdict, LOGIT_TOLERANCE};
 use common::fixtures::{discover, require_model_dir, workspace_root};
-use common::harness::{check_prompt, Check, CheckResult};
+use common::harness::{check_prompt, run_engine, Check, CheckResult};
 use emberly_oxygen::{Fault, Model, Tokenizer};
 
 /// A short prompt, so each control takes a couple of seconds.
@@ -92,4 +92,30 @@ fn s1_s2_a_dropped_final_norm_fails_logits_and_the_final_norm() {
     failure(&results, Check::Logits);
     let (_, message) = failure(&results, Check::Intermediates);
     assert!(message.starts_with("final norm"), "every layer is right; the final norm is the first wrong tensor: {message}");
+}
+
+// S-1, HC-4: the perturbation is sized against the limit in force. Its size is measured, not assumed: the same
+// prompt is run with and without the fault and the one logit it touches is compared. If S-1 is ever loosened
+// to the perturbation or past it, this fails loudly instead of leaving a control that can no longer fail; if S-1
+// is tightened until the perturbation is no longer "just over" it, it fails too, so the control is re-sized.
+#[test]
+fn s1_the_perturbation_exceeds_the_limit_in_force_and_touches_one_logit() {
+    let root = workspace_root();
+    let fixtures = discover(&root.join("fixtures")).unwrap_or_else(|e| panic!("{e}")).into_iter().next().unwrap();
+    let model_dir = root.join("models").join(&fixtures.manifest.model_id);
+    require_model_dir(&model_dir).unwrap_or_else(|e| panic!("{e}"));
+    let prompt = fixtures.manifest.prompts.iter().find(|p| p.id == PROMPT).expect("prompt missing");
+    let position = 5;
+
+    let clean = Model::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
+    let mut faulted = Model::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
+    faulted.inject_fault(Fault::PerturbedLogit { position });
+    let (clean, faulted) = (run_engine(&clean, &prompt.token_ids).unwrap(), run_engine(&faulted, &prompt.token_ids).unwrap());
+
+    let differing: Vec<usize> = (0..clean.logits.len()).filter(|&i| clean.logits[i] != faulted.logits[i]).collect();
+    let vocab = fixtures.manifest.dims.vocab;
+    assert_eq!(differing, [position * vocab], "the fault touches the first logit at its position and nothing else");
+    let size = f64::from(faulted.logits[position * vocab] - clean.logits[position * vocab]);
+    assert!(size > LOGIT_TOLERANCE, "perturbation {size:e} does not exceed S-1's limit {LOGIT_TOLERANCE:e}");
+    assert!(size < 3.0 * LOGIT_TOLERANCE, "perturbation {size:e} is no longer just over S-1's limit {LOGIT_TOLERANCE:e}: re-size it");
 }

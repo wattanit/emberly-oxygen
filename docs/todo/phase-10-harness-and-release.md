@@ -38,14 +38,14 @@ Each has a recommendation; **the owner agreed to all of them on 2026-11-08**. Po
 
 ## 10.4 Wire the gate and report the f32 distance (FR-5, FR-6, S-5)
 
-- [ ] Apply decision point 2. The harness runs S-1 to S-4 on the f64 fixtures and measures the distance to the f32 fixtures for the logit and intermediate checks.
-- [ ] The category table shows both, the second labelled as reported, with no verdict. A test in `report.rs`: a prompt whose f32 distance is over a limit but whose f64 error is under it passes.
-- [ ] A failure still names the first diverging position and layer (FR-6), judged against the f64 data.
+- [x] Apply decision point 2. The harness runs S-1 to S-4 on the f64 fixtures and measures the distance to the f32 fixtures for the logit and intermediate checks.
+- [x] The category table shows both, the second labelled as reported, with no verdict. A test in `report.rs`: a prompt whose f32 distance is over a limit but whose f64 error is under it passes. *Also an integration test in `correctness.rs` (the f32 logits moved by 0.5; the prompt still passes against f64 and the report shows 0.5). Both were written after the wiring, which task 10.3 forced, so each was shown able to fail by temporarily judging against the f32 reference.*
+- [x] A failure still names the first diverging position and layer (FR-6), judged against the f64 data.
 
 ## 10.5 Negative controls (HC-4, S-1, S-2)
 
-- [ ] All three controls fail the harness against the f64 reference, each as before (position named for `PerturbedLogit`).
-- [ ] A test asserts the `PerturbedLogit` size exceeds `LOGIT_TOLERANCE` and stays within the range the control was sized for, so a later change of limit makes it fail loudly.
+- [x] All three controls fail the harness against the f64 reference, each as before (position named for `PerturbedLogit`).
+- [x] A test asserts the `PerturbedLogit` size exceeds `LOGIT_TOLERANCE` and stays within the range the control was sized for, so a later change of limit makes it fail loudly. *The size is measured, not read from the engine (the same prompt with and without the fault, so `crates/oxygen/src` is untouched): 1.9999e-3 in f32. Shown able to fail with S-1 temporarily at 2e-3.*
 
 ## 10.6 The full gate (HC-4, S-1 to S-6, S-8)
 
