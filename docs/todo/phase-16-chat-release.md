@@ -26,7 +26,7 @@ Dependencies: none new. Out of scope: reusing the cache across turns, multi-line
 
 ## 16.5 Chat command (FR-38, FR-37, FR-20)
 
-- [ ] CLI tests first against the binary; then the loop and defaults.
+- [x] CLI tests first against the binary; then the loop and defaults.
 
 ## 16.6 Logging (S-8, FR-23)
 
