@@ -233,3 +233,41 @@ pub fn distribution_error(engine: &[f64], reference: &[f64]) -> Numeric {
     };
     Numeric { max_error, verdict }
 }
+
+/// S-11: the engine's rendered text equals the reference's character for
+/// character. The failure gives the position of the first differing character
+/// (a character, not a byte) and what each side has there.
+pub fn text_check(engine: &str, reference: &str) -> Verdict {
+    let mut e = engine.chars();
+    let mut r = reference.chars();
+    let mut position = 0;
+    loop {
+        match (e.next(), r.next()) {
+            (None, None) => return Verdict::Pass,
+            (Some(a), Some(b)) if a == b => position += 1,
+            (a, b) => {
+                let shown = |c: Option<char>| c.map_or("the end of the text".to_string(), |c| format!("{c:?}"));
+                return fail(
+                    position,
+                    format!("character {position}: engine has {}, reference has {}", shown(a), shown(b)),
+                );
+            }
+        }
+    }
+}
+
+/// S-11: the engine's token ids equal the reference's exactly. The failure gives
+/// the first differing position, or the length that differs.
+pub fn ids_check(engine: &[u32], reference: &[u32]) -> Verdict {
+    for position in 0..engine.len().max(reference.len()) {
+        let (a, b) = (engine.get(position), reference.get(position));
+        if a != b {
+            let shown = |id: Option<&u32>| id.map_or("the end".to_string(), |id| id.to_string());
+            return fail(
+                position,
+                format!("position {position}: engine has {}, reference has {}", shown(a), shown(b)),
+            );
+        }
+    }
+    Verdict::Pass
+}

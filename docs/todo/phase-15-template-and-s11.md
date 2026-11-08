@@ -18,7 +18,7 @@ Dependencies: none new. Out of scope: `Chat`, the command (Phase 16).
 
 ## 15.3 S-11 check (S-11, FR-39)
 
-- [ ] Tests first; text and ids judged separately; renderer and encoder as arguments.
+- [x] Tests first; text and ids judged separately; renderer and encoder as arguments.
 
 ## 15.4 Negative controls (HC-4, S-11)
 

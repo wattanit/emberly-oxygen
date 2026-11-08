@@ -4,12 +4,12 @@
 
 use std::collections::HashMap;
 
-use emberly_oxygen::{generate, Capture, Error, Model, Sampling, Tokenizer};
+use emberly_oxygen::{generate, Capture, Error, Message, Model, Role, Sampling, Tokenizer};
 
 use super::compare::{
     greedy_check, intermediate_error, logit_error, top1_check, Numeric, Reference, Verdict,
 };
-use super::fixtures::{Fixtures, Prompt, PromptTensors, ReferenceTensors, Tensors};
+use super::fixtures::{Conversation, Fixtures, Prompt, PromptTensors, ReferenceTensors, Tensors};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Check {
@@ -342,4 +342,67 @@ pub fn check_sampling(
         });
     }
     Ok(results)
+}
+
+/// One conversation's S-11 result (FR-39): the rendered text and the token ids
+/// are judged separately, because a text that matches can still encode wrongly
+/// (FR-33), so each gets its own verdict.
+#[derive(Debug, Clone)]
+pub struct ChatResult {
+    pub model_id: String,
+    pub conversation: String,
+    pub text: Verdict,
+    pub tokens: Verdict,
+}
+
+impl ChatResult {
+    pub fn is_failure(&self) -> bool {
+        self.text.is_failure() || self.tokens.is_failure()
+    }
+}
+
+/// How the engine renders a conversation: the library's `render`, or a faulty
+/// one for the negative controls.
+pub type RenderFn<'a> = dyn Fn(&[Message], bool) -> String + 'a;
+/// How the engine encodes text: the tokenizer's `encode`, or a faulty one.
+pub type EncodeFn<'a> = dyn Fn(&str) -> Result<Vec<u32>, Error> + 'a;
+
+/// S-11 for one conversation: render the stored messages with the generation
+/// prompt, compare the text with the stored rendering, then encode the engine's
+/// rendering and compare its ids with the stored ones.
+pub fn check_chat_template(
+    model_id: &str,
+    conversation: &Conversation,
+    render: &RenderFn<'_>,
+    encode: &EncodeFn<'_>,
+) -> ChatResult {
+    let result = |text, tokens| ChatResult {
+        model_id: model_id.to_string(),
+        conversation: conversation.id.clone(),
+        text,
+        tokens,
+    };
+    let mut messages = Vec::new();
+    for m in &conversation.messages {
+        let role = match m.role.as_str() {
+            "system" => Role::System,
+            "user" => Role::User,
+            "assistant" => Role::Assistant,
+            other => {
+                let failure = || Verdict::Fail {
+                    position: None,
+                    message: format!("conversation {}: stored role {other:?} is not one the engine knows", conversation.id),
+                };
+                return result(failure(), failure());
+            }
+        };
+        messages.push(Message::new(role, m.content.clone()));
+    }
+    let text = render(&messages, true);
+    let text_verdict = super::compare::text_check(&text, &conversation.rendered);
+    let tokens_verdict = match encode(&text) {
+        Ok(ids) => super::compare::ids_check(&ids, &conversation.token_ids),
+        Err(e) => Verdict::Fail { position: None, message: format!("the encoder failed: {e}") },
+    };
+    result(text_verdict, tokens_verdict)
 }
