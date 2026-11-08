@@ -189,16 +189,26 @@ impl Steps<'_> {
         let start = self.debug.then(Instant::now);
         let logits = self.session.step(token)?;
         let step_ms = start.map(|s| ms(s.elapsed()));
+        let mut choice = None;
         let next = match &mut self.sampler {
             None => argmax(&logits),
             // A prompt step before the last chooses nothing, so it draws nothing.
             Some(_) if !chooses => 0,
-            Some(sampler) => sampler.choose(&logits).token,
+            Some(sampler) => {
+                let c = sampler.choose(&logits);
+                choice = Some(c);
+                c.token
+            }
         };
         if let Some(step_ms) = step_ms {
             let text = self.text(token);
             let top5 = self.top5(&logits);
-            if chooses {
+            if let Some(c) = choice {
+                // Sampling: the chosen token's probability and the tokens the controls left.
+                let next_text = self.text(next);
+                let probability = format!("{:.6}", c.probability);
+                tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms = %step_ms, next, next_text = ?next_text, probability = %probability, kept = c.kept, "step");
+            } else if chooses {
                 let next_text = self.text(next);
                 tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms = %step_ms, next, next_text = ?next_text, "step");
             } else {
@@ -644,5 +654,62 @@ mod tests {
 
         let zero = generate(&model, &tokenizer(), "ab", 0, &mut |_| {}).unwrap().stats;
         assert_eq!((zero.prompt_tokens, zero.generated_tokens, zero.time_to_first_token), (2, 0, None));
+    }
+
+    /// Every logged event of a sampled run of `generate_with` at `level`.
+    fn logged_sampled(
+        model: &Model,
+        prompt: &str,
+        max: usize,
+        sampling: &Sampling,
+        level: Option<Level>,
+    ) -> (Vec<u32>, Vec<String>, Vec<Logged>) {
+        let ((ids, chunks), events) = collect(level, || {
+            let mut chunks = Vec::new();
+            let ids = generate_with(model, &tokenizer(), prompt, max, sampling, &mut |s| chunks.push(s.to_owned()))
+                .unwrap()
+                .ids;
+            (ids, chunks)
+        });
+        (ids, chunks, events)
+    }
+
+    // FR-23, Spec §14: when sampling, the step that chooses a token also reports its
+    // probability and how many tokens the controls left; steps before the last prompt
+    // token, and greedy steps, report neither.
+    #[test]
+    fn debug_reports_the_probability_and_kept_tokens_of_a_sampled_choice() {
+        let model = bigram_model(&CYCLE, 16);
+        let sampling = Sampling { temperature: 1.0, top_k: 1, top_p: 1.0, repetition_penalty: 1.0, seed: Some(3) };
+        let (ids, _, events) = logged_sampled(&model, "ab", 3, &sampling, Some(Level::DEBUG));
+        assert_eq!(ids, [0x63, 0x61, 0x62], "top-k 1 follows the cycle");
+        let steps = steps(&events);
+        assert_eq!(steps.len(), 4);
+        assert_eq!(steps[0].get("probability"), None, "a prompt step before the last chooses nothing");
+        for step in &steps[1..] {
+            assert_eq!(step.get("probability"), Some("1.000000"), "{step:?}");
+            assert_eq!(step.get("kept"), Some("1"), "{step:?}");
+        }
+        let (_, _, greedy) = logged(&model, "ab", 3, Some(Level::DEBUG));
+        assert!(steps_of(&greedy).iter().all(|s| s.get("probability").is_none() && s.get("kept").is_none()));
+    }
+
+    fn steps_of(events: &[Logged]) -> Vec<&Logged> {
+        steps(events)
+    }
+
+    // S-8: a sampled run gives the same IDs and text with no subscriber and at every
+    // level, so what the log computes never feeds back into the draw. All logits are
+    // equal in `zero_model`, so the tokens really are random.
+    #[test]
+    fn sampled_output_is_the_same_at_every_level() {
+        let model = zero_model(64);
+        let sampling = Sampling { temperature: 1.0, top_k: 0, top_p: 0.9, repetition_penalty: 1.1, seed: Some(11) };
+        let (ids, chunks, _) = logged_sampled(&model, "a", 20, &sampling, None);
+        assert!(ids.windows(2).any(|w| w[0] != w[1]), "the tokens should be random, not one repeated: {ids:?}");
+        for level in [Level::WARN, Level::INFO, Level::DEBUG, Level::TRACE] {
+            let (i, c, _) = logged_sampled(&model, "a", 20, &sampling, Some(level));
+            assert_eq!((&i, &c), (&ids, &chunks), "{level}");
+        }
     }
 }

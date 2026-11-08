@@ -104,3 +104,21 @@ fn fr30_the_help_lists_every_sampling_option() {
         assert!(String::from_utf8_lossy(&r.stdout).contains(option), "{option} missing from the help");
     }
 }
+
+// S-8, FR-23: a sampled run prints the same text at every verbosity, and -vv shows the
+// probability and the number of kept tokens at each choosing step.
+#[test]
+fn s8_sampled_output_is_identical_at_every_level() {
+    let base = ["--temperature", "0.8", "--top-p", "0.9", "--seed", "31"];
+    let plain = run(&base);
+    assert_eq!(plain.code, 0, "{}", plain.stderr);
+    for flag in ["-v", "-vv", "-vvv"] {
+        let mut args = vec![flag];
+        args.extend(base);
+        let r = run(&args);
+        assert_eq!(r.stdout, plain.stdout, "{flag}");
+    }
+    let vv = run(&["-vv", "--temperature", "0.8", "--top-p", "0.9", "--seed", "31"]);
+    let steps: Vec<&str> = vv.stderr.lines().filter(|l| l.contains("generate: step phase=")).collect();
+    assert!(steps.iter().any(|l| l.contains(" probability=") && l.contains(" kept=")), "{}", vv.stderr);
+}

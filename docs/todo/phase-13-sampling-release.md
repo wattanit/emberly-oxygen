@@ -26,7 +26,7 @@ Dependencies: none new. Out of scope: chat, the instruct model, any change to th
 
 ## 13.4 Logging (S-8, FR-23)
 
-- [ ] `-vv` additions at that level only; test identical output at every level when sampling.
+- [x] `-vv` additions at that level only; test identical output at every level when sampling.
 
 ## 13.5 Full gate (HC-4)
 
