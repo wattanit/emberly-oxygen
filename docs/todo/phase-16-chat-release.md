@@ -50,7 +50,7 @@ Dependencies: none new. Out of scope: reusing the cache across turns, multi-line
 
 ## 16.11 Release note and SFD settlement
 
-- [ ] Note and README; §6 rows into the documents as the owner permits; compliance review; pins; ask for approval.
+- [x] Note and README; §6 rows into the documents as the owner permits; compliance review; pins; ask for approval.
 
 ## 16.12 Owner's review; stop before merge
 

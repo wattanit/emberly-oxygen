@@ -4,7 +4,7 @@ Nov 8, 2026 · @Wattanit
 
 **Target release:** 0.3.0\
 **Owner:** Wattanit\
-**Built against:** Emberly Oxygen — Requirements 0.7 (upstream; approved on 2026-11-08), Emberly Oxygen — Technical Specification 0.5 (upstream; approved on 2026-11-08)
+**Built against:** Emberly Oxygen — Requirements 0.7 (upstream; approved on 2026-11-08, edited in place with the owner's permission with what the work found, §6), Emberly Oxygen — Technical Specification 0.5 (upstream; the same)
 
 This is a living working document, not part of the SFD suite: it has no document version or status and is edited in place as work proceeds. It expands the Technical Specification's milestones M11 and M12 into three phases with ordered tasks and exit checks. It owns sequencing and task breakdown only; WHAT stays in the Requirements and HOW stays in the Specification, and every task cites the IDs it satisfies.
 
@@ -137,7 +137,7 @@ Filled in as the phases land. Machine: the benchmark machine (Apple M4 Max), as 
 
 ## 6. Upstream feedback
 
-Recorded here for the upstream owner; the approved documents are not edited from this plan without the owner's permission. This section is a permanent record.
+Recorded here for the upstream owner; the approved documents are not edited from this plan without the owner's permission. This section is a permanent record. **All rows below were absorbed in place into Requirements 0.7 and Specification 0.5 at task 16.11, with the owner's permission of 2026-11-09 and no version bump.**
 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
