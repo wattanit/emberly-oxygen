@@ -429,4 +429,133 @@ mod tests {
         let error = distribution(&[1.0, 2.0], &[], &sampling(-1.0, 0, 1.0, 1.0)).unwrap_err();
         assert!(matches!(error, Error::Rejected(m) if m.contains("temperature")));
     }
+
+    // --- S-10: draws follow the distribution (Spec §11) -------------------------
+
+    /// Draws `n` tokens with a fixed seed from one fixed logit vector and counts them.
+    fn counts(logits: &[f32], sampling: &Sampling, seed: u64, n: u64) -> Vec<u64> {
+        let mut sampler = Sampler::new(sampling, seed, &[]);
+        let mut counts = vec![0u64; logits.len()];
+        for _ in 0..n {
+            counts[sampler.choose(logits).token as usize] += 1;
+        }
+        counts
+    }
+
+    /// Chi-square statistic and degrees of freedom of `counts` against `probs`,
+    /// with tokens pooled in id order until each bin expects at least 5 draws
+    /// (the tail joins the last bin). Tokens of probability 0 must draw 0.
+    fn chi_square(counts: &[u64], probs: &[f64]) -> (f64, usize) {
+        let n: u64 = counts.iter().sum();
+        let mut bins: Vec<(f64, f64)> = Vec::new(); // (expected, observed)
+        let (mut expected, mut observed) = (0.0, 0.0);
+        for (c, p) in counts.iter().zip(probs) {
+            if *p == 0.0 {
+                assert_eq!(*c, 0, "a token with probability 0 was drawn");
+                continue;
+            }
+            expected += p * n as f64;
+            observed += *c as f64;
+            if expected >= 5.0 {
+                bins.push((expected, observed));
+                (expected, observed) = (0.0, 0.0);
+            }
+        }
+        if expected > 0.0 {
+            match bins.last_mut() {
+                Some(last) => {
+                    last.0 += expected;
+                    last.1 += observed;
+                }
+                None => bins.push((expected, observed)),
+            }
+        }
+        let stat = bins.iter().map(|(e, o)| (o - e) * (o - e) / e).sum();
+        (stat, bins.len() - 1)
+    }
+
+    /// The Specification's limit: df + 4·sqrt(2·df), a normal approximation whose
+    /// upper tail is about 3e-5 (initial; tune with use).
+    fn limit(df: usize) -> f64 {
+        df as f64 + 4.0 * (2.0 * df as f64).sqrt()
+    }
+
+    /// 64 fixed logits, spread enough to give a varied distribution.
+    fn fixed_logits(len: usize) -> Vec<f32> {
+        let mut rng = Rng::new(2024);
+        (0..len).map(|_| (rng.next_f64() * 8.0 - 4.0) as f32).collect()
+    }
+
+    const DRAWS: u64 = 200_000;
+
+    #[test]
+    fn s10_the_chi_square_of_exact_counts_is_zero_and_of_a_skew_is_large() {
+        let probs = [0.5, 0.25, 0.25];
+        assert_eq!(chi_square(&[500, 250, 250], &probs), (0.0, 2));
+        // 600/200/200 against 500/250/250: 100²/500 + 50²/250 + 50²/250 = 20 + 10 + 10.
+        let (stat, df) = chi_square(&[600, 200, 200], &probs);
+        assert!((stat - 40.0).abs() < 1e-9 && df == 2, "{stat} {df}");
+    }
+
+    #[test]
+    fn s10_draws_follow_the_distribution_with_every_token_possible() {
+        let logits = fixed_logits(500);
+        let s = Sampling { temperature: 1.0, seed: Some(1), ..Sampling::default() };
+        let probs = distribution(&logits, &[], &s).unwrap();
+        let (stat, df) = chi_square(&counts(&logits, &s, 1, DRAWS), &probs);
+        println!("S-10: chi-square {stat:.1} over {df} degrees of freedom, limit {:.1}", limit(df));
+        assert!(stat <= limit(df), "chi-square {stat} over {df} degrees of freedom exceeds {}", limit(df));
+    }
+
+    #[test]
+    fn s10_draws_follow_the_distribution_after_temperature_top_k_and_top_p() {
+        let logits = fixed_logits(64);
+        let s = Sampling { temperature: 0.7, top_k: 40, top_p: 0.9, repetition_penalty: 1.0, seed: Some(7) };
+        let probs = distribution(&logits, &[], &s).unwrap();
+        let possible = probs.iter().filter(|p| **p > 0.0).count();
+        assert!(possible > 5 && possible < 40, "the controls should cut the support: {possible}");
+        let (stat, df) = chi_square(&counts(&logits, &s, 7, DRAWS), &probs);
+        println!("S-10: chi-square {stat:.1} over {df} degrees of freedom, limit {:.1}", limit(df));
+        assert!(stat <= limit(df), "chi-square {stat} over {df} degrees of freedom exceeds {}", limit(df));
+    }
+
+    // The test is shown able to fail: draws made at temperature 0.9 judged against
+    // the distribution at 0.7 are far over the limit, and so are draws that
+    // ignore top-p.
+    #[test]
+    fn s10_draws_from_a_different_distribution_fail_the_test() {
+        let logits = fixed_logits(64);
+        let expected = Sampling { temperature: 0.7, top_k: 40, top_p: 0.9, repetition_penalty: 1.0, seed: Some(7) };
+        let probs = distribution(&logits, &[], &expected).unwrap();
+        for other in [
+            Sampling { temperature: 0.9, ..expected },
+            Sampling { top_p: 1.0, ..expected },
+            Sampling { top_k: 10, ..expected },
+        ] {
+            let (stat, df) = chi_square(&counts_allowing_unexpected(&logits, &other, 7, DRAWS, &probs), &probs);
+            assert!(stat > limit(df), "{other:?}: chi-square {stat} over {df} should exceed {}", limit(df));
+        }
+    }
+
+    /// Like `counts`, but a token the expected distribution rules out is counted
+    /// in the nearest possible bin instead of aborting the comparison.
+    fn counts_allowing_unexpected(logits: &[f32], sampling: &Sampling, seed: u64, n: u64, expected: &[f64]) -> Vec<u64> {
+        let mut c = counts(logits, sampling, seed, n);
+        let first_possible = expected.iter().position(|p| *p > 0.0).unwrap();
+        for (i, p) in expected.iter().enumerate() {
+            if *p == 0.0 && c[i] > 0 {
+                let moved = std::mem::take(&mut c[i]);
+                c[first_possible] += moved;
+            }
+        }
+        c
+    }
+
+    #[test]
+    fn s10_the_same_seed_gives_the_same_counts() {
+        let logits = fixed_logits(64);
+        let s = Sampling { temperature: 0.7, top_k: 40, top_p: 0.9, repetition_penalty: 1.0, seed: Some(7) };
+        assert_eq!(counts(&logits, &s, 7, 10_000), counts(&logits, &s, 7, 10_000));
+        assert_ne!(counts(&logits, &s, 7, 10_000), counts(&logits, &s, 8, 10_000));
+    }
 }

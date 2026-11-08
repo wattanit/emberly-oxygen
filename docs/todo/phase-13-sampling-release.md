@@ -18,7 +18,7 @@ Dependencies: none new. Out of scope: chat, the instruct model, any change to th
 
 ## 13.2 Draw test (S-10)
 
-- [ ] Chi-square test as in Specification §11, shown to fail on draws from another distribution; record the statistic and limit.
+- [x] Chi-square test as in Specification §11, shown to fail on draws from another distribution; record the statistic and limit.
 
 ## 13.3 CLI (FR-19, FR-20, FR-30)
 
