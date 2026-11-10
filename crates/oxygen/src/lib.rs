@@ -48,6 +48,13 @@ pub mod kernels {
         crate::ops::matvec(weight, input, output);
     }
 
+    /// The matrix-matrix product the batched prompt pass uses (FR-40, Spec §4):
+    /// `count` input rows of `input` (row-major `[count, cols]`), each dotted
+    /// with every weight row, written to `output` as `[count, rows]`.
+    pub fn matmul(weight: &Tensor, input: &[f32], count: usize, output: &mut [f32]) {
+        crate::ops::matmul(weight, input, count, output);
+    }
+
     /// The partial-sum matrix-vector product with `N` independent sums (FR-25,
     /// Spec §4); the engine's own `matvec` is this at the width `ops::LANES` names. Public so the
     /// tests and the benchmark can try other widths.

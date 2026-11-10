@@ -10,8 +10,8 @@ Dependencies: none new. Out of scope: tiling, register blocking, threads, SIMD, 
 
 ## 17.1 `matmul` (FR-40, HC-2)
 
-- [ ] Tests first: equal to `matvec` row by row; equal to `matrixmultiply` within tolerance at the five shapes and at odd sizes; one row; lengths below the partial-sum width.
-- [ ] Then `matmul`, weight row outermost, calling the existing dot product.
+- [x] Tests first: equal to `matvec` row by row; equal to `matrixmultiply` within tolerance at the five shapes and at odd sizes; one row; lengths below the partial-sum width.
+- [x] Then `matmul`, weight row outermost, calling the existing dot product.
 
 ## 17.2 `Logits` and `prefill`'s checks (FR-40, FR-18)
 
