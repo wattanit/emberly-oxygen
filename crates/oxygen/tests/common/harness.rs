@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use emberly_oxygen::{generate, Capture, Error, Message, Model, Role, Sampling, Tokenizer};
+use emberly_oxygen::{generate, Capture, Error, Logits, Message, Model, Role, Sampling, Tokenizer};
 
 use super::compare::{
     greedy_check, intermediate_error, logit_error, top1_check, Numeric, Reference, Verdict,
@@ -70,7 +70,7 @@ pub struct CheckResult {
     pub f32_error: Option<f64>,
 }
 
-/// What the engine produced for one prompt, fed one token at a time.
+/// What the engine produced for one prompt.
 pub struct EngineRun {
     /// `[positions, vocab]`, flattened.
     pub logits: Vec<f32>,
@@ -80,8 +80,22 @@ pub struct EngineRun {
     pub final_norm: Vec<f32>,
 }
 
-/// The harness owns the token loop, so later phases use the same path.
+/// The engine's values for one prompt from the batched pass, the one generation
+/// uses (FR-41, Spec §11): every position's logits and the capture of the whole
+/// prompt, in one `prefill`. The harness owns this call, so every check reaches
+/// the engine the same way.
 pub fn run_engine(model: &Model, ids: &[u32]) -> Result<EngineRun, String> {
+    let mut session = model.session(true);
+    let logits = session.prefill(ids, Logits::All).map_err(|e| e.to_string())?;
+    let Capture { embedding, layers, final_norm } = session.capture().ok_or("capture is off")?.clone();
+    Ok(EngineRun { logits, embeddings: embedding, layers, final_norm })
+}
+
+/// The same values from the one-token path, `step` once per token: the 0.3.0 way,
+/// kept as the other side of the batched-against-one-token comparison (FR-41,
+/// Spec §11).
+#[allow(dead_code)]
+pub fn run_engine_by_steps(model: &Model, ids: &[u32]) -> Result<EngineRun, String> {
     let mut session = model.session(true);
     let mut run = EngineRun { logits: vec![], embeddings: vec![], layers: vec![], final_norm: vec![] };
     for (position, &token) in ids.iter().enumerate() {
