@@ -87,6 +87,24 @@ impl Model {
         self.fault = Some(fault);
     }
 
+    /// EXPERIMENT (branch experiment/early-exit, never for develop): keeps only
+    /// the first `n` decoder layers, so the final norm and unembedding read the
+    /// residual after layer `n`.
+    pub fn keep_layers(&mut self, n: usize) {
+        self.weights.layers.truncate(n);
+        self.config.layers = self.weights.layers.len();
+    }
+
+    /// EXPERIMENT: keeps exactly the layers whose indices are listed, in order.
+    pub fn keep_layer_indices(&mut self, keep: &[usize]) {
+        let mut i = 0;
+        self.weights.layers.retain(|_| {
+            i += 1;
+            keep.contains(&(i - 1))
+        });
+        self.config.layers = self.weights.layers.len();
+    }
+
     /// Starts an empty sequence. Capture is off unless asked for.
     pub fn session(&self, capture: bool) -> Session<'_> {
         let c = &self.config;
