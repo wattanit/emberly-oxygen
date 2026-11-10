@@ -115,6 +115,36 @@ pub fn run_engine_by_steps(model: &Model, ids: &[u32]) -> Result<EngineRun, Stri
     Ok(run)
 }
 
+/// How far apart two runs of the engine are (FR-41, Spec §11).
+#[allow(dead_code)]
+pub struct Difference {
+    /// The largest absolute difference between any two logits.
+    pub logits: f64,
+    /// The largest absolute difference between any two values of the embeddings, the layers or the final norm.
+    pub intermediates: f64,
+}
+
+/// The two runs' largest absolute differences, measured in f64 so the subtraction adds no rounding.
+/// Runs of different shapes are infinitely far apart: a pass that returned too few values must not
+/// pass by having its prefix compared.
+#[allow(dead_code)]
+pub fn engine_difference(a: &EngineRun, b: &EngineRun) -> Difference {
+    fn largest(x: &[f32], y: &[f32]) -> f64 {
+        if x.len() != y.len() {
+            return f64::INFINITY;
+        }
+        x.iter().zip(y).map(|(p, q)| (f64::from(*p) - f64::from(*q)).abs()).fold(0.0, f64::max)
+    }
+    let mut intermediates = largest(&a.embeddings, &b.embeddings).max(largest(&a.final_norm, &b.final_norm));
+    if a.layers.len() != b.layers.len() {
+        intermediates = f64::INFINITY;
+    }
+    for (x, y) in a.layers.iter().zip(&b.layers) {
+        intermediates = intermediates.max(largest(x, y));
+    }
+    Difference { logits: largest(&a.logits, &b.logits), intermediates }
+}
+
 fn fail(message: impl Into<String>) -> Numeric {
     Numeric { max_error: f64::INFINITY, verdict: Verdict::Fail { position: None, message: message.into() } }
 }
