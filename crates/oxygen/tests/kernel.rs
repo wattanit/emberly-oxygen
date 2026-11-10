@@ -256,3 +256,113 @@ fn sampling_step_draws_a_token_the_controls_allow_and_repeats_for_a_seed() {
     assert_eq!(a, b, "the same seed gives the same token");
     assert!(a.iter().any(|t| *t != a[0]), "different seeds give different tokens: {a:?}");
 }
+
+/// `kernels::matmul` into a fresh `[count, rows]` vector.
+fn run_matmul(weight: &Tensor, input: &[f32], count: usize) -> Vec<f32> {
+    let mut out = vec![0f32; count * weight.shape()[0]];
+    kernels::matmul(weight, input, count, &mut out);
+    out
+}
+
+// FR-40, Spec §4: each output row of the matrix-matrix product is exactly the
+// matrix-vector product of that input row, bit for bit, at the model's five
+// shapes and at input counts that are not a multiple of anything: one, a few,
+// and a prime. The dot product is the same function, so this is equality and
+// not a tolerance.
+#[test]
+fn fr40_matmul_equals_matvec_row_by_row() {
+    let mut rng = Rng(0x0bad_cafe_1234_5678);
+    for (rows, cols) in [(576, 576), (192, 576), (1536, 576), (576, 1536), (49152, 576)] {
+        let weight = Tensor::new(vec![rows, cols], rng.vec(rows * cols)).unwrap();
+        for count in [1usize, 2, 7, 13] {
+            let input = rng.vec(count * cols);
+            let got = run_matmul(&weight, &input, count);
+            for t in 0..count {
+                let want = run(kernels::matvec, &weight, &input[t * cols..(t + 1) * cols]);
+                let row = &got[t * rows..(t + 1) * rows];
+                assert!(
+                    row.iter().zip(&want).all(|(a, b)| a.to_bits() == b.to_bits()),
+                    "{rows}x{cols}, {count} inputs: input row {t} differs from matvec"
+                );
+            }
+        }
+    }
+}
+
+// FR-40, HC-2, S-1: against matrixmultiply, the test-only baseline, at the
+// model's shapes and for a count that is neither 1 nor a power of two.
+#[test]
+fn fr40_matmul_agrees_with_matrixmultiply() {
+    let mut rng = Rng(0x5eed_5eed_5eed_5eed);
+    for (rows, cols) in [(576, 576), (192, 576), (1536, 576), (576, 1536), (49152, 576)] {
+        let weight = Tensor::new(vec![rows, cols], rng.vec(rows * cols)).unwrap();
+        let count = 5;
+        let input = rng.vec(count * cols);
+        let got = run_matmul(&weight, &input, count);
+        for t in 0..count {
+            let x = &input[t * cols..(t + 1) * cols];
+            assert_close(
+                &format!("{rows}x{cols}, input row {t}, against matrixmultiply"),
+                &weight, x, &got[t * rows..(t + 1) * rows], &baseline(&weight, x),
+            );
+        }
+    }
+}
+
+// FR-40: every column count from 0 to 40 with one and three inputs, so lengths
+// below the partial-sum width (only a tail) are covered; zero inputs and zero
+// weight rows give an empty output.
+#[test]
+fn fr40_matmul_every_length_from_0_to_40() {
+    let mut rng = Rng(0xfeed_face_dead_10cc);
+    for cols in 0..=40 {
+        let rows = 5;
+        let weight = Tensor::new(vec![rows, cols], rng.vec(rows * cols)).unwrap();
+        for count in [1usize, 3] {
+            let input = rng.vec(count * cols);
+            let got = run_matmul(&weight, &input, count);
+            for t in 0..count {
+                let x = &input[t * cols..(t + 1) * cols];
+                let want = run(kernels::matvec_index_order, &weight, x);
+                assert_close(&format!("{cols} columns, input row {t}"), &weight, x, &got[t * rows..(t + 1) * rows], &want);
+            }
+        }
+    }
+    let weight = Tensor::new(vec![3, 4], vec![1.0; 12]).unwrap();
+    assert!(run_matmul(&weight, &[], 0).is_empty(), "no inputs, no output");
+    let none = Tensor::new(vec![0, 9], vec![]).unwrap();
+    assert!(run_matmul(&none, &[0.0; 18], 2).is_empty(), "no weight rows, no output");
+}
+
+// FR-40, S-6: a call is bit-identical to the next.
+#[test]
+fn fr40_matmul_calls_are_bit_identical() {
+    let mut rng = Rng(0x7777_1111_2222_3333);
+    let weight = Tensor::new(vec![192, 576], rng.vec(192 * 576)).unwrap();
+    let input = rng.vec(9 * 576);
+    let first = run_matmul(&weight, &input, 9);
+    let second = run_matmul(&weight, &input, 9);
+    assert!(first.iter().zip(&second).all(|(a, b)| a.to_bits() == b.to_bits()));
+}
+
+// FR-40, Spec §14: shapes that disagree are internal bugs and panic.
+#[test]
+#[should_panic(expected = "2-D")]
+fn fr40_matmul_rejects_a_weight_that_is_not_2d() {
+    let weight = Tensor::new(vec![6], vec![0.0; 6]).unwrap();
+    kernels::matmul(&weight, &[0.0; 6], 1, &mut [0.0; 1]);
+}
+
+#[test]
+#[should_panic(expected = "input length")]
+fn fr40_matmul_rejects_a_wrong_input_length() {
+    let weight = Tensor::new(vec![2, 3], vec![0.0; 6]).unwrap();
+    kernels::matmul(&weight, &[0.0; 7], 2, &mut [0.0; 4]);
+}
+
+#[test]
+#[should_panic(expected = "output length")]
+fn fr40_matmul_rejects_a_wrong_output_length() {
+    let weight = Tensor::new(vec![2, 3], vec![0.0; 6]).unwrap();
+    kernels::matmul(&weight, &[0.0; 6], 2, &mut [0.0; 3]);
+}

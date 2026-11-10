@@ -17,6 +17,10 @@ pub enum Fault {
     PerturbedLogit { position: usize },
     /// The logits come from the residual stream without the final RMSNorm.
     NoFinalNorm,
+    /// Every row of the batched prompt pass attends to the whole prompt, as a
+    /// missing causal mask would (FR-40, Spec §7): the future leaks into every
+    /// position's logits.
+    UnmaskedAttention,
     /// Sampling applies top-p before temperature, so it cuts the distribution
     /// of the unscaled logits (Spec §8, §17). Temperature and top-k commute, so
     /// moving top-p is the order change that gives a different distribution.
@@ -41,6 +45,10 @@ impl Fault {
         self == Fault::NoFinalNorm
     }
 
+    pub(crate) fn unmasks_attention(self) -> bool {
+        self == Fault::UnmaskedAttention
+    }
+
     pub(crate) fn swaps_sampling_order(self) -> bool {
         self == Fault::SwappedSamplingOrder
     }
@@ -57,6 +65,10 @@ impl Fault {
     }
 
     pub(crate) fn skips_final_norm(self) -> bool {
+        match self {}
+    }
+
+    pub(crate) fn unmasks_attention(self) -> bool {
         match self {}
     }
 

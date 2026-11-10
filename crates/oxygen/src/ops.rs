@@ -43,22 +43,58 @@ pub(crate) fn matvec_lanes<const N: usize>(weight: &Tensor, input: &[f32], outpu
     assert_eq!(input.len(), cols, "input length must equal the weight's columns");
     assert_eq!(output.len(), rows, "output length must equal the weight's rows");
     for (i, out) in output.iter_mut().enumerate() {
-        let mut sums = [0f32; N];
-        let mut row = weight.row(i).chunks_exact(N);
-        let mut x = input.chunks_exact(N);
-        for (w, x) in row.by_ref().zip(x.by_ref()) {
-            for j in 0..N {
-                sums[j] += w[j] * x[j];
-            }
+        *out = dot_lanes::<N>(weight.row(i), input);
+    }
+}
+
+/// One dot product with `N` independent partial sums, in the order described
+/// at [`matvec_lanes`]. The matrix-vector and matrix-matrix products both call
+/// it, so there is one summation order (Spec §4).
+#[inline(always)]
+fn dot_lanes<const N: usize>(row: &[f32], input: &[f32]) -> f32 {
+    let mut sums = [0f32; N];
+    let mut row = row.chunks_exact(N);
+    let mut x = input.chunks_exact(N);
+    for (w, x) in row.by_ref().zip(x.by_ref()) {
+        for j in 0..N {
+            sums[j] += w[j] * x[j];
         }
-        let mut sum = 0f32;
-        for lane in sums {
-            sum += lane;
+    }
+    let mut sum = 0f32;
+    for lane in sums {
+        sum += lane;
+    }
+    for (w, x) in row.remainder().iter().zip(x.remainder()) {
+        sum += w * x;
+    }
+    sum
+}
+
+/// The matrix-matrix product for a batch of inputs (FR-40, Spec §4): `input`
+/// holds `count` rows of the weight's column count, and `output` receives
+/// `count` rows of the weight's row count, so `output[t][i]` is the dot
+/// product of weight row `i` with input row `t`.
+///
+/// The loops put the weight row outermost: each row is read from memory once
+/// and reused for every input while it is in cache, where `count` separate
+/// matrix-vector products would read it `count` times. Each element is the
+/// same [`LANES`]-sum dot product as [`matvec`]'s, so the result equals it bit
+/// for bit. That reuse is the whole technique: no input block is held in
+/// registers and nothing is tiled, threaded or vectorized by hand.
+///
+/// Panics if the weight is not 2-D or the lengths disagree (internal bug,
+/// Spec §14).
+pub(crate) fn matmul(weight: &Tensor, input: &[f32], count: usize, output: &mut [f32]) {
+    let &[rows, cols] = weight.shape() else {
+        panic!("matmul needs a 2-D weight, got shape {:?}", weight.shape());
+    };
+    assert_eq!(input.len(), count * cols, "input length must be count times the weight's columns");
+    assert_eq!(output.len(), count * rows, "output length must be count times the weight's rows");
+    for i in 0..rows {
+        let row = weight.row(i);
+        for t in 0..count {
+            output[t * rows + i] = dot_lanes::<LANES>(row, &input[t * cols..(t + 1) * cols]);
         }
-        for (w, x) in row.remainder().iter().zip(x.remainder()) {
-            sum += w * x;
-        }
-        *out = sum;
     }
 }
 

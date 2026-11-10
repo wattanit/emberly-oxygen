@@ -28,7 +28,7 @@ pub use error::Error;
 #[cfg(feature = "negative-controls")]
 pub use fault::Fault;
 pub use generate::{generate, generate_with, Generation, Stats};
-pub use model::{Capture, Model, Session};
+pub use model::{Capture, Logits, Model, Session};
 pub use sampling::{distribution, Sampling};
 #[cfg(feature = "negative-controls")]
 pub use sampling::distribution_with_fault;
@@ -46,6 +46,13 @@ pub mod kernels {
     /// `output[i]` is the dot product of weight row `i` with `input`.
     pub fn matvec(weight: &Tensor, input: &[f32], output: &mut [f32]) {
         crate::ops::matvec(weight, input, output);
+    }
+
+    /// The matrix-matrix product the batched prompt pass uses (FR-40, Spec §4):
+    /// `count` input rows of `input` (row-major `[count, cols]`), each dotted
+    /// with every weight row, written to `output` as `[count, rows]`.
+    pub fn matmul(weight: &Tensor, input: &[f32], count: usize, output: &mut [f32]) {
+        crate::ops::matmul(weight, input, count, output);
     }
 
     /// The partial-sum matrix-vector product with `N` independent sums (FR-25,

@@ -23,6 +23,16 @@ pub struct Session<'a> {
     capture: Option<Capture>,
 }
 
+/// Which logits a batched prompt pass returns (Spec §7): the last position's
+/// only, which is all generation uses, or every position's, which the harness
+/// checks (S-1, S-3). Every row costs a 49152-way unembedding, so only the
+/// harness asks for them all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Logits {
+    Last,
+    All,
+}
+
 /// The residual stream of the last processed token, for the harness (Spec §7).
 /// `layers` holds the raw output of every decoder layer; `final_norm` is the
 /// output after the final RMSNorm.
@@ -98,6 +108,24 @@ impl Session<'_> {
             &self.model.weights,
             &mut self.cache,
             token,
+            self.capture.as_mut(),
+            self.model.fault,
+        )
+    }
+
+    /// Processes a whole prompt in one batched pass and returns its logits: the
+    /// last position's (`vocab_size` values) or every position's, row after row
+    /// (`tokens.len() × vocab_size`). The session must be empty: every caller
+    /// starts a sequence with its prompt (Spec §2). An empty prompt, a token
+    /// outside the vocabulary or a prompt longer than the context is rejected
+    /// and leaves the session as it was (FR-18, FR-40).
+    pub fn prefill(&mut self, tokens: &[u32], logits: Logits) -> Result<Vec<f32>, Error> {
+        forward::prefill(
+            &self.model.config,
+            &self.model.weights,
+            &mut self.cache,
+            tokens,
+            logits,
             self.capture.as_mut(),
             self.model.fault,
         )

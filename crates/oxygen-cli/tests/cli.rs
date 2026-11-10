@@ -161,7 +161,7 @@ fn the_log_file_takes_the_log() {
     assert_eq!(logged.stderr, "");
     assert_eq!(logged.stdout, plain.stdout);
     let written = std::fs::read_to_string(&path).unwrap();
-    assert!(written.contains("run summary") && written.contains("step{pos=0}"), "{written}");
+    assert!(written.contains("run summary") && written.contains("prefill{tokens=") && written.contains("step{pos="), "{written}");
 
     let r = generate(&["--max-new-tokens", "4", "--log-file", "/nonexistent-dir/log.txt", "Hello"]);
     assert_error(&r, &["/nonexistent-dir/log.txt"]);

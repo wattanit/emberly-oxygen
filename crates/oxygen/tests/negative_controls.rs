@@ -94,6 +94,21 @@ fn s1_s2_a_dropped_final_norm_fails_logits_and_the_final_norm() {
     assert!(message.starts_with("final norm"), "every layer is right; the final norm is the first wrong tensor: {message}");
 }
 
+// FR-40, FR-41, S-1, S-2, FR-6: a batched pass with no causal mask lets position 0 see the whole prompt, so
+// the logits fail at position 0 and the first wrong tensor is layer 0 (the embeddings are right). The
+// harness reaches the engine through `prefill`, the only place the fault acts, so this also shows
+// the gate judges the batched pass and not the one-token path.
+#[test]
+fn fr40_s1_s2_an_unmasked_attention_fails_the_logits_and_the_first_layer() {
+    let results = run(Some(Fault::UnmaskedAttention));
+    let (position, message) = failure(&results, Check::Logits);
+    assert_eq!(position, Some(0), "{message}");
+    let (position, message) = failure(&results, Check::Intermediates);
+    assert_eq!(position, Some(0), "{message}");
+    assert!(message.starts_with("layer 0"), "the embeddings are right and layer 0 is the first wrong tensor: {message}");
+    assert!(passes(&results, Check::Encode) && passes(&results, Check::Decode), "only the engine's math was broken");
+}
+
 // S-1, HC-4: the perturbation is sized against the limit in force. Its size is measured, not assumed: the same
 // prompt is run with and without the fault and the one logit it touches is compared. If S-1 is ever loosened
 // to the perturbation or past it, this fails loudly instead of leaving a control that can no longer fail; if S-1
