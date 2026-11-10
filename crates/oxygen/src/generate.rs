@@ -3,8 +3,8 @@ use std::time::{Duration, Instant};
 use tracing::Level;
 
 use crate::rng::Rng;
-use crate::sampling::Sampler;
-use crate::{Error, Model, Sampling, Session, Tokenizer};
+use crate::sampling::{Choice, Sampler};
+use crate::{Error, Logits, Model, Sampling, Session, Tokenizer};
 
 /// What [`generate`] returns: the generated token IDs and how long it took.
 #[derive(Debug, Clone, PartialEq)]
@@ -96,7 +96,8 @@ pub fn generate_with(
 }
 
 /// The step loop shared by [`generate_with`] and a chat turn (Spec §8): encodes
-/// `prompt`, checks the request (FR-18), feeds the prompt, then chooses and
+/// `prompt`, checks the request (FR-18), processes the prompt in one batched
+/// pass (FR-40), then chooses and
 /// streams tokens until the end-of-sequence token or the maximum. `sampling`
 /// must already be valid. With `rng` it draws from that generator, which the
 /// caller owns, so a chat can carry one generator across turns (FR-37); without
@@ -145,11 +146,8 @@ pub(crate) fn run(
         debug: tracing::enabled!(Level::DEBUG),
         sampler: rng.map(|rng| Sampler::new(sampling, rng, &prompt_ids)),
     };
-    let last = prompt_ids.len() - 1;
-    let mut next = 0;
-    for (pos, &id) in prompt_ids.iter().enumerate() {
-        next = steps.step(pos, id, "prompt", pos == last)?;
-    }
+    // The prompt in one batched pass, then one step per generated token (FR-40).
+    let mut next = steps.prefill(&prompt_ids)?;
     let first_token = start.elapsed();
 
     let mut decoder = tokenizer.stream_decoder();
@@ -166,7 +164,7 @@ pub(crate) fn run(
         if ids.len() == max_new_tokens {
             break;
         }
-        next = steps.step(prompt_ids.len() + ids.len() - 1, next, "generate", true)?;
+        next = steps.step(prompt_ids.len() + ids.len() - 1, next)?;
     }
     let rest = decoder.finish();
     if !rest.is_empty() {
@@ -192,8 +190,9 @@ pub(crate) fn run(
     Ok(Generation { ids, stats, seed })
 }
 
-/// The decode loop's forward steps, each in its own span and, at debug
-/// level, described by one event.
+/// The forward passes of a run: one batched prefill of the prompt and then one
+/// step per generated token, each in its own span and, at debug level,
+/// described by one event.
 struct Steps<'a> {
     session: Session<'a>,
     tokenizer: &'a Tokenizer,
@@ -203,41 +202,64 @@ struct Steps<'a> {
 }
 
 impl Steps<'_> {
-    /// Feeds `token` at position `pos` and returns the highest-scoring next
-    /// token. `chooses` says whether the caller takes it, which the event
-    /// shows as `next`; a prompt step before the last does not.
-    fn step(&mut self, pos: usize, token: u32, phase: &'static str, chooses: bool) -> Result<u32, Error> {
+    /// Processes the whole prompt in one pass and returns the first generated
+    /// token. Only the last position's logits are computed, the only ones the
+    /// choice uses (Spec §7); the first token is drawn from them as a step's
+    /// would be.
+    fn prefill(&mut self, ids: &[u32]) -> Result<u32, Error> {
+        let _prefill = tracing::debug_span!("prefill", tokens = ids.len()).entered();
+        let start = self.debug.then(Instant::now);
+        let logits = self.session.prefill(ids, Logits::Last)?;
+        let prefill_ms = start.map(|s| ms(s.elapsed()));
+        let (next, choice) = self.choose(&logits);
+        if let Some(prefill_ms) = prefill_ms {
+            let tokens = ids.len();
+            let top5 = self.top5(&logits);
+            let next_text = self.text(next);
+            if let Some(c) = choice {
+                let probability = format!("{:.6}", c.probability);
+                tracing::debug!(tokens, top5 = %top5, prefill_ms = %prefill_ms, next, next_text = ?next_text, probability = %probability, kept = c.kept, "prefill");
+            } else {
+                tracing::debug!(tokens, top5 = %top5, prefill_ms = %prefill_ms, next, next_text = ?next_text, "prefill");
+            }
+        }
+        Ok(next)
+    }
+
+    /// Feeds `token` at position `pos` and returns the next token, chosen from
+    /// the step's logits.
+    fn step(&mut self, pos: usize, token: u32) -> Result<u32, Error> {
         let _step = tracing::debug_span!("step", pos).entered();
         let start = self.debug.then(Instant::now);
         let logits = self.session.step(token)?;
         let step_ms = start.map(|s| ms(s.elapsed()));
-        let mut choice = None;
-        let next = match &mut self.sampler {
-            None => argmax(&logits),
-            // A prompt step before the last chooses nothing, so it draws nothing.
-            Some(_) if !chooses => 0,
-            Some(sampler) => {
-                let c = sampler.choose(&logits);
-                choice = Some(c);
-                c.token
-            }
-        };
+        let (next, choice) = self.choose(&logits);
         if let Some(step_ms) = step_ms {
             let text = self.text(token);
             let top5 = self.top5(&logits);
+            let next_text = self.text(next);
+            let phase = "generate";
             if let Some(c) = choice {
                 // Sampling: the chosen token's probability and the tokens the controls left.
-                let next_text = self.text(next);
                 let probability = format!("{:.6}", c.probability);
                 tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms = %step_ms, next, next_text = ?next_text, probability = %probability, kept = c.kept, "step");
-            } else if chooses {
-                let next_text = self.text(next);
-                tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms = %step_ms, next, next_text = ?next_text, "step");
             } else {
-                tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms = %step_ms, "step");
+                tracing::debug!(phase, token, text = ?text, top5 = %top5, step_ms = %step_ms, next, next_text = ?next_text, "step");
             }
         }
         Ok(next)
+    }
+
+    /// The token chosen from `logits`: the argmax when greedy, otherwise a draw
+    /// (with its probability and the number of tokens the controls kept).
+    fn choose(&mut self, logits: &[f32]) -> (u32, Option<Choice>) {
+        match &mut self.sampler {
+            None => (argmax(logits), None),
+            Some(sampler) => {
+                let c = sampler.choose(logits);
+                (c.token, Some(c))
+            }
+        }
     }
 
     fn text(&self, id: u32) -> String {
@@ -571,39 +593,54 @@ mod tests {
         assert_eq!(summary.get("generation_tokens_per_s"), None);
     }
 
-    // FR-23, Spec §14: at debug there is one event per forward step, inside `generate` ->
-    // `step{pos}`, with the token fed, its text, the top 5 candidates and the step time; prompt
-    // steps are marked. Each prompt token appears once as `token` and each generated token once
-    // as `next`. The last generated token is never fed back (plan §9, task 5.1), so a run has
-    // one step fewer than prompt plus generated tokens.
+    /// The `prefill` events of a run.
+    fn prefills(events: &[Logged]) -> Vec<&Logged> {
+        events.iter().filter(|e| e.message() == "prefill").collect()
+    }
+
+    // FR-23, FR-40, Spec §14: at debug the prompt gives one `prefill` event, inside `generate` ->
+    // `prefill{tokens}`, with the prompt's size, the top 5 candidates for the first token, the
+    // time and that token as `next`; then one event per decode step, inside `generate` ->
+    // `step{pos}` at the position of the token fed. Each generated token appears once as `next`,
+    // the first on the prefill event. The last generated token is never fed back (plan §9,
+    // task 5.1), so a run has one step fewer than generated tokens.
     #[test]
-    fn debug_gives_one_event_per_step() {
+    fn debug_gives_one_prefill_event_then_one_event_per_step() {
         let model = bigram_model(&CYCLE, 16);
         let (ids, _, events) = logged(&model, "ab", 3, Some(Level::DEBUG));
         assert_eq!(ids, [0x63, 0x61, 0x62]);
-        let steps = steps(&events);
-        assert_eq!(steps.len(), 2 + 3 - 1);
         assert!(events.iter().all(|e| e.level <= Level::DEBUG), "no trace events at debug");
 
-        let expected = [
-            ("prompt", 0x61, "\"a\"", None),
-            ("prompt", 0x62, "\"b\"", Some(0x63)),
-            ("generate", 0x63, "\"c\"", Some(0x61)),
-            ("generate", 0x61, "\"a\"", Some(0x62)),
-        ];
-        for (pos, (step, (phase, token, text, next))) in steps.iter().zip(expected).enumerate() {
-            assert_eq!(step.path, ["generate".to_string(), format!("step{{pos={pos}}}")]);
-            assert_eq!(step.get("phase"), Some(phase), "{step:?}");
+        let prefill = prefills(&events);
+        assert_eq!(prefill.len(), 1, "one event for the whole prompt");
+        let prefill = prefill[0];
+        assert_eq!(prefill.path, ["generate".to_string(), "prefill{tokens=2}".to_string()]);
+        assert_eq!((prefill.get("tokens"), prefill.get("next")), (Some("2"), Some("99")));
+        assert!(prefill.get("prefill_ms").unwrap().parse::<f64>().unwrap() >= 0.0);
+        assert_eq!(prefill.get("top5").unwrap().split(", ").count(), 5);
+        assert!(events.iter().position(|e| e.message() == "prefill") < events.iter().position(|e| e.message() == "step"));
+
+        let steps = steps(&events);
+        assert_eq!(steps.len(), 3 - 1);
+        let expected = [(0x63, "\"c\"", 0x61), (0x61, "\"a\"", 0x62)];
+        for (i, (step, (token, text, next))) in steps.iter().zip(expected).enumerate() {
+            assert_eq!(step.path, ["generate".to_string(), format!("step{{pos={}}}", 2 + i)]);
+            assert_eq!(step.get("phase"), Some("generate"), "{step:?}");
             assert_eq!(step.get("token"), Some(token.to_string().as_str()));
             assert_eq!(step.get("text"), Some(text));
-            assert_eq!(step.get("next"), next.map(|n: u32| n.to_string()).as_deref());
+            assert_eq!(step.get("next"), Some(next.to_string().as_str()));
             assert!(step.get("step_ms").unwrap().parse::<f64>().unwrap() >= 0.0);
             let top5: Vec<&str> = step.get("top5").unwrap().split(", ").collect();
             assert_eq!(top5.len(), 5, "{top5:?}");
             let first: u32 = top5[0].split(' ').next().unwrap().parse().unwrap();
-            assert_eq!(Some(first), next.or(Some(0x62)), "the top candidate is the one chosen");
+            assert_eq!(first, next, "the top candidate is the one chosen");
         }
-        let nexts: Vec<u32> = steps.iter().filter_map(|s| s.get("next")).map(|n| n.parse().unwrap()).collect();
+        let nexts: Vec<u32> = events
+            .iter()
+            .filter(|e| e.message() == "prefill" || e.message() == "step")
+            .filter_map(|e| e.get("next"))
+            .map(|n| n.parse().unwrap())
+            .collect();
         assert_eq!(nexts, ids, "every generated token once, as `next`");
     }
 
@@ -620,16 +657,21 @@ mod tests {
         assert_eq!(ids, [200, 7, 100, 0, 1]);
     }
 
-    // FR-23, Spec §14: at trace each step adds one event per layer, inside `generate` ->
-    // `step{pos}` -> `layer{idx}`, with both residual norms and a position for every head.
+    // FR-23, FR-40, Spec §14: at trace the prefill gives one event per layer for the whole prompt,
+    // inside `generate` -> `prefill{tokens}` -> `layer{idx}` and describing the last row, then each
+    // decode step adds one per layer, inside `generate` -> `step{pos}` -> `layer{idx}`; every event
+    // has both residual norms and a position for every head.
     #[test]
-    fn trace_gives_one_event_per_layer_per_step() {
+    fn trace_gives_one_event_per_layer_for_the_prefill_and_per_step() {
         let model = bigram_model(&CYCLE, 16);
+        let layers_in_model = model.config().layers;
         let (_, _, events) = logged(&model, "ab", 3, Some(Level::TRACE));
         let layers: Vec<&Logged> = events.iter().filter(|e| e.level == Level::TRACE).collect();
-        assert_eq!(layers.len(), steps(&events).len() * model.config().layers);
-        for (pos, event) in layers.iter().enumerate() {
-            assert_eq!(event.path, ["generate".to_string(), format!("step{{pos={pos}}}"), "layer{idx=0}".to_string()]);
+        assert_eq!(layers.len(), (1 + steps(&events).len()) * layers_in_model);
+        for (n, event) in layers.iter().enumerate() {
+            let (unit, idx) = (n / layers_in_model, n % layers_in_model);
+            let unit = if unit == 0 { "prefill{tokens=2}".to_string() } else { format!("step{{pos={}}}", 2 + unit - 1) };
+            assert_eq!(event.path, ["generate".to_string(), unit, format!("layer{{idx={idx}}}")]);
             for field in ["residual_norm_after_attention", "residual_norm_after_mlp"] {
                 assert!(event.get(field).unwrap().parse::<f32>().unwrap() > 0.0, "{field}: {event:?}");
             }
@@ -696,28 +738,22 @@ mod tests {
         (ids, chunks, events)
     }
 
-    // FR-23, Spec §14: when sampling, the step that chooses a token also reports its
-    // probability and how many tokens the controls left; steps before the last prompt
-    // token, and greedy steps, report neither.
+    // FR-23, Spec §14: when sampling, the prefill and every step choose a token and each reports its
+    // probability and how many tokens the controls left; greedy runs report neither.
     #[test]
     fn debug_reports_the_probability_and_kept_tokens_of_a_sampled_choice() {
         let model = bigram_model(&CYCLE, 16);
         let sampling = Sampling { temperature: 1.0, top_k: 1, top_p: 1.0, repetition_penalty: 1.0, seed: Some(3) };
         let (ids, _, events) = logged_sampled(&model, "ab", 3, &sampling, Some(Level::DEBUG));
         assert_eq!(ids, [0x63, 0x61, 0x62], "top-k 1 follows the cycle");
-        let steps = steps(&events);
-        assert_eq!(steps.len(), 4);
-        assert_eq!(steps[0].get("probability"), None, "a prompt step before the last chooses nothing");
-        for step in &steps[1..] {
-            assert_eq!(step.get("probability"), Some("1.000000"), "{step:?}");
-            assert_eq!(step.get("kept"), Some("1"), "{step:?}");
+        let chosen: Vec<&Logged> = events.iter().filter(|e| e.message() == "prefill" || e.message() == "step").collect();
+        assert_eq!(chosen.len(), 3, "the prefill chooses the first token and each step one more but the last");
+        for event in chosen {
+            assert_eq!(event.get("probability"), Some("1.000000"), "{event:?}");
+            assert_eq!(event.get("kept"), Some("1"), "{event:?}");
         }
         let (_, _, greedy) = logged(&model, "ab", 3, Some(Level::DEBUG));
-        assert!(steps_of(&greedy).iter().all(|s| s.get("probability").is_none() && s.get("kept").is_none()));
-    }
-
-    fn steps_of(events: &[Logged]) -> Vec<&Logged> {
-        steps(events)
+        assert!(greedy.iter().all(|e| e.get("probability").is_none() && e.get("kept").is_none()));
     }
 
     // S-8: a sampled run gives the same IDs and text with no subscriber and at every

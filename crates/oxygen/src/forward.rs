@@ -174,9 +174,13 @@ pub(crate) fn prefill(
         c.layers.clear();
     }
 
-    // 2. Each layer, every operation over all rows.
+    // 2. Each layer, every operation over all rows. At trace level each layer reports the
+    // statistics of the last row, the one whose logits generation uses (Spec §14).
+    let stats = tracing::enabled!(Level::TRACE);
+    let mut most_attended = vec![0usize; if stats { heads } else { 0 }];
     let mut h = vec![0f32; n * hidden];
     for (index, layer) in weights.layers.iter().enumerate() {
+        let _layer = tracing::trace_span!("layer", idx = index).entered();
         // Attention block.
         for (xr, hr) in x.chunks_exact(hidden).zip(h.chunks_exact_mut(hidden)) {
             rms_norm(xr, layer.attn_norm.data(), eps, hr);
@@ -206,11 +210,14 @@ pub(crate) fn prefill(
             let out = &mut attended[t * q_width..(t + 1) * q_width];
             // The unmasked fault reads the whole prompt from every row (Spec §17).
             let positions = if fault.is_some_and(Fault::unmasks_attention) { n } else { t + 1 };
-            attention(&q[t * q_width..(t + 1) * q_width], cache, index, positions, heads, kv_heads, head_dim, out, None);
+            let record = (stats && t == n - 1).then_some(&mut most_attended[..]);
+            attention(&q[t * q_width..(t + 1) * q_width], cache, index, positions, heads, kv_heads, head_dim, out, record);
         }
         let mut projected = vec![0f32; n * hidden];
         matmul(&layer.o_proj, &attended, n, &mut projected);
         add_assign(&mut x, &projected);
+        let last_row = n * hidden - hidden..;
+        let after_attention = if stats { norm(&x[last_row.clone()]) } else { 0.0 };
 
         // MLP block.
         for (xr, hr) in x.chunks_exact(hidden).zip(h.chunks_exact_mut(hidden)) {
@@ -226,6 +233,14 @@ pub(crate) fn prefill(
         matmul(&layer.down_proj, &gate, n, &mut down);
         add_assign(&mut x, &down);
 
+        if stats {
+            tracing::trace!(
+                residual_norm_after_attention = %after_attention,
+                residual_norm_after_mlp = %norm(&x[last_row]),
+                most_attended = ?most_attended,
+                "layer"
+            );
+        }
         if let Some(c) = capture.as_deref_mut() {
             c.layers.push(x.clone());
         }

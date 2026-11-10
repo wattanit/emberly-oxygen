@@ -60,8 +60,9 @@ fn fr23_each_turn_logs_its_prompt_and_summary_at_info_level() {
     assert!(!v.stderr.contains(" DEBUG "));
 }
 
-// FR-23: -vv gives one step event per forward step of every turn, inside generate -> step{pos}, with the
-// probability and kept tokens of each sampled choice.
+// FR-23, FR-40: -vv gives one prefill event per turn and one step event per decode step, inside
+// generate -> prefill{tokens} and generate -> step{pos}, with the probability and kept tokens of each
+// sampled choice.
 #[test]
 fn fr23_each_turn_logs_its_steps_at_debug_level() {
     let [_, v, vv, _] = runs();
@@ -69,16 +70,25 @@ fn fr23_each_turn_logs_its_steps_at_debug_level() {
         v.stderr.lines().filter(|l| l.contains("prompt encoded")).map(|l| number(l, "prompt_tokens")).collect();
     let generated: Vec<usize> =
         v.stderr.lines().filter(|l| l.contains("run summary")).map(|l| number(l, "generated_tokens")).collect();
-    let steps = step_events(&vv.stderr);
-    let expected: usize = prompts.iter().zip(&generated).map(|(p, g)| p + g - 1).sum();
-    assert_eq!(steps.len(), expected, "the last generated token of a turn is not fed");
-    let sampled = steps.iter().filter(|s| field(s, "next").is_some()).count();
-    assert_eq!(sampled, generated.iter().sum::<usize>(), "every generated token is chosen once");
-    for step in steps.iter().filter(|s| field(s, "next").is_some()) {
-        assert!(field(step, "probability").is_some() && field(step, "kept").is_some(), "{step}");
+    let prefills: Vec<&str> = vv.stderr.lines().filter(|l| l.contains(" DEBUG ") && l.contains(": prefill tokens=")).collect();
+    assert_eq!(prefills.len(), prompts.len(), "one prefill per turn");
+    for (prefill, prompt) in prefills.iter().zip(&prompts) {
+        assert_eq!(number(prefill, "tokens"), *prompt, "{prefill}");
     }
-    // Positions restart at 0 for each turn: the whole conversation is processed again.
-    assert_eq!(steps.iter().filter(|s| s.contains(" generate:step{pos=0}: ")).count(), 2);
+    let steps = step_events(&vv.stderr);
+    let expected: usize = generated.iter().map(|g| g - 1).sum();
+    assert_eq!(steps.len(), expected, "the last generated token of a turn is not fed");
+    let chosen: Vec<&&str> = prefills.iter().chain(&steps).collect();
+    assert_eq!(chosen.len(), generated.iter().sum::<usize>(), "every generated token is chosen once");
+    for event in chosen {
+        assert!(
+            field(event, "probability").is_some() && field(event, "kept").is_some(),
+            "{event}"
+        );
+    }
+    // The prompt is processed again each turn, so each turn's first decode step is at its own prompt's length.
+    assert!(steps.iter().any(|s| s.contains(&format!(" generate:step{{pos={}}}: ", prompts[0]))));
+    assert!(steps.iter().any(|s| s.contains(&format!(" generate:step{{pos={}}}: ", prompts[1]))));
 }
 
 // FR-23: -vvv adds the per-layer events, and still no change to standard output.

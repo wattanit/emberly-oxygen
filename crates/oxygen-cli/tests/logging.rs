@@ -32,6 +32,11 @@ fn number(line: &str, name: &str) -> usize {
     field(line, name).unwrap_or_else(|| panic!("{name} missing: {line}")).parse().unwrap()
 }
 
+/// The debug prefill events, in order.
+fn prefill_events(stderr: &str) -> Vec<&str> {
+    stderr.lines().filter(|l| l.contains(" DEBUG ") && l.contains(": prefill tokens=")).collect()
+}
+
 /// The debug step events, in order.
 fn step_events(stderr: &str) -> Vec<&str> {
     stderr.lines().filter(|l| l.contains(" DEBUG ") && l.contains("generate: step phase=")).collect()
@@ -63,40 +68,53 @@ fn each_level_shows_what_it_promises() {
     let prompt_tokens = number(summary, "prompt_tokens");
     assert_eq!(number(summary, "generated_tokens"), NEW_TOKENS);
 
-    // -vv: one event per forward step, in position order inside generate -> step{pos}. Every
-    // prompt token appears once as `token`, marked as a prompt step, and every generated token
-    // once as `next`; each step feeds the token the step before it chose.
+    // -vv: one `prefill` event for the whole prompt, then one event per decode step, in position
+    // order inside generate -> step{pos} from the first position after the prompt. The prefill
+    // reports the first generated token as `next`, and every generated token appears once as
+    // `next`; each step feeds the token the event before it chose.
     assert!(!vv.stderr.contains(" TRACE "));
+    let prefills = prefill_events(&vv.stderr);
+    assert_eq!(prefills.len(), 1, "{}", vv.stderr);
+    assert!(prefills[0].contains(&format!(" generate:prefill{{tokens={prompt_tokens}}}: ")), "{}", prefills[0]);
+    assert_eq!(number(prefills[0], "tokens"), prompt_tokens);
+    for name in ["top5", "prefill_ms", "next"] {
+        assert!(field(prefills[0], name).is_some(), "{name} missing: {}", prefills[0]);
+    }
     let steps = step_events(&vv.stderr);
-    assert_eq!(steps.len(), prompt_tokens + NEW_TOKENS - 1, "the last generated token is not fed");
-    for (pos, step) in steps.iter().enumerate() {
-        assert!(step.contains(&format!(" generate:step{{pos={pos}}}: ")), "{step}");
-        let phase = if pos < prompt_tokens { "\"prompt\"" } else { "\"generate\"" };
-        assert_eq!(field(step, "phase"), Some(phase), "{step}");
-        for name in ["text", "top5", "step_ms"] {
+    assert_eq!(steps.len(), NEW_TOKENS - 1, "the last generated token is not fed");
+    for (i, step) in steps.iter().enumerate() {
+        assert!(step.contains(&format!(" generate:step{{pos={}}}: ", prompt_tokens + i)), "{step}");
+        assert_eq!(field(step, "phase"), Some("\"generate\""), "{step}");
+        for name in ["text", "top5", "step_ms", "next"] {
             assert!(field(step, name).is_some(), "{name} missing: {step}");
         }
-        assert_eq!(field(step, "next").is_some(), pos + 1 >= prompt_tokens, "only steps whose result is taken: {step}");
     }
-    let nexts: Vec<usize> = steps.iter().filter_map(|s| field(s, "next")).map(|n| n.parse().unwrap()).collect();
+    let nexts: Vec<usize> =
+        prefills.iter().chain(&steps).filter_map(|s| field(s, "next")).map(|n| n.parse().unwrap()).collect();
     assert_eq!(nexts.len(), NEW_TOKENS);
-    let fed: Vec<usize> = steps[prompt_tokens..].iter().map(|s| number(s, "token")).collect();
+    let fed: Vec<usize> = steps.iter().map(|s| number(s, "token")).collect();
     assert_eq!(fed, nexts[..NEW_TOKENS - 1], "each generated token but the last is fed back");
 
-    // -vvv: one event per layer per step, each carrying the full span path, with both norms and
-    // a most-attended position for each of the 9 heads.
+    // -vvv: one event per layer for the prefill (describing the prompt's last row) and one per layer
+    // per decode step, each carrying the full span path, with both norms and a most-attended
+    // position for each of the 9 heads.
     let layers: Vec<&str> = vvv.stderr.lines().filter(|l| l.contains(" TRACE ")).collect();
     assert_eq!(step_events(&vvv.stderr).len(), steps.len());
-    assert_eq!(layers.len(), steps.len() * 30);
+    assert_eq!(layers.len(), (1 + steps.len()) * 30);
     for (n, line) in layers.iter().enumerate() {
-        let (pos, idx) = (n / 30, n % 30);
-        assert!(line.contains(&format!(" generate:step{{pos={pos}}}:layer{{idx={idx}}}: ")), "{line}");
+        let (unit, idx) = (n / 30, n % 30);
+        let (unit_path, last_position) = if unit == 0 {
+            (format!("prefill{{tokens={prompt_tokens}}}"), prompt_tokens - 1)
+        } else {
+            (format!("step{{pos={}}}", prompt_tokens + unit - 1), prompt_tokens + unit - 1)
+        };
+        assert!(line.contains(&format!(" generate:{unit_path}:layer{{idx={idx}}}: ")), "{line}");
         for name in ["residual_norm_after_attention", "residual_norm_after_mlp"] {
             assert!(field(line, name).unwrap().parse::<f32>().unwrap() > 0.0, "{line}");
         }
         let heads = line.split("most_attended=[").nth(1).unwrap().trim_end_matches(']');
         let heads: Vec<usize> = heads.split(", ").map(|h| h.parse().unwrap()).collect();
         assert_eq!(heads.len(), 9, "{line}");
-        assert!(heads.iter().all(|&h| h <= pos), "{line}");
+        assert!(heads.iter().all(|&h| h <= last_position), "{line}");
     }
 }
