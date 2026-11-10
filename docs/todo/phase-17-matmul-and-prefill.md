@@ -25,8 +25,8 @@ Dependencies: none new. Out of scope: tiling, register blocking, threads, SIMD, 
 
 ## 17.4 Faults in `prefill` (HC-4)
 
-- [ ] Tests first: each of the four faults changes `prefill`'s output; no fault, no change.
-- [ ] Then `UnmaskedAttention` and the existing three in `prefill`.
+- [x] Tests first: each of the four faults changes `prefill`'s output; no fault, no change.
+- [x] Then `UnmaskedAttention` and the existing three in `prefill`.
 
 ## 17.5 Measure agreement (FR-41)
 

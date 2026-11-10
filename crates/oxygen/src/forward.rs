@@ -204,7 +204,9 @@ pub(crate) fn prefill(
         let mut attended = vec![0f32; n * q_width];
         for t in 0..n {
             let out = &mut attended[t * q_width..(t + 1) * q_width];
-            attention(&q[t * q_width..(t + 1) * q_width], cache, index, t + 1, heads, kv_heads, head_dim, out, None);
+            // The unmasked fault reads the whole prompt from every row (Spec §17).
+            let positions = if fault.is_some_and(Fault::unmasks_attention) { n } else { t + 1 };
+            attention(&q[t * q_width..(t + 1) * q_width], cache, index, positions, heads, kv_heads, head_dim, out, None);
         }
         let mut projected = vec![0f32; n * hidden];
         matmul(&layer.o_proj, &attended, n, &mut projected);
@@ -646,6 +648,92 @@ mod tests {
         for token in [1u32, 2] {
             close(&session.step(token).unwrap(), &stepped.step(token).unwrap(), 1e-5);
         }
+    }
+
+    // HC-4, FR-40, Spec §17: every fault changes what the batched pass computes (so the harness,
+    // which reaches the engine through it, has something to notice), and with none injected the
+    // feature changes nothing.
+    #[cfg(feature = "negative-controls")]
+    #[test]
+    fn each_fault_changes_the_batched_pass() {
+        use crate::Fault;
+        let tokens = [2u32, 0, 3, 1];
+        let faults = [
+            Fault::InterleavedRope,
+            Fault::PerturbedLogit { position: 2 },
+            Fault::NoFinalNorm,
+            Fault::UnmaskedAttention,
+        ];
+        // The head dimension is 4, not the tiny model's 2: with two values per head the
+        // interleaved and the half-split pairing are the same pairing, so that fault is
+        // invisible there.
+        let honest = wide_head_model().session(false).prefill(&tokens, Logits::All).unwrap();
+        for fault in faults {
+            let mut model = wide_head_model();
+            model.inject_fault(fault);
+            let got = model.session(false).prefill(&tokens, Logits::All).unwrap();
+            assert_ne!(got, honest, "{fault:?} changes the logits");
+        }
+    }
+
+    /// A tiny model with a head dimension of 4 (hidden 8, two heads over one key-value head).
+    fn wide_head_model() -> Model {
+        let mut seed = 30;
+        let mut next = || {
+            seed += 1;
+            seed - 1
+        };
+        let layers = (0..2)
+            .map(|_| LayerWeights {
+                attn_norm: norm(8, next()),
+                q_proj: matrix(8, 8, next()),
+                k_proj: matrix(4, 8, next()),
+                v_proj: matrix(4, 8, next()),
+                o_proj: matrix(8, 8, next()),
+                mlp_norm: norm(8, next()),
+                gate_proj: matrix(3, 8, next()),
+                up_proj: matrix(3, 8, next()),
+                down_proj: matrix(8, 3, next()),
+            })
+            .collect();
+        let weights = Weights { embed_tokens: matrix(4, 8, 1), layers, final_norm: norm(8, next()) };
+        let config = Config { hidden_size: 8, head_dim: 4, ..tiny_config(8) };
+        Model::from_parts(config, weights)
+    }
+
+    // HC-4, FR-40, Spec §17: the unmasked fault is a missing causal mask, so row 0 now sees the whole
+    // prompt: its logits depend on a later token, which the honest pass never allows.
+    #[cfg(feature = "negative-controls")]
+    #[test]
+    fn the_unmasked_fault_lets_a_row_see_the_future() {
+        use crate::Fault;
+        let mut model = tiny_model(8);
+        model.inject_fault(Fault::UnmaskedAttention);
+        let one = model.session(false).prefill(&[2, 0, 3, 1], Logits::All).unwrap();
+        let two = model.session(false).prefill(&[2, 0, 1, 3], Logits::All).unwrap();
+        assert_ne!(&one[..4], &two[..4], "row 0 depends on tokens after it");
+    }
+
+    // HC-4, Spec §17: a perturbed logit lands on the row of its position, and only there, whether
+    // every row is asked for or the last alone.
+    #[cfg(feature = "negative-controls")]
+    #[test]
+    fn a_perturbed_logit_lands_on_its_own_row() {
+        use crate::Fault;
+        let tokens = [2u32, 0, 3, 1];
+        let honest = tiny_model(8).session(false).prefill(&tokens, Logits::All).unwrap();
+        let mut model = tiny_model(8);
+        model.inject_fault(Fault::PerturbedLogit { position: 2 });
+        let all = model.session(false).prefill(&tokens, Logits::All).unwrap();
+        for t in 0..4 {
+            let (a, b) = (&all[t * 4..(t + 1) * 4], &honest[t * 4..(t + 1) * 4]);
+            assert_eq!(a != b, t == 2, "row {t}");
+        }
+        assert!((all[2 * 4] - honest[2 * 4] - 2e-3).abs() < 1e-6);
+        let mut last = tiny_model(8);
+        last.inject_fault(Fault::PerturbedLogit { position: 3 });
+        let got = last.session(false).prefill(&tokens, Logits::Last).unwrap();
+        assert!((got[0] - honest[3 * 4] - 2e-3).abs() < 1e-6, "the last row is position 3");
     }
 
     // FR-1, Spec §7: the capture is exactly what the pass says it is.
