@@ -20,8 +20,8 @@ Dependencies: none new. Out of scope: tiling, register blocking, threads, SIMD, 
 
 ## 17.3 `prefill`'s body (FR-40, FR-41)
 
-- [ ] Tests first: equal to `step` at every position within 1e-5 (logits, capture, cache); causal (a later token changes nothing before it, bit for bit); one-token prompt; prompt filling the context; `Last` equals the last row of `All`.
-- [ ] Then the body (Specification §7).
+- [x] Tests first: equal to `step` at every position within 1e-5 (logits, capture, cache); causal (a later token changes nothing before it, bit for bit); one-token prompt; prompt filling the context; `Last` equals the last row of `All`.
+- [x] Then the body (Specification §7).
 
 ## 17.4 Faults in `prefill` (HC-4)
 

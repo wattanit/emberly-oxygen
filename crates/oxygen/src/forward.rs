@@ -11,7 +11,7 @@
 
 use crate::fault::{self, Fault};
 use crate::kv_cache::KvCache;
-use crate::ops::{add_assign, matvec, mul_assign, rms_norm, rope, silu, softmax};
+use crate::ops::{add_assign, matmul, matvec, mul_assign, rms_norm, rope, silu, softmax};
 use crate::weights::Weights;
 use crate::{Capture, Config, Error, Logits};
 
@@ -132,12 +132,12 @@ pub(crate) fn step(
 /// positions is an internal bug: cache reuse is deferred (Spec §2).
 pub(crate) fn prefill(
     config: &Config,
-    _weights: &Weights,
+    weights: &Weights,
     cache: &mut KvCache,
     tokens: &[u32],
-    _logits: Logits,
-    _capture: Option<&mut Capture>,
-    _fault: Option<Fault>,
+    logits: Logits,
+    mut capture: Option<&mut Capture>,
+    fault: Option<Fault>,
 ) -> Result<Vec<f32>, Error> {
     assert_eq!(cache.len(), 0, "prefill needs an empty cache");
     if tokens.is_empty() {
@@ -156,7 +156,105 @@ pub(crate) fn prefill(
             config.context_length
         )));
     }
-    unimplemented!("prefill body")
+
+    let n = tokens.len();
+    let hidden = config.hidden_size;
+    let eps = config.rms_norm_eps as f32;
+    let theta = config.rope_theta as f32;
+    let (heads, kv_heads, head_dim) = (config.heads, config.kv_heads, config.head_dim);
+    let (q_width, kv_width) = (heads * head_dim, kv_heads * head_dim);
+
+    // 1. X = the embedding rows of the tokens, one row per token.
+    let mut x = Vec::with_capacity(n * hidden);
+    for &token in tokens {
+        x.extend_from_slice(weights.embed_tokens.row(token as usize));
+    }
+    if let Some(c) = capture.as_deref_mut() {
+        c.embedding = x.clone();
+        c.layers.clear();
+    }
+
+    // 2. Each layer, every operation over all rows.
+    let mut h = vec![0f32; n * hidden];
+    for (index, layer) in weights.layers.iter().enumerate() {
+        // Attention block.
+        for (xr, hr) in x.chunks_exact(hidden).zip(h.chunks_exact_mut(hidden)) {
+            rms_norm(xr, layer.attn_norm.data(), eps, hr);
+        }
+        let mut q = vec![0f32; n * q_width];
+        let mut k = vec![0f32; n * kv_width];
+        let mut v = vec![0f32; n * kv_width];
+        matmul(&layer.q_proj, &h, n, &mut q);
+        matmul(&layer.k_proj, &h, n, &mut k);
+        matmul(&layer.v_proj, &h, n, &mut v);
+        for t in 0..n {
+            let (qr, kr) = (&mut q[t * q_width..(t + 1) * q_width], &mut k[t * kv_width..(t + 1) * kv_width]);
+            if let Some(f) = fault.filter(|f| f.interleaves_rope()) {
+                fault::rope_interleaved(f, qr, t, heads, head_dim, theta);
+                fault::rope_interleaved(f, kr, t, kv_heads, head_dim, theta);
+            } else {
+                rope(qr, t, heads, head_dim, theta);
+                rope(kr, t, kv_heads, head_dim, theta);
+            }
+            cache.append(index, kr, &v[t * kv_width..(t + 1) * kv_width])?;
+        }
+
+        // The whole prompt is in the cache, so the count is what keeps the future out:
+        // row `t` reads positions 0..=t and no more (Spec §7, causal mask).
+        let mut attended = vec![0f32; n * q_width];
+        for t in 0..n {
+            let out = &mut attended[t * q_width..(t + 1) * q_width];
+            attention(&q[t * q_width..(t + 1) * q_width], cache, index, t + 1, heads, kv_heads, head_dim, out, None);
+        }
+        let mut projected = vec![0f32; n * hidden];
+        matmul(&layer.o_proj, &attended, n, &mut projected);
+        add_assign(&mut x, &projected);
+
+        // MLP block.
+        for (xr, hr) in x.chunks_exact(hidden).zip(h.chunks_exact_mut(hidden)) {
+            rms_norm(xr, layer.mlp_norm.data(), eps, hr);
+        }
+        let mut gate = vec![0f32; n * config.intermediate_size];
+        let mut up = vec![0f32; n * config.intermediate_size];
+        matmul(&layer.gate_proj, &h, n, &mut gate);
+        matmul(&layer.up_proj, &h, n, &mut up);
+        silu(&mut gate);
+        mul_assign(&mut gate, &up);
+        let mut down = vec![0f32; n * hidden];
+        matmul(&layer.down_proj, &gate, n, &mut down);
+        add_assign(&mut x, &down);
+
+        if let Some(c) = capture.as_deref_mut() {
+            c.layers.push(x.clone());
+        }
+    }
+
+    // 3. Logits = the tied embedding table times the final-norm output: of every row, or
+    // of the last row alone, which is all generation uses.
+    let first = if logits == Logits::All { 0 } else { n - 1 };
+    let rows = n - first;
+    let mut normed = vec![0f32; rows * hidden];
+    for (xr, hr) in x[first * hidden..].chunks_exact(hidden).zip(normed.chunks_exact_mut(hidden)) {
+        if fault.is_some_and(Fault::skips_final_norm) {
+            hr.copy_from_slice(xr);
+        } else {
+            rms_norm(xr, weights.final_norm.data(), eps, hr);
+        }
+    }
+    if let Some(c) = capture {
+        c.final_norm = normed.clone();
+    }
+    let vocab = config.vocab_size;
+    let mut out = vec![0f32; rows * vocab];
+    if logits == Logits::All {
+        matmul(&weights.embed_tokens, &normed, rows, &mut out);
+    } else {
+        matvec(&weights.embed_tokens, &normed, &mut out);
+    }
+    for (r, row) in out.chunks_exact_mut(vocab).enumerate() {
+        fault::perturb_logits(fault, first + r, row);
+    }
+    Ok(out)
 }
 
 /// Grouped-query attention for one token over the first `positions` cached
@@ -232,6 +330,7 @@ fn norm(x: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Session;
     use crate::weights::LayerWeights;
     use crate::{Model, Tensor};
 
@@ -405,6 +504,148 @@ mod tests {
         let mut session = model.session(false);
         session.step(1).unwrap();
         let _ = session.prefill(&[1, 2], Logits::Last);
+    }
+
+    /// The one-token route over a prompt: logits row by row, and what each step captured.
+    fn by_steps<'a>(model: &'a Model, tokens: &[u32]) -> (Session<'a>, Vec<Vec<f32>>, Vec<Capture>) {
+        let mut session = model.session(true);
+        let mut logits = Vec::new();
+        let mut captures = Vec::new();
+        for &token in tokens {
+            logits.push(session.step(token).unwrap());
+            captures.push(session.capture().unwrap().clone());
+        }
+        (session, logits, captures)
+    }
+
+    // FR-40, FR-41, Spec §7: the batched pass equals the one-token pass at every position within
+    // 1e-5: its logits, the embedding, every layer's output and the final-norm output (each
+    // `[positions, hidden]`), and the keys and values it leaves in the cache.
+    #[test]
+    fn prefill_equals_the_one_token_pass_at_every_position() {
+        let model = tiny_model(8);
+        let tokens = [2u32, 0, 3, 1, 1];
+        let (stepped, want_logits, want_captures) = by_steps(&model, &tokens);
+        let mut session = model.session(true);
+        let got = session.prefill(&tokens, Logits::All).unwrap();
+        let vocab = 4;
+        assert_eq!(got.len(), tokens.len() * vocab);
+        for (t, want) in want_logits.iter().enumerate() {
+            close(&got[t * vocab..(t + 1) * vocab], want, 1e-5);
+        }
+        let capture = session.capture().unwrap();
+        let rows = |pick: &dyn Fn(&Capture) -> Vec<f32>| -> Vec<f32> { want_captures.iter().flat_map(|c| pick(c)).collect() };
+        close(&capture.embedding, &rows(&|c| c.embedding.clone()), 1e-5);
+        close(&capture.final_norm, &rows(&|c| c.final_norm.clone()), 1e-5);
+        assert_eq!(capture.layers.len(), 2);
+        for layer in 0..2 {
+            close(&capture.layers[layer], &rows(&|c| c.layers[layer].clone()), 1e-5);
+        }
+        assert_eq!(session.cache.len(), tokens.len());
+        for layer in 0..2 {
+            for t in 0..tokens.len() {
+                close(session.cache.key(layer, t), stepped.cache.key(layer, t), 1e-5);
+                close(session.cache.value(layer, t), stepped.cache.value(layer, t), 1e-5);
+            }
+        }
+    }
+
+    // FR-1, FR-40, Spec §7: independent of the one-token route, the batched pass over the three
+    // tokens of the numpy reference above gives that reference's logits, both layers' outputs
+    // and final-norm output at every position (the same values as the one-token test).
+    #[test]
+    fn prefill_matches_the_independent_reference() {
+        let model = tiny_model(8);
+        let mut session = model.session(true);
+        let got = session.prefill(&[2, 0, 3], Logits::All).unwrap();
+        let logits = [
+            [-0.478599321, 0.556913018, 1.654692089, -0.721665280],
+            [0.414470565, -0.232617106, 1.413414301, -0.064865065],
+            [-0.181693408, -0.631061703, 1.246354816, -0.133866666],
+        ];
+        let layers = [
+            [[-0.276911449, -2.182372800, 0.893603523, 0.488145256], [0.296345671, -2.282515693, 0.286672257, 0.585264398]],
+            [[-0.470090844, -0.641421639, -0.072362666, 0.219245127], [-0.378449033, -0.664430486, -0.183649913, 0.224889104]],
+            [[-0.128820170, -0.352348034, -0.009600638, 0.576087067], [-0.288078163, -0.350019463, 0.215527230, 0.645147227]],
+        ];
+        let final_norm = [
+            [0.309704445, -2.862489287, 0.239675976, 0.611647153],
+            [-1.156706917, -2.436950627, -0.449052014, 0.687360147],
+            [-0.881036694, -1.284567999, 0.527321882, 1.973070001],
+        ];
+        let capture = session.capture().unwrap();
+        for t in 0..3 {
+            let row = t * 4..(t + 1) * 4;
+            close(&got[row.clone()], &logits[t], 1e-5);
+            close(&capture.layers[0][row.clone()], &layers[t][0], 1e-5);
+            close(&capture.layers[1][row.clone()], &layers[t][1], 1e-5);
+            close(&capture.final_norm[row], &final_norm[t], 1e-5);
+        }
+    }
+
+    // FR-40, Spec §7: the mask is causal. Changing a token after position `t` leaves the logits
+    // at positions up to `t` bit for bit equal; the changed position itself differs.
+    #[test]
+    fn prefill_is_causal() {
+        let model = tiny_model(8);
+        let mut a = model.session(false);
+        let mut b = model.session(false);
+        let one = a.prefill(&[2, 0, 3, 1], Logits::All).unwrap();
+        let two = b.prefill(&[2, 0, 1, 3], Logits::All).unwrap();
+        let same = |x: &[f32], y: &[f32]| x.iter().zip(y).all(|(p, q)| p.to_bits() == q.to_bits());
+        assert!(same(&one[..2 * 4], &two[..2 * 4]), "positions 0 and 1 cannot see position 2");
+        assert!(!same(&one[2 * 4..3 * 4], &two[2 * 4..3 * 4]), "position 2 reads its own token");
+    }
+
+    // FR-40, Spec §7: a prompt of one token is a pass of one row, and equals `step`.
+    #[test]
+    fn prefill_of_one_token_equals_step() {
+        let model = tiny_model(8);
+        let want = model.session(false).step(3).unwrap();
+        for logits in [Logits::Last, Logits::All] {
+            let got = model.session(false).prefill(&[3], logits).unwrap();
+            close(&got, &want, 1e-5);
+        }
+    }
+
+    // FR-40, FR-18, Spec §7: a prompt that fills the context exactly is processed, and the next
+    // token is then rejected as `step` rejects it.
+    #[test]
+    fn prefill_can_fill_the_context_exactly() {
+        let model = tiny_model(4);
+        let mut session = model.session(false);
+        session.prefill(&[1, 2, 3, 0], Logits::Last).unwrap();
+        assert_eq!(session.cache.len(), 4);
+        assert!(matches!(session.step(1), Err(Error::Rejected(_))));
+    }
+
+    // FR-40, Spec §7: `Last` is the last row of `All`, bit for bit, and its capture's final norm is that row only.
+    #[test]
+    fn last_logits_are_the_last_row_of_all() {
+        let model = tiny_model(8);
+        let tokens = [2u32, 0, 3];
+        let all = model.session(false).prefill(&tokens, Logits::All).unwrap();
+        let mut session = model.session(true);
+        let last = session.prefill(&tokens, Logits::Last).unwrap();
+        assert_eq!(last.len(), 4);
+        assert!(last.iter().zip(&all[2 * 4..]).all(|(p, q)| p.to_bits() == q.to_bits()));
+        let capture = session.capture().unwrap();
+        assert_eq!(capture.final_norm.len(), 4, "the final norm of the last row only");
+        assert_eq!(capture.embedding.len(), 3 * 4, "the embedding and layers cover every row");
+        assert_eq!(capture.layers[1].len(), 3 * 4);
+    }
+
+    // FR-40, Spec §7: after a batched pass, decoding continues from the cache it filled exactly
+    // as it would after one-token steps.
+    #[test]
+    fn decoding_continues_from_a_prefilled_cache() {
+        let model = tiny_model(8);
+        let (mut stepped, _, _) = by_steps(&model, &[2, 0, 3]);
+        let mut session = model.session(false);
+        session.prefill(&[2, 0, 3], Logits::Last).unwrap();
+        for token in [1u32, 2] {
+            close(&session.step(token).unwrap(), &stepped.step(token).unwrap(), 1e-5);
+        }
     }
 
     // FR-1, Spec §7: the capture is exactly what the pass says it is.
