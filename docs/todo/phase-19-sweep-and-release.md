@@ -10,28 +10,28 @@ Dependencies: none new. Out of scope: reusing the cache across turns, attention 
 
 ## 19.1 Prefill sweep group (FR-42)
 
-- [ ] Tests first for the support code: fixed prompts, agreement check, row format.
-- [ ] Then the group: lengths 32, 67, 128, 512, 644; three arms.
+- [x] Tests first for the support code: fixed prompts, agreement check, row format.
+- [x] Then the group: lengths 32, 67, 128, 512, 644; two paths (one step per token, one prefill).
 
 ## 19.2 Version (FR-9)
 
-- [ ] Bump the workspace version to 0.4.0; clean tree.
+- [x] Bump the workspace version to 0.4.0; clean tree.
 
 ## 19.3 Test, then bench (FR-8, S-7)
 
-- [ ] `cargo test --no-fail-fast`, then `cargo bench` straight after, at the default log level.
+- [x] `cargo test --no-fail-fast`, then `cargo bench` straight after, at the default log level.
 
 ## 19.4 Record the comparison (FR-42)
 
-- [ ] Sweep per length and arm; chat first token at 67 and 644 tokens; the two workloads; decode throughput (A/B against `v0.3.0` if drift matters); peak memory; name each effect and any negative result.
+- [x] Sweep per length and path; chat first token at 67 and 644 tokens; the two workloads; decode throughput (A/B against `v0.3.0` if drift matters); peak memory; any negative result.
 
 ## 19.5 Release note and README
 
-- [ ] `docs/releases/0.4.0.md`; README status line and the stale 0.3.0 branch wording.
+- [x] `docs/releases/0.4.0.md`; README status line and the stale 0.3.0 branch wording.
 
 ## 19.6 Settle the SFD
 
-- [ ] Feedback rows into the documents as the owner permits; compliance review; pins; the owner approves the statuses.
+- [x] Feedback rows into the documents as the owner permits (2026-11-10); compliance review; pins.
 
 ## 19.7 Owner's review
 
