@@ -28,7 +28,7 @@ pub use error::Error;
 #[cfg(feature = "negative-controls")]
 pub use fault::Fault;
 pub use generate::{generate, generate_with, Generation, Stats};
-pub use model::{Capture, Model, Session};
+pub use model::{Capture, Logits, Model, Session};
 pub use sampling::{distribution, Sampling};
 #[cfg(feature = "negative-controls")]
 pub use sampling::distribution_with_fault;

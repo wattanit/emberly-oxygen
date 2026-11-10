@@ -13,7 +13,7 @@ use crate::fault::{self, Fault};
 use crate::kv_cache::KvCache;
 use crate::ops::{add_assign, matvec, mul_assign, rms_norm, rope, silu, softmax};
 use crate::weights::Weights;
-use crate::{Capture, Config, Error};
+use crate::{Capture, Config, Error, Logits};
 
 use tracing::Level;
 
@@ -122,6 +122,41 @@ pub(crate) fn step(
     matvec(&weights.embed_tokens, &h, &mut logits);
     fault::perturb_logits(fault, position, &mut logits);
     Ok(logits)
+}
+
+/// Processes a whole prompt in one pass over an empty cache (Spec §7, FR-40).
+///
+/// An empty prompt, a token outside the vocabulary and a prompt longer than
+/// the context are rejected before anything is touched, so a rejected call
+/// leaves the cache and the capture as they were. A cache that already holds
+/// positions is an internal bug: cache reuse is deferred (Spec §2).
+pub(crate) fn prefill(
+    config: &Config,
+    _weights: &Weights,
+    cache: &mut KvCache,
+    tokens: &[u32],
+    _logits: Logits,
+    _capture: Option<&mut Capture>,
+    _fault: Option<Fault>,
+) -> Result<Vec<f32>, Error> {
+    assert_eq!(cache.len(), 0, "prefill needs an empty cache");
+    if tokens.is_empty() {
+        return Err(Error::Rejected("the prompt is empty".into()));
+    }
+    if let Some(&token) = tokens.iter().find(|&&t| t as usize >= config.vocab_size) {
+        return Err(Error::Rejected(format!(
+            "token ID {token} is not in the vocabulary (size {})",
+            config.vocab_size
+        )));
+    }
+    if tokens.len() > config.context_length {
+        return Err(Error::Rejected(format!(
+            "the prompt of {} tokens does not fit in the model's context of {} positions (FR-18)",
+            tokens.len(),
+            config.context_length
+        )));
+    }
+    unimplemented!("prefill body")
 }
 
 /// Grouped-query attention for one token over the first `positions` cached
@@ -321,6 +356,55 @@ mod tests {
             close(&capture.final_norm, &final_norm, 1e-5);
         }
         assert_eq!(session.cache.len(), 3, "one cached position per step");
+    }
+
+    // FR-40, FR-18, Spec §7: an empty prompt is rejected, not a panic, and nothing is touched.
+    #[test]
+    fn prefill_rejects_an_empty_prompt() {
+        let model = tiny_model(8);
+        let mut session = model.session(true);
+        let err = session.prefill(&[], Logits::Last).unwrap_err();
+        assert!(matches!(err, Error::Rejected(_)) && err.to_string().contains("empty"), "{err}");
+        assert_eq!(session.cache.len(), 0);
+        assert!(session.capture().unwrap().layers.is_empty());
+    }
+
+    // FR-40, FR-12, Spec §7: a token outside the vocabulary anywhere in the prompt is rejected
+    // before any position is processed, so the cache and the capture are as they were.
+    #[test]
+    fn prefill_rejects_an_unknown_token_and_changes_nothing() {
+        let model = tiny_model(8);
+        let mut session = model.session(true);
+        for prompt in [[9u32, 1, 2], [1, 2, 4], [1, 9, 2]] {
+            let err = session.prefill(&prompt, Logits::All).unwrap_err();
+            assert!(matches!(err, Error::Rejected(_)) && err.to_string().contains("not in the vocabulary"), "{err}");
+            assert_eq!(session.cache.len(), 0, "{prompt:?}");
+            let capture = session.capture().unwrap();
+            assert!(capture.embedding.is_empty() && capture.layers.is_empty() && capture.final_norm.is_empty());
+        }
+    }
+
+    // FR-40, FR-18, Spec §7: a prompt longer than the context is rejected before any computation,
+    // and the same call with a prompt of exactly the context length is not rejected for its length.
+    #[test]
+    fn prefill_rejects_a_prompt_longer_than_the_context() {
+        let model = tiny_model(4);
+        let mut session = model.session(true);
+        let err = session.prefill(&[0, 1, 2, 3, 0], Logits::Last).unwrap_err();
+        assert!(matches!(err, Error::Rejected(_)) && err.to_string().contains("context"), "{err}");
+        assert_eq!(session.cache.len(), 0);
+        assert!(session.capture().unwrap().layers.is_empty());
+    }
+
+    // FR-40, Spec §2, §14: prefill is for an empty session; a session that already holds
+    // positions is an internal bug (cache reuse is deferred), so it panics.
+    #[test]
+    #[should_panic(expected = "empty")]
+    fn prefill_on_a_session_with_positions_panics() {
+        let model = tiny_model(8);
+        let mut session = model.session(false);
+        session.step(1).unwrap();
+        let _ = session.prefill(&[1, 2], Logits::Last);
     }
 
     // FR-1, Spec §7: the capture is exactly what the pass says it is.

@@ -15,8 +15,8 @@ Dependencies: none new. Out of scope: tiling, register blocking, threads, SIMD, 
 
 ## 17.2 `Logits` and `prefill`'s checks (FR-40, FR-18)
 
-- [ ] Tests first on the tiny model: unknown token, empty prompt, prompt over the context each rejected before anything is touched; cache and capture as they were.
-- [ ] Then `Logits` and the checks.
+- [x] Tests first on the tiny model: unknown token, empty prompt, prompt over the context each rejected before anything is touched; cache and capture as they were.
+- [x] Then `Logits` and the checks.
 
 ## 17.3 `prefill`'s body (FR-40, FR-41)
 
