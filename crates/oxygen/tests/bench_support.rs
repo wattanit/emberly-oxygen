@@ -8,6 +8,9 @@ mod stats;
 #[path = "../benches/support/record.rs"]
 mod record;
 
+#[path = "../benches/support/prefill.rs"]
+mod prefill;
+
 use record::{rfc3339, row, Conditions, Machine};
 use serde_json::json;
 use stats::{spread, Spread};
@@ -129,4 +132,47 @@ fn kernel_row_keeps_the_0_1_0_fields_and_adds_the_variants() {
         }
     }
     assert_eq!(present.len(), 4 + 2 * record::KERNEL_VARIANTS.len());
+}
+
+// FR-42, Spec §12: the prefill sweep's prompts are the first `n` ids of one fixed list, so every run
+// of a length feeds the same tokens; a list shorter than `n` is repeated from its start, which
+// changes nothing the timing depends on (it depends on the length, not on the text).
+#[test]
+fn fr42_the_sweeps_prompts_are_the_first_n_ids_of_one_list() {
+    let base = [10u32, 11, 12, 13];
+    assert_eq!(prefill::prompt_ids(&base, 3), [10, 11, 12]);
+    assert_eq!(prefill::prompt_ids(&base, 4), [10, 11, 12, 13]);
+    assert_eq!(prefill::prompt_ids(&base, 6), [10, 11, 12, 13, 10, 11]);
+    assert_eq!(prefill::prompt_ids(&base, 9), [10, 11, 12, 13, 10, 11, 12, 13, 10]);
+    assert!(prefill::prompt_ids(&base, 0).is_empty());
+    // The same call gives the same ids, whatever else has run.
+    assert_eq!(prefill::prompt_ids(&base, 7), prefill::prompt_ids(&base, 7));
+}
+
+// FR-42, Spec §12: the lengths of the sweep include the first and last turn of release 0.3.0's ten-turn
+// chat (67 and 644 tokens), so chat time to first token is read from the sweep's rows.
+#[test]
+fn fr42_the_sweep_includes_the_chat_lengths() {
+    assert_eq!(prefill::LENGTHS, [32, 67, 128, 512, 644]);
+}
+
+// FR-41, Spec §12: the two paths are checked to agree on the last logits before anything is timed;
+// the gap is the largest absolute difference, measured in f64, and a different length is infinite.
+#[test]
+fn fr41_the_gap_between_two_logit_vectors_is_the_largest_absolute_difference() {
+    assert_eq!(prefill::logits_gap(&[1.0, 2.0, 3.0], &[1.0, 2.0, 3.0]), 0.0);
+    assert_eq!(prefill::logits_gap(&[1.0, 2.0, 3.0], &[1.0, 2.5, 2.75]), 0.5);
+    assert_eq!(prefill::logits_gap(&[1.0, 2.0], &[1.0]), f64::INFINITY);
+}
+
+// FR-42, FR-9: a prefill row names its path and prompt length and carries the conditions and a timing.
+#[test]
+fn fr42_a_prefill_row_names_its_path_and_length() {
+    let spread = Spread { median: 620.0, min: 610.0, max: 650.0 };
+    let line = row(&conditions(), prefill::fields("batched", 512), &[("prompt_ms", spread)]);
+    assert_eq!(line["group"], "prefill");
+    assert_eq!(line["path"], "batched");
+    assert_eq!(line["prompt_tokens"], 512);
+    assert_eq!(line["results"]["prompt_ms"]["median"], 620.0);
+    assert_eq!(line["version"], "0.1.0");
 }

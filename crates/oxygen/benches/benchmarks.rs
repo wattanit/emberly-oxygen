@@ -31,6 +31,16 @@
 //! only: the two workloads still run greedy, so their rows stay comparable with
 //! every earlier release's (FR-9, FR-29). `cargo bench -- --sampling-only
 //! --dry-run` runs just this group and prints its rows.
+//!
+//! The prefill group (FR-42) times the prompt alone, from its first token to
+//! the logits of its last position, at five lengths, in this process: one `step`
+//! per token (the way releases before 0.4.0 processed a prompt) and one
+//! `prefill`, one line per path and length with `"group": "prefill"`. The two
+//! are checked to agree on the last logits first. `cargo bench -- --prefill-only
+//! --dry-run` runs just this group and prints its rows.
+
+#[path = "support/prefill.rs"]
+mod prefill;
 
 #[path = "support/record.rs"]
 mod record;
@@ -45,7 +55,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use std::hint::black_box;
 use std::time::Duration;
 
-use emberly_oxygen::{generate, kernels, Model, Sampling, Tensor, Tokenizer};
+use emberly_oxygen::{generate, kernels, Logits, Model, Sampling, Tensor, Tokenizer};
 use serde_json::{json, Value};
 
 const WARMUP_RUNS: usize = 1;
@@ -130,6 +140,10 @@ fn parent() {
         write_rows(&sampling_rows(&conditions), dry_run);
         return;
     }
+    if std::env::args().any(|a| a == "--prefill-only") {
+        write_rows(&prefill_rows(&conditions), dry_run);
+        return;
+    }
     let workloads = workloads();
     // The prompts must be exactly the lengths Spec §12 names, or the rows
     // would not measure the same work as the series they join.
@@ -171,7 +185,55 @@ fn parent() {
     }
     rows.extend(kernel_rows(&conditions));
     rows.extend(sampling_rows(&conditions));
+    rows.extend(prefill_rows(&conditions));
     write_rows(&rows, dry_run);
+}
+
+/// The prefill group (FR-42): the time to process a prompt of each length, up to
+/// the logits of its last position, by one `step` per token and by one `prefill`,
+/// in this process. Each path runs once to warm up and then `RECORDED_RUNS`
+/// times; the row's metric is the prompt time in milliseconds. Before anything
+/// is timed the two paths must agree on the last logits (FR-41), so a number is
+/// never recorded for a path that computes something else.
+fn prefill_rows(conditions: &record::Conditions) -> Vec<Value> {
+    let model = Model::load(&model_dir()).unwrap_or_else(|e| fail(&e.to_string()));
+    let tokenizer = Tokenizer::load(&model_dir()).unwrap_or_else(|e| fail(&e.to_string()));
+    let long = workloads().into_iter().max_by_key(|w| w.prompt_tokens).unwrap_or_else(|| fail("prompts.json lists no workload"));
+    let base = tokenizer.encode(&long.text).unwrap_or_else(|e| fail(&e.to_string()));
+
+    let by_steps = |ids: &[u32]| {
+        let mut session = model.session(false);
+        let mut last = Vec::new();
+        for &id in ids {
+            last = session.step(id).unwrap_or_else(|e| fail(&e.to_string()));
+        }
+        last
+    };
+    let batched = |ids: &[u32]| model.session(false).prefill(ids, Logits::Last).unwrap_or_else(|e| fail(&e.to_string()));
+
+    println!("prefill: the prompt alone, median milliseconds over {RECORDED_RUNS} runs");
+    let mut rows = Vec::new();
+    for n in prefill::LENGTHS {
+        let ids = prefill::prompt_ids(&base, n);
+        let gap = prefill::logits_gap(&by_steps(&ids), &batched(&ids));
+        if gap > 1e-5 {
+            fail(&format!("prefill: at {n} tokens the two paths differ by {gap:e} in the last logits; nothing is recorded"));
+        }
+        for (path, run) in [("one_token", &by_steps as &dyn Fn(&[u32]) -> Vec<f32>), ("batched", &batched)] {
+            black_box(run(&ids));
+            let ms: Vec<f64> = (0..RECORDED_RUNS)
+                .map(|_| {
+                    let start = Instant::now();
+                    black_box(run(black_box(&ids)));
+                    start.elapsed().as_secs_f64() * 1000.0
+                })
+                .collect();
+            let spread = stats::spread(&ms).unwrap_or_else(|| fail("prefill: no usable timings"));
+            println!("  {n:>4} tokens, {path:<10} {:>9.1} ms  (min {:.1}, max {:.1})", spread.median, spread.min, spread.max);
+            rows.push(record::row(conditions, prefill::fields(path, n), &[("prompt_ms", spread)]));
+        }
+    }
+    rows
 }
 
 /// Every matrix shape in the forward pass of SmolLM2-135M, as `[rows, columns]`
