@@ -83,13 +83,20 @@ Filled in as the phases land. Machine: the benchmark machine (Apple M4 Max), as 
 
 0.3.0's recorded figures to compare with (plan 0.3.0 §5): short prompt 121.2 tok/s and 264.1 ms to first token; long prompt 100.3 tok/s and 5104.9 ms to first token; generation 116.2 tok/s short and 79.7 long; peak memory 811.6 MB; a chat turn 0.55 s at 67 prompt tokens and 6.5 s at 644. The session's own drift was 3% to 4%.
 
+- **Tasks 17.1 to 17.4 (done).** `matmul`, `Logits`, `Session::prefill` and the `UnmaskedAttention` fault are in; `cargo test --no-fail-fast` passes (409 tests, up from 388 at 0.3.0). The dot product was pulled out of `matvec_lanes` into one `#[inline(always)]` function that both kernels call; the existing order pins in `tests/kernel.rs` still pass. The interleaved-RoPE fault cannot show on the forward tests' tiny model (head dimension 2: the two pairings are the same pairing), so its check uses a model with head dimension 4.
+- **Task 17.5 (measured; the bound is not yet set).** A scratchpad program (`measure_prefill`, release build, not in the repository) ran every prompt of the set through `step` one token at a time and through `prefill` with `Logits::All` and capture, and compared the logits at every position and the embedding, every layer's output and the final-norm output. **All 12 prompts, 2,508 positions in all: the two paths are bit-identical** (largest logit difference 0, largest relative intermediate difference 0, argmax equal at every position). So there is no worst error to apply S-1's rule to. The 1e-5 bound of Specification §11 is therefore a guard against a defect and not a measured margin; the owner decides what it is.
+- **Task 17.6 (dry run, not recorded in the benchmark record).** Scratchpad programs `dryrun` and `kernelcheck`, release build, Apple M4 Max. The 506-token prompt `long-prose`, three runs each (medians; the runs agree within 0.2%): one-token **4901 ms**; one-token with the unembedding skipped except for the last token **4087 ms** (estimated: the one-token time minus 505 timings of a 49152 × 576 matrix-vector product, 1.612 ms each); batched **3689 ms**. So the skipped logits are worth about **0.81 s (17%)** and batching about **0.40 s (a further 11%)**; together 1.33×. The unembedding is 17% of a token's work, not the "about a fifth" the Specification (§7) says.
+  The 0.40 s is not weight reuse. `matmul` against 506 separate `matvec` calls at the four per-layer shapes: q 1.05×, k and v 0.98×, gate and up 0.99×, down 0.99×; **1.00× over the four together** (60.8 ms against 61.0 ms). The weight matrices are 0.4 to 3.5 MB and fit in the cache, so the weights are not being re-read from memory, and the kernel runs at about 37 GFLOP/s, compute-bound. The four projections plus the output projection are about 2.95 s of the 3.69 s batched time (80%); the rest, mostly attention, is about 0.74 s. The residual 0.40 s is probably the removed per-step allocations and call overhead, not measured.
+
+- **Phase 17 decision (owner, 2026-11-10).** Option A: the release goes on as written, with `matmul` as the loop order only. The finding that the loop order alone gains nothing on this machine (matmul 1.00× against repeated matvec; the weights fit in cache and the kernel is compute-bound) is a recorded negative result for the release note (FR-42), and further speed-ups (register blocking, SIMD, threads) are left for later releases. The bound of the batched-against-one-token test stays at the Specification's initial 1e-5, a guard against a defect since the measured difference is 0; the owner has not said otherwise.
+
 ## 6. Upstream feedback
 
 Recorded here for the upstream owner; the approved documents are not edited from this plan without the owner's permission. This section is a permanent record.
 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
-| | | None yet. |
+| Task 17.6 | Specification §7 | §7 says the unembedding is "about a fifth of a token's arithmetic". Measured at 1.612 ms of a 9.7 ms one-token step, it is 17%. A wording fix, to be written in place only with the owner's permission. |
 
 ## 7. Open Questions
 

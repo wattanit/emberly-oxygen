@@ -30,10 +30,10 @@ Dependencies: none new. Out of scope: tiling, register blocking, threads, SIMD, 
 
 ## 17.5 Measure agreement (FR-41)
 
-- [ ] Largest logit and intermediate difference between `prefill` and `step` per prompt; bit-identical or not; record in §5.
-- [ ] Set the bound of Specification §11 with the owner.
+- [x] Largest logit and intermediate difference between `prefill` and `step` per prompt; bit-identical or not; record in §5.
+- [x] Set the bound of Specification §11 with the owner: it stays at 1e-5 (a guard; the measured difference is 0).
 
 ## 17.6 Dry run of the loop order (FR-42)
 
-- [ ] Time `step`, `step` without the unembedding, and `prefill` over 512 tokens, three runs each; record in §5.
-- [ ] If the batched arm is not clearly faster than the second, stop and raise it with the owner.
+- [x] Time `step`, `step` without the unembedding, and `prefill` over 512 tokens, three runs each; record in §5.
+- [x] If the batched arm is not clearly faster than the second, stop and raise it with the owner.
