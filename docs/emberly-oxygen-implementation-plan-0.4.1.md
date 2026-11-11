@@ -94,6 +94,28 @@ Machine: the benchmark machine (Apple M4 Max). Baseline: 420 tests at 0.4.0.
 
 Filled in as the phases land.
 
+- **Task 20.1 (measured; the owner's decision on the open item is pending).** A scratchpad program (`threadcost`, release build, not in the repository; random weights at the real shapes, 9 rounds of repetitions, medians) compared two ways of threading in safe code. **Scoped:** `std::thread::scope` creating the threads at every call, borrowing weights, input and cache. **Persistent:** workers created once, weights shared as `Arc`, the input copied into an `Arc` per call, each worker's output returned over a channel, and the cache held as `Arc<RwLock<Vec<f32>>>` with a read lock per call. Every threaded result was checked exactly equal to the serial one (`assert_eq!` on the whole output: bit-identical at every count measured). Microseconds per call:
+
+  | Product | 1 thread | 2 | 4 | 8 | 12 | 16 |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | k/v 192×576, scoped / persistent | 9.9 / 7.3 | 22.6 / 10.4 | 27.8 / 12.0 | 62.4 / 19.1 | 93.4 / 26.6 | 121.7 / 32.4 |
+  | q/o 576×576 | 16.8 / 17.0 | 28.7 / 16.4 | 32.4 / 16.4 | 64.7 / 20.9 | 95.5 / 28.9 | 124.7 / 35.3 |
+  | gate/up 1536×576 | 45.3 / 45.7 | 44.1 / 33.3 | 40.7 / 25.7 | 69.0 / 26.5 | 99.4 / 30.3 | 128.0 / 38.4 |
+  | down 576×1536 | 44.0 / 44.5 | 44.6 / 32.3 | 39.1 / 25.3 | 66.1 / 26.5 | 99.0 / 30.9 | 127.7 / 38.5 |
+  | unembedding 49152×576 | 1583 / 1592 | 845 / 830 | 700 / 677 | 518 / 493 | 432 / 397 | 438 / 395 |
+
+  Attention (9 heads, head dimension 64, 3 key-value heads), serial / scoped / persistent at 2, 3, 5 and 9 workers:
+
+  | Positions | Serial | 2 | 3 | 5 | 9 |
+  | --- | --- | --- | --- | --- | --- |
+  | 8 | 1.3 | 17.5 / 6.9 | 21.8 / 8.7 | 35.1 / 11.0 | 67.1 / 17.9 |
+  | 128 | 16.5 | 27.7 / 16.4 | 28.4 / 16.4 | 40.5 / 17.1 | 71.1 / 21.8 |
+  | 512 | 70.5 | 55.8 / 45.1 | 51.8 / 42.4 | 51.6 / 31.0 | 75.9 / 31.7 |
+  | 1024 | 141.4 | 90.3 / 83.6 | 79.0 / 71.2 | 73.1 / 52.1 | 88.4 / 47.1 |
+  | 2000 | 279.6 | 167.7 / 162.1 | 127.7 / 119.0 | 101.1 / 83.9 | 104.4 / 71.5 |
+
+  Reading: (1) a scoped thread costs about 8 µs per extra thread at every call (122 µs at 16), which is more than the whole product for everything except the unembedding, so scoped threading would slow most of a step; (2) the persistent pool's hand-over costs about 3 µs per extra worker (about 25 µs at 16 including the input copy), so it pays from the 1536-row products up, and is break-even or worse for the key and value projections (7 µs serial) and the 576-row products at 2 to 4 workers; those stay on the calling thread under the threshold; (3) the unembedding scales 4× at 12 workers, which matches the bandwidth profile (284 GB/s at 12 against 69 at one); (4) attention with a persistent pool gains little below 128 positions (it is lost in hand-over), 1.6× at 512, 2.9× at 1024 and 3.9× at 2000 with 9 workers; and (5) the safe cache sharing worked and `RwLock` read locks cost little, but a real cache grows by appends from the calling thread, so the write must wait until all workers have returned, which the call structure guarantees (each call waits for every worker's output). A rough projection of a short decode step from these rows (7 ms serial): about 4.2 ms with 4 workers, one dispatch per product that is over the threshold, so about 1.7×; the 211 hand-overs per token are the cost, and fusing products that share an input (q, k and v; gate and up) into one dispatch each would cut them, which stays inside the rule (still one output element per worker). That projection is an estimate, not a result.
+
 ## 6. Upstream feedback
 
 Recorded here for the upstream owner; the approved documents are not edited from this plan without the owner's permission. This section is a permanent record.
