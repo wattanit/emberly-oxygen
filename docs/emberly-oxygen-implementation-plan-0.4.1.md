@@ -100,7 +100,7 @@ Recorded here for the upstream owner; the approved documents are not edited from
 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
-| | | None yet. |
+| Drafting | Requirements §2.1 and Specification §4 | Both cite the profile as "plan 0.4.1 §4"; in the plan it is §5 (the figures are the same). A reference fix for the next absorption; no figure is affected. |
 
 ## 7. Open Questions
 
