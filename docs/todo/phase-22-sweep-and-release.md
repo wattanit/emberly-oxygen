@@ -15,8 +15,8 @@ Dependencies: none new. Out of scope: SIMD, register blocking, lower-precision w
 
 ## 22.2 Default count and version (FR-44)
 
-- [ ] Choose the default by the rule of Specification §12; set it.
-- [ ] Bump the workspace version to 0.4.1; clean tree.
+- [x] Choose the default by the rule of Specification §12; set it.
+- [x] Bump the workspace version to 0.4.1; clean tree.
 
 ## 22.3 Test, then benchmark (FR-8, FR-9)
 

@@ -18,10 +18,15 @@ pub struct Model {
     pool: Pool,
 }
 
-/// The thread count `Model::load` uses: the cores the machine offers, or 1 when
-/// that is unknown. Initial (FR-44): the release's thread sweep decides it.
+/// The thread count the release's sweep chose (FR-44, Spec §12): the count with
+/// the highest decode speed at 512 tokens, ties within 2% to the smaller, which
+/// was 4 on the benchmark machine (plan 0.4.1 §5). Prompt speed keeps rising to 12.
+pub const DEFAULT_THREADS: usize = 4;
+
+/// The thread count `Model::load` uses: the sweep's choice, or the cores the
+/// machine offers when there are fewer (1 when that is unknown).
 fn default_threads() -> usize {
-    std::thread::available_parallelism().map_or(1, |n| n.get())
+    std::thread::available_parallelism().map_or(1, |n| n.get()).min(DEFAULT_THREADS)
 }
 
 /// One sequence being processed: the key-value cache lives here (Spec §2).
@@ -211,7 +216,7 @@ mod tests {
         assert!(error.to_string().contains("threads"), "rejected before the files are read: {error}");
     }
 
-    // FR-44: the count is stored; `load` uses the cores the machine offers.
+    // FR-44: the count is stored; `load` uses the sweep's default, capped at the cores the machine offers.
     #[test]
     fn the_thread_count_is_kept() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../models/smollm2-135m");
@@ -219,7 +224,7 @@ mod tests {
             assert_eq!(Model::load_with_threads(&dir, threads).unwrap().threads(), threads);
         }
         let cores = std::thread::available_parallelism().unwrap().get();
-        assert_eq!(Model::load(&dir).unwrap().threads(), cores);
+        assert_eq!(Model::load(&dir).unwrap().threads(), cores.min(DEFAULT_THREADS));
     }
 
     // FR-43, S-6: the real model's logits are bit-identical at every thread count, through
