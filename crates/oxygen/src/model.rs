@@ -23,8 +23,9 @@ pub struct Model {
 
 /// The thread count the release's sweep chose (FR-44, Spec §12): the count with
 /// the highest decode speed at 512 tokens, ties within 2% to the faster prompt
-/// at 644 tokens, which was 8 on the benchmark machine (plan 0.4.1 §5).
-pub const DEFAULT_THREADS: usize = 8;
+/// at 644 tokens, which was 8 for release 0.4.1 and 12 for 0.4.2 on the benchmark
+/// machine (plan 0.4.1 §5, plan 0.4.2 §5): the faster blocked prompt moved it.
+pub const DEFAULT_THREADS: usize = 12;
 
 /// The thread count `Model::load` uses: the sweep's choice, or the cores the
 /// machine offers when there are fewer (1 when that is unknown).
