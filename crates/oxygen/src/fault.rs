@@ -26,6 +26,11 @@ pub enum Fault {
     /// leave them (FR-43, Spec §17). Acts only where there are workers: with
     /// one thread there is no division to get wrong.
     SkippedRows,
+    /// The last, partial tile of every blocked product is never written: the
+    /// outputs of the inputs that do not fill a whole panel stay zero, as a loop
+    /// that forgot its edge would leave them (FR-46, Spec §17). Acts through the
+    /// pool, like `SkippedRows`, and only in the blocked products `prefill` uses.
+    UnfinishedTile,
     /// Sampling applies top-p before temperature, so it cuts the distribution
     /// of the unscaled logits (Spec §8, §17). Temperature and top-k commute, so
     /// moving top-p is the order change that gives a different distribution.

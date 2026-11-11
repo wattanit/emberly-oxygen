@@ -14,6 +14,9 @@ mod prefill;
 #[path = "../benches/support/threads.rs"]
 mod threads;
 
+#[path = "../benches/support/batched.rs"]
+mod batched;
+
 use record::{rfc3339, row, Conditions, Machine};
 use serde_json::json;
 use stats::{spread, Spread};
@@ -243,4 +246,73 @@ fn fr44_fr45_a_thread_row_names_its_count_phase_and_context() {
     assert_eq!(line["results"]["ms_per_token"]["median"], 5.1);
     assert_eq!(threads::with_threads(json!({"group": "kernels"}), 1)["threads"], 1);
     assert_eq!(threads::with_threads(json!({"group": "kernels"}), 1)["group"], "kernels");
+}
+
+// FR-48, Spec §12: the batched kernel rows use 128 input rows at the three shapes of the batched
+// products, and count 2 * rows * cols * inputs floating-point operations.
+#[test]
+fn fr48_the_batched_kernel_rows_use_the_three_shapes_and_128_inputs() {
+    assert_eq!(batched::INPUTS, 128);
+    let shapes: Vec<(usize, usize)> = batched::SHAPES.iter().map(|s| (s.0, s.1)).collect();
+    assert_eq!(shapes, [(1536, 576), (576, 1536), (576, 576)]);
+    assert_eq!(batched::flops(2, 3, 4), 48.0);
+    assert_eq!(batched::flops(1536, 576, 128), 2.0 * 1536.0 * 576.0 * 128.0);
+}
+
+// FR-46, FR-48, Spec §12: the checking sum the blocked kernel is compared with before it is timed is
+// the chunked fused sum: hand-worked small cases, and a length that crosses a chunk boundary.
+#[test]
+fn fr46_the_chunked_reference_is_the_chunked_fused_sum() {
+    // [[1, 2, 3], [4, 5, 6]] times the inputs [1, 1, 1] and [2, 0, 1]: [[6, 15], [5, 14]], laid out [input][row].
+    let weight = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+    let input = [1.0, 1.0, 1.0, 2.0, 0.0, 1.0];
+    assert_eq!(batched::chunked_reference(&weight, 2, 3, &input, 2), [6.0, 15.0, 5.0, 14.0]);
+    // 65 products of 1: a chunk of 64 and a chunk of 1, 65 in all.
+    let ones = vec![1.0f32; 65];
+    assert_eq!(batched::chunked_reference(&ones, 1, 65, &ones, 1), [65.0]);
+    // The chunk sums are added after each chunk is complete: 2^24 + 1 + 1 in one chunk loses both
+    // ones when added one by one to a large total, but a chunk's own sum of ones is exact and
+    // keeps them. Columns: 1 large value, then 64 ones in the next chunk.
+    let mut w = vec![1.0f32; 65];
+    let mut x = vec![1.0f32; 65];
+    w[0] = 16_777_216.0;
+    x[0] = 1.0;
+    // chunk 1: 16777216 + 63 ones (the 63 ones are lost one at a time: each add of 1 rounds away); chunk 2: 1.
+    let got = batched::chunked_reference(&w, 1, 65, &x, 1)[0];
+    let mut chunk1 = 16_777_216.0f32;
+    for _ in 0..63 {
+        chunk1 = 1.0f32.mul_add(1.0, chunk1);
+    }
+    assert_eq!(got, chunk1 + 1.0);
+}
+
+// FR-48, FR-9: a batched kernel row names its shape, the input count and the thread count, and carries
+// each kernel's two metrics.
+#[test]
+fn fr48_a_batched_kernel_row_names_its_shape_and_kernels() {
+    let spread = Spread { median: 100.0, min: 99.0, max: 101.0 };
+    let results: Vec<(String, Spread)> = batched::KERNELS.iter().flat_map(|k| record::kernel_metrics(k)).map(|name| (name, spread)).collect();
+    let results: Vec<(&str, Spread)> = results.iter().map(|(n, s)| (n.as_str(), *s)).collect();
+    let line = row(&conditions(), batched::fields(1536, 576, "MLP gate and up"), &results);
+    assert_eq!(line["group"], "kernels");
+    assert_eq!(line["kernel"], "matmul");
+    assert_eq!((line["rows"].as_u64(), line["cols"].as_u64(), line["inputs"].as_u64(), line["threads"].as_u64()), (Some(1536), Some(576), Some(128), Some(1)));
+    for kernel in ["matmul", "blocked", "matrixmultiply"] {
+        assert_eq!(line["results"][format!("{kernel}_gflops")]["median"], 100.0, "{kernel}");
+    }
+    assert_eq!(batched::KERNELS, ["matmul", "blocked", "matrixmultiply"]);
+}
+
+// FR-41, FR-47, Spec §11, §12: the prefill sweep requires its two paths to agree on the last logits within
+// the batched-against-one-token bound, 1e-3 since 0.4.2 (they sum in a different order, so they differ by
+// about 2e-5 on the benchmark's prompts); a difference of defect size is refused.
+#[test]
+fn fr41_fr47_the_sweeps_agreement_bound_is_the_batched_against_one_token_bound() {
+    assert_eq!(prefill::AGREEMENT_BOUND, 1e-3);
+    assert!(prefill::agree(0.0));
+    assert!(prefill::agree(1.67e-5), "the observed rounding difference passes");
+    assert!(prefill::agree(1e-3), "the bound itself passes");
+    assert!(!prefill::agree(2e-3));
+    assert!(!prefill::agree(f64::INFINITY), "paths of different shapes never agree");
+    assert!(!prefill::agree(f64::NAN));
 }

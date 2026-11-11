@@ -30,6 +30,10 @@ pub(crate) struct Pool {
     /// answer is replaced by zeros. Only exists with the `negative-controls` feature.
     #[cfg(feature = "negative-controls")]
     skip_last: std::sync::atomic::AtomicBool,
+    /// The negative control `Fault::UnfinishedTile` (Spec §17): the blocked
+    /// products leave their last partial tile unwritten.
+    #[cfg(feature = "negative-controls")]
+    unfinished_tile: std::sync::atomic::AtomicBool,
 }
 
 type Outcome = Result<Vec<f32>, Box<dyn Any + Send>>;
@@ -86,11 +90,25 @@ impl Pool {
             workers: Mutex::new(workers),
             #[cfg(feature = "negative-controls")]
             skip_last: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(feature = "negative-controls")]
+            unfinished_tile: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
     pub(crate) fn threads(&self) -> usize {
         self.threads
+    }
+
+    /// Makes the blocked products leave their last partial tile unwritten (`Fault::UnfinishedTile`).
+    #[cfg(feature = "negative-controls")]
+    pub(crate) fn leave_tiles_unfinished(&self) {
+        self.unfinished_tile.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Whether `Fault::UnfinishedTile` is on.
+    #[cfg(feature = "negative-controls")]
+    pub(crate) fn tiles_unfinished(&self) -> bool {
+        self.unfinished_tile.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Makes every call lose its last worker's range (`Fault::SkippedRows`).

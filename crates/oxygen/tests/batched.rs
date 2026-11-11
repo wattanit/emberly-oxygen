@@ -13,10 +13,14 @@ use common::fixtures::{discover, require_model_dir, workspace_root};
 use common::harness::{engine_difference, run_engine, run_engine_by_steps, EngineRun};
 use emberly_oxygen::{Fault, Model};
 
-/// The bound on the largest absolute logit difference (Spec §11, initial). The
-/// release measured 0 on every prompt (plan 0.4.0 §5), so this guards against a
-/// defect and is not a measured margin.
-const LOGIT_BOUND: f64 = 1e-5;
+/// The bound on the largest absolute logit difference (Spec §11, initial; tune
+/// with use). Releases 0.4.0 and 0.4.1 measured 0 and kept 1e-5 as a guard; from
+/// 0.4.2 the batched products sum in chunks of fused multiply-adds and the
+/// one-token products in 16 partial sums, so the paths differ in the last bits:
+/// the worst over the prompt set is 3.53e-4 (plan 0.4.2 §5). The bound is S-1's
+/// tolerance, 1e-3, 2.8 times the worst: two computations each within S-1 of the
+/// reference may differ by this much, and a defect in either is far larger.
+const LOGIT_BOUND: f64 = 1e-3;
 
 fn run(logits: Vec<f32>, embeddings: Vec<f32>, layers: Vec<Vec<f32>>, final_norm: Vec<f32>) -> EngineRun {
     EngineRun { logits, embeddings, layers, final_norm }
@@ -120,6 +124,59 @@ fn fr41_a_faulty_batched_pass_is_over_the_bound() {
     faulted.inject_fault(Fault::UnmaskedAttention);
     let clean = Model::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
     let d = engine_difference(&run_engine(&faulted, &prompt.token_ids).unwrap(), &run_engine_by_steps(&clean, &prompt.token_ids).unwrap());
-    assert!(d.logits > LOGIT_BOUND * 1e3, "logits differ by only {:e}", d.logits);
-    assert!(d.intermediates > LOGIT_BOUND * 1e3, "intermediates differ by only {:e}", d.intermediates);
+    assert!(d.logits > LOGIT_BOUND * 10.0, "logits differ by only {:e}", d.logits);
+    assert!(d.intermediates > LOGIT_BOUND * 10.0, "intermediates differ by only {:e}", d.intermediates);
+}
+
+// FR-47, Spec §11: with the blocked product and with the retained 0.4.1 product, `prefill` agrees on
+// every position's logits of every prompt within the bound. The two compute the same products with
+// different orders of addition, so a difference far above rounding is a defect in the blocked kernel
+// that S-1's tolerance against the reference could absorb. The table is printed
+// (`cargo test --test batched -- --nocapture`).
+#[test]
+fn fr47_blocked_and_unblocked_prefill_agree_on_every_prompt() {
+    let (fixtures, model_dir) = load();
+    let blocked = Model::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
+    let mut unblocked = Model::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
+    unblocked.use_unblocked_prefill();
+    let rows: Vec<(String, usize, f64, f64)> = thread::scope(|scope| {
+        let handles: Vec<_> = fixtures
+            .manifest
+            .prompts
+            .iter()
+            .map(|prompt| {
+                let (blocked, unblocked) = (&blocked, &unblocked);
+                scope.spawn(move || {
+                    let d = engine_difference(&run_engine(blocked, &prompt.token_ids).unwrap(), &run_engine(unblocked, &prompt.token_ids).unwrap());
+                    (prompt.id.clone(), prompt.token_ids.len(), d.logits, d.intermediates)
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    println!("{:<18} {:>9} {:>18} {:>22}", "prompt", "positions", "largest logit diff", "largest interm. diff");
+    for (id, n, logits, intermediates) in &rows {
+        println!("{id:<18} {n:>9} {logits:>18e} {intermediates:>22e}");
+    }
+    assert!(!rows.is_empty());
+    for (id, _, logits, _) in &rows {
+        assert!(*logits <= LOGIT_BOUND, "{id}: blocked and unblocked logits differ by {logits:e}, over {LOGIT_BOUND:e}");
+        assert!(*logits > 0.0, "{id}: no difference at all: the blocked product is not in use, or the comparison cannot see a changed order of additions");
+    }
+}
+
+// FR-47, HC-4: the comparison can fail. A blocked product that leaves its last, partial tile unwritten
+// differs from the retained 0.4.1 product by far more than the bound (the prompt's length is not a
+// multiple of the tile's 16 inputs).
+#[test]
+fn fr47_a_faulty_blocked_product_is_over_the_bound() {
+    let (fixtures, model_dir) = load();
+    let prompt = fixtures.manifest.prompts.iter().find(|p| p.id == "english-short").expect("prompt missing");
+    assert_ne!(prompt.token_ids.len() % 16, 0);
+    let mut faulted = Model::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
+    faulted.inject_fault(Fault::UnfinishedTile);
+    let mut unblocked = Model::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
+    unblocked.use_unblocked_prefill();
+    let d = engine_difference(&run_engine(&faulted, &prompt.token_ids).unwrap(), &run_engine(&unblocked, &prompt.token_ids).unwrap());
+    assert!(d.logits > LOGIT_BOUND * 10.0, "logits differ by only {:e}", d.logits);
 }
