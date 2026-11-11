@@ -26,6 +26,10 @@ pub(crate) struct Pool {
     /// One lock for a whole call, so two callers sharing a pool cannot
     /// interleave their hand-overs and receive each other's results.
     workers: Mutex<Vec<Worker>>,
+    /// The negative control `Fault::SkippedRows` (Spec §17): the last worker's
+    /// answer is replaced by zeros. Only exists with the `negative-controls` feature.
+    #[cfg(feature = "negative-controls")]
+    skip_last: std::sync::atomic::AtomicBool,
 }
 
 type Outcome = Result<Vec<f32>, Box<dyn Any + Send>>;
@@ -77,11 +81,22 @@ impl Pool {
                 Worker { jobs: Some(jobs), results, handle: Some(handle) }
             })
             .collect();
-        Ok(Pool { threads, workers: Mutex::new(workers) })
+        Ok(Pool {
+            threads,
+            workers: Mutex::new(workers),
+            #[cfg(feature = "negative-controls")]
+            skip_last: std::sync::atomic::AtomicBool::new(false),
+        })
     }
 
     pub(crate) fn threads(&self) -> usize {
         self.threads
+    }
+
+    /// Makes every call lose its last worker's range (`Fault::SkippedRows`).
+    #[cfg(feature = "negative-controls")]
+    pub(crate) fn skip_last_range(&self) {
+        self.skip_last.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Runs `job` over `0..n` divided into `threads` ranges, the calling
@@ -99,8 +114,14 @@ impl Pool {
         let mine = catch_unwind(AssertUnwindSafe(|| job(ranges[0].clone())));
         let theirs: Vec<Outcome> = workers.iter().map(|w| w.results.recv().expect("worker answers")).collect();
         let mut out = Vec::new();
-        for outcome in std::iter::once(mine).chain(theirs) {
+        #[cfg(feature = "negative-controls")]
+        let last = theirs.len();
+        for (_i, outcome) in std::iter::once(mine).chain(theirs).enumerate() {
             match outcome {
+                #[cfg(feature = "negative-controls")]
+                Ok(part) if _i == last && last > 0 && self.skip_last.load(std::sync::atomic::Ordering::SeqCst) => {
+                    out.extend(std::iter::repeat(0.0).take(part.len()))
+                }
                 Ok(part) => out.extend(part),
                 Err(payload) => resume_unwind(payload),
             }

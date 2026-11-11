@@ -106,6 +106,9 @@ impl Model {
     /// `negative-controls` feature, which a normal build never enables.
     #[cfg(feature = "negative-controls")]
     pub fn inject_fault(&mut self, fault: Fault) {
+        if fault == Fault::SkippedRows {
+            self.pool.skip_last_range();
+        }
         self.fault = Some(fault);
     }
 

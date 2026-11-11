@@ -63,6 +63,7 @@ impl KvCache {
     }
 
     /// The key of one position: `kv_heads × head_dim` values, head after head.
+    #[cfg(test)]
     pub fn key(&self, layer: usize, position: usize) -> &[f32] {
         Self::at(&self.keys[layer], self.width, position)
     }
@@ -90,10 +91,12 @@ impl KvCache {
     }
 
     /// The value of one position, laid out like a key.
+    #[cfg(test)]
     pub fn value(&self, layer: usize, position: usize) -> &[f32] {
         Self::at(&self.values[layer], self.width, position)
     }
 
+    #[cfg(test)]
     fn at(data: &[f32], width: usize, position: usize) -> &[f32] {
         assert!(
             (position + 1) * width <= data.len(),

@@ -20,8 +20,8 @@ Dependencies: none new. Out of scope: finer attention splits (only if the sweep 
 
 ## 21.3 `Fault::SkippedRows` (HC-4)
 
-- [ ] Negative control first: with an explicit 4 workers it changes the output; with no fault nothing changes.
-- [ ] Then the fault.
+- [x] Negative control first: with an explicit 4 workers it changes the output; with no fault nothing changes.
+- [x] Then the fault.
 
 ## 21.4 Thread-count independence test (FR-43, S-6)
 

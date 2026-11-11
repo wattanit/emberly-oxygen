@@ -21,6 +21,11 @@ pub enum Fault {
     /// missing causal mask would (FR-40, Spec §7): the future leaks into every
     /// position's logits.
     UnmaskedAttention,
+    /// The last worker's range of every threaded product is never computed and
+    /// its outputs stay zero, as a lost range in the division of work would
+    /// leave them (FR-43, Spec §17). Acts only where there are workers: with
+    /// one thread there is no division to get wrong.
+    SkippedRows,
     /// Sampling applies top-p before temperature, so it cuts the distribution
     /// of the unscaled logits (Spec §8, §17). Temperature and top-k commute, so
     /// moving top-p is the order change that gives a different distribution.

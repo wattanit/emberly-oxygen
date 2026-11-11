@@ -17,6 +17,11 @@ use emberly_oxygen::{Fault, Model, Tokenizer};
 const PROMPT: &str = "english-short";
 
 fn run(fault: Option<Fault>) -> Vec<CheckResult> {
+    run_with_threads(fault, None)
+}
+
+/// As `run`, with an explicit thread count (`None`: the default).
+fn run_with_threads(fault: Option<Fault>, threads: Option<usize>) -> Vec<CheckResult> {
     let root = workspace_root();
     let fixtures = discover(&root.join("fixtures"))
         .unwrap_or_else(|e| panic!("{e}"))
@@ -25,7 +30,11 @@ fn run(fault: Option<Fault>) -> Vec<CheckResult> {
         .expect("no fixtures");
     let model_dir = root.join("models").join(&fixtures.manifest.model_id);
     require_model_dir(&model_dir).unwrap_or_else(|e| panic!("{e}"));
-    let mut model = Model::load(&model_dir).unwrap_or_else(|e| panic!("{e}"));
+    let mut model = match threads {
+        Some(n) => Model::load_with_threads(&model_dir, n),
+        None => Model::load(&model_dir),
+    }
+    .unwrap_or_else(|e| panic!("{e}"));
     if let Some(fault) = fault {
         model.inject_fault(fault);
     }
@@ -106,6 +115,22 @@ fn fr40_s1_s2_an_unmasked_attention_fails_the_logits_and_the_first_layer() {
     let (position, message) = failure(&results, Check::Intermediates);
     assert_eq!(position, Some(0), "{message}");
     assert!(message.starts_with("layer 0"), "the embeddings are right and layer 0 is the first wrong tensor: {message}");
+    assert!(passes(&results, Check::Encode) && passes(&results, Check::Decode), "only the engine's math was broken");
+}
+
+// FR-43, S-1, S-2, HC-4: a division of work that loses a range fails the gate. Run with an explicit
+// 4 threads, so there are workers to lose a range; with the same 4 threads and no fault every
+// numeric check passes, so the failure is the fault's.
+#[test]
+fn fr43_s1_s2_a_skipped_range_fails_the_logits_and_the_intermediates() {
+    let clean = run_with_threads(None, Some(4));
+    for check in [Check::Logits, Check::Top1, Check::Intermediates] {
+        assert!(passes(&clean, check), "{} should pass at 4 threads: {:?}", check.name(), result(&clean, check).verdict);
+    }
+    let results = run_with_threads(Some(Fault::SkippedRows), Some(4));
+    failure(&results, Check::Logits);
+    let (_, message) = failure(&results, Check::Intermediates);
+    assert!(message.starts_with("layer"), "the embedding is right and a layer is the first wrong tensor: {message}");
     assert!(passes(&results, Check::Encode) && passes(&results, Check::Decode), "only the engine's math was broken");
 }
 
