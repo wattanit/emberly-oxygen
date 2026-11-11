@@ -25,12 +25,12 @@ Dependencies: none new. Out of scope: finer attention splits (only if the sweep 
 
 ## 21.4 Thread-count independence test (FR-43, S-6)
 
-- [ ] Prompt set, both paths, exact comparison across counts; a faulted run is over the bound.
+- [x] Prompt set, both paths, exact comparison across counts; a faulted run is over the bound.
 
 ## 21.5 The harness through the threaded engine (S-1 to S-4, HC-4)
 
-- [ ] Correctness test at the default count, table read; thresholds unchanged; `SkippedRows` fails it.
-- [ ] Guard tests that pin ids before and after: every id equal.
+- [x] Correctness test at the default count, table read; thresholds unchanged; `SkippedRows` fails it.
+- [x] Guard tests that pin ids before and after: every id equal.
 
 ## 21.6 `--threads` (FR-44, S-8)
 
