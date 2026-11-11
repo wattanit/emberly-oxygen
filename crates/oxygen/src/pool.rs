@@ -65,6 +65,10 @@ impl Pool {
                 let handle = thread::spawn(move || {
                     while let Ok((job, range)) = job_rx.recv() {
                         let outcome = catch_unwind(AssertUnwindSafe(|| job(range)));
+                        // The job holds handles on shared data (the key-value cache);
+                        // dropping it before the answer goes back means that when the
+                        // caller has every answer, no worker still holds any.
+                        drop(job);
                         if result_tx.send(outcome).is_err() {
                             break;
                         }
@@ -85,8 +89,10 @@ impl Pool {
     /// Every worker's result is collected before anything is returned or
     /// re-raised, so a panic in one range leaves the pool ready for the next call.
     pub(crate) fn run(&self, n: usize, job: &Job) -> Vec<f32> {
-        let ranges = split(n, self.threads);
+        // No more parts than elements: a worker with nothing to do is not woken.
+        let ranges = split(n, self.threads.min(n).max(1));
         let workers = self.workers.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let workers = &workers[..ranges.len() - 1];
         for (worker, range) in workers.iter().zip(&ranges[1..]) {
             worker.jobs.as_ref().expect("pool is alive").send((job.clone(), range.clone())).expect("worker is alive");
         }

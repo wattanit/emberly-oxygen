@@ -3,11 +3,19 @@
 //! Appending a position is one extend, and reading position `t` is one
 //! contiguous slice, so attention walks the cache without any gathering.
 
+use std::sync::Arc;
+
 use crate::Error;
 
+/// Each layer's keys and values are shared (`Arc`), so the worker threads can
+/// hold a handle on them for one attention call without `unsafe` and without a
+/// copy (FR-43, Spec §4). A call hands out clones and every one is dropped
+/// before the call returns, so the next append finds the only handle and
+/// extends the vector in place; if one were kept, `Arc::make_mut` would copy
+/// rather than corrupt anything.
 pub(crate) struct KvCache {
-    keys: Vec<Vec<f32>>,
-    values: Vec<Vec<f32>>,
+    keys: Vec<Arc<Vec<f32>>>,
+    values: Vec<Arc<Vec<f32>>>,
     /// `kv_heads × head_dim`: the values stored per position.
     width: usize,
     /// The model's context length: no layer holds more positions than this.
@@ -19,8 +27,8 @@ impl KvCache {
     /// 30-layer SmolLM2 cache is hundreds of megabytes, and most runs are short.
     pub fn new(layers: usize, kv_heads: usize, head_dim: usize, max_positions: usize) -> KvCache {
         KvCache {
-            keys: vec![Vec::new(); layers],
-            values: vec![Vec::new(); layers],
+            keys: vec![Arc::new(Vec::new()); layers],
+            values: vec![Arc::new(Vec::new()); layers],
             width: kv_heads * head_dim,
             max_positions,
         }
@@ -49,14 +57,36 @@ impl KvCache {
         if self.keys[layer].len() / self.width.max(1) >= self.max_positions {
             return Err(self.full());
         }
-        self.keys[layer].extend_from_slice(key);
-        self.values[layer].extend_from_slice(value);
+        Arc::make_mut(&mut self.keys[layer]).extend_from_slice(key);
+        Arc::make_mut(&mut self.values[layer]).extend_from_slice(value);
         Ok(())
     }
 
     /// The key of one position: `kv_heads × head_dim` values, head after head.
     pub fn key(&self, layer: usize, position: usize) -> &[f32] {
         Self::at(&self.keys[layer], self.width, position)
+    }
+
+    /// All of a layer's keys, `[position][kv_heads × head_dim]` flat.
+    pub fn keys(&self, layer: usize) -> &[f32] {
+        &self.keys[layer]
+    }
+
+    /// All of a layer's values, laid out like the keys.
+    pub fn values(&self, layer: usize) -> &[f32] {
+        &self.values[layer]
+    }
+
+    /// Shared handles on a layer's keys and values for the worker threads.
+    /// The caller drops them before it appends again (see the type's note).
+    pub fn shared(&self, layer: usize) -> (Arc<Vec<f32>>, Arc<Vec<f32>>) {
+        (self.keys[layer].clone(), self.values[layer].clone())
+    }
+
+    /// How many handles hold a layer's keys, the cache's own included.
+    #[cfg(test)]
+    pub fn handles(&self, layer: usize) -> usize {
+        Arc::strong_count(&self.keys[layer])
     }
 
     /// The value of one position, laid out like a key.

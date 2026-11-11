@@ -10,13 +10,13 @@ Dependencies: none new. Out of scope: finer attention splits (only if the sweep 
 
 ## 21.1 Threaded attention in `step` (FR-43)
 
-- [ ] Tests first: logits, capture, cache exactly equal at counts 1, 2, 3, 7, default over a decode run.
-- [ ] Then heads divided among workers.
+- [x] Tests first: logits, capture, cache exactly equal at counts 1, 2, 3, 7, default over a decode run.
+- [x] Then heads divided among workers.
 
 ## 21.2 Threaded attention in `prefill` (FR-43, FR-41)
 
-- [ ] Tests first: exactly equal at every count; still equal to `step`; causal test holds.
-- [ ] Then rows divided among workers.
+- [x] Tests first: exactly equal at every count; still equal to `step`; causal test holds.
+- [x] Then rows divided among workers.
 
 ## 21.3 `Fault::SkippedRows` (HC-4)
 

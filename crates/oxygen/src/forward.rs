@@ -11,7 +11,9 @@
 
 use crate::fault::{self, Fault};
 use crate::kv_cache::KvCache;
-use crate::pool::Pool;
+use std::sync::Arc;
+
+use crate::pool::{Job, Pool};
 use crate::ops::{add_assign, matmul_pooled, matvec_pooled, mul_assign, rms_norm, rope, silu, softmax};
 use crate::weights::Weights;
 use crate::{Capture, Config, Error, Logits};
@@ -79,8 +81,12 @@ pub(crate) fn step(
         cache.append(index, &k, &v)?;
 
         let mut attended = vec![0f32; heads * head_dim];
-        let record = stats.then_some(&mut most_attended[..]);
-        attention(&q, cache, index, position + 1, heads, kv_heads, head_dim, &mut attended, record);
+        if stats {
+            // The trace's most-attended positions come from the serial path; the output is the same.
+            attention(&q, cache, index, position + 1, heads, kv_heads, head_dim, &mut attended, Some(&mut most_attended[..]));
+        } else {
+            attention_pooled(pool, &q, cache, index, position + 1, heads, kv_heads, head_dim, &mut attended, ATTENTION_MIN_POSITIONS);
+        }
         let mut projected = vec![0f32; hidden];
         matvec_pooled(pool, &layer.o_proj, &attended, &mut projected);
         add_assign(&mut x, &projected);
@@ -209,12 +215,17 @@ pub(crate) fn prefill(
         // The whole prompt is in the cache, so the count is what keeps the future out:
         // row `t` reads positions 0..=t and no more (Spec §7, causal mask).
         let mut attended = vec![0f32; n * q_width];
-        for t in 0..n {
-            let out = &mut attended[t * q_width..(t + 1) * q_width];
-            // The unmasked fault reads the whole prompt from every row (Spec §17).
-            let positions = if fault.is_some_and(Fault::unmasks_attention) { n } else { t + 1 };
-            let record = (stats && t == n - 1).then_some(&mut most_attended[..]);
-            attention(&q[t * q_width..(t + 1) * q_width], cache, index, positions, heads, kv_heads, head_dim, out, record);
+        let unmasked = fault.is_some_and(Fault::unmasks_attention);
+        if stats {
+            for t in 0..n {
+                let out = &mut attended[t * q_width..(t + 1) * q_width];
+                // The unmasked fault reads the whole prompt from every row (Spec §17).
+                let positions = if unmasked { n } else { t + 1 };
+                let record = (t == n - 1).then_some(&mut most_attended[..]);
+                attention(&q[t * q_width..(t + 1) * q_width], cache, index, positions, heads, kv_heads, head_dim, out, record);
+            }
+        } else {
+            attention_rows_pooled(pool, &q, cache, index, n, unmasked, heads, kv_heads, head_dim, &mut attended);
         }
         let mut projected = vec![0f32; n * hidden];
         matmul_pooled(pool, &layer.o_proj, &attended, n, &mut projected);
@@ -294,22 +305,45 @@ pub(crate) fn attention(
     kv_heads: usize,
     head_dim: usize,
     out: &mut [f32],
-    mut most_attended: Option<&mut [usize]>,
+    most_attended: Option<&mut [usize]>,
 ) {
     assert_eq!(q.len(), heads * head_dim, "q holds `heads` heads");
     assert_eq!(out.len(), heads * head_dim, "out holds `heads` heads");
     assert!(heads % kv_heads == 0, "heads must be a multiple of kv_heads");
+    assert!(positions * kv_heads * head_dim <= cache.keys(layer).len(), "position {positions} is not in the cache");
+    attention_heads(q, cache.keys(layer), cache.values(layer), positions, 0..heads, heads, kv_heads, head_dim, out, most_attended);
+}
+
+/// The heads in `range` of [`attention`], over a layer's flat keys and values
+/// (`[position][kv_heads × head_dim]`), written to `out` (`range.len() ×
+/// head_dim` values). Each head is computed whole, in the same order whatever
+/// the range, which is what lets threads divide the heads without changing a
+/// bit (FR-43). `most_attended` is indexed by head.
+#[allow(clippy::too_many_arguments)]
+fn attention_heads(
+    q: &[f32],
+    keys: &[f32],
+    values: &[f32],
+    positions: usize,
+    range: std::ops::Range<usize>,
+    heads: usize,
+    kv_heads: usize,
+    head_dim: usize,
+    out: &mut [f32],
+    mut most_attended: Option<&mut [usize]>,
+) {
     let group = heads / kv_heads;
+    let width = kv_heads * head_dim;
     let scale = 1.0 / (head_dim as f32).sqrt();
 
     let mut scores = vec![0f32; positions];
-    for head in 0..heads {
+    for (slot, head) in range.enumerate() {
         let kv = head / group;
         let span = kv * head_dim..(kv + 1) * head_dim;
         let query = &q[head * head_dim..(head + 1) * head_dim];
 
         for (t, score) in scores.iter_mut().enumerate() {
-            let key = &cache.key(layer, t)[span.clone()];
+            let key = &keys[t * width..(t + 1) * width][span.clone()];
             let mut dot = 0f32;
             for (a, b) in query.iter().zip(key) {
                 dot += a * b;
@@ -327,14 +361,105 @@ pub(crate) fn attention(
             m[head] = best;
         }
 
-        let result = &mut out[head * head_dim..(head + 1) * head_dim];
+        let result = &mut out[slot * head_dim..(slot + 1) * head_dim];
         result.fill(0.0);
         for (t, &weight) in scores.iter().enumerate() {
-            let value = &cache.value(layer, t)[span.clone()];
+            let value = &values[t * width..(t + 1) * width][span.clone()];
             for (r, v) in result.iter_mut().zip(value) {
                 *r += weight * v;
             }
         }
+    }
+}
+
+/// Below this many positions a decode step's attention runs on the calling
+/// thread: the hand-over costs about as much as the work (plan 0.4.1 §5, task
+/// 20.1: parity near 128 positions, 1.6× at 512). Initial; tune with use.
+pub(crate) const ATTENTION_MIN_POSITIONS: usize = 256;
+
+/// [`attention`] with the query heads divided among the pool's threads
+/// (FR-43). Each head is computed whole by one thread with the same code, so
+/// the result equals [`attention`]'s bit for bit at every thread count.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn attention_pooled(
+    pool: &Pool,
+    q: &[f32],
+    cache: &KvCache,
+    layer: usize,
+    positions: usize,
+    heads: usize,
+    kv_heads: usize,
+    head_dim: usize,
+    out: &mut [f32],
+    min_positions: usize,
+) {
+    if pool.threads() == 1 || positions < min_positions {
+        return attention(q, cache, layer, positions, heads, kv_heads, head_dim, out, None);
+    }
+    assert_eq!(q.len(), heads * head_dim, "q holds `heads` heads");
+    assert_eq!(out.len(), heads * head_dim, "out holds `heads` heads");
+    assert!(heads % kv_heads == 0, "heads must be a multiple of kv_heads");
+    assert!(positions * kv_heads * head_dim <= cache.keys(layer).len(), "position {positions} is not in the cache");
+    let (keys, values) = cache.shared(layer);
+    let q = Arc::new(q.to_vec());
+    let job: Job = Arc::new(move |range| {
+        let mut part = vec![0f32; range.len() * head_dim];
+        attention_heads(&q, &keys, &values, positions, range, heads, kv_heads, head_dim, &mut part, None);
+        part
+    });
+    out.copy_from_slice(&pool.run(heads, &job));
+}
+
+/// The attention of every row of a prompt (Spec §7), `q` holding `n` rows, row
+/// `t` over `t + 1` cached positions (or all `n` with `unmasked`, the fault),
+/// the rows divided among the pool's threads (FR-43).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn attention_rows_pooled(
+    pool: &Pool,
+    q: &[f32],
+    cache: &KvCache,
+    layer: usize,
+    n: usize,
+    unmasked: bool,
+    heads: usize,
+    kv_heads: usize,
+    head_dim: usize,
+    out: &mut [f32],
+) {
+    let q_width = heads * head_dim;
+    assert_eq!(q.len(), n * q_width, "q holds `n` rows");
+    assert_eq!(out.len(), n * q_width, "out holds `n` rows");
+    assert!(heads % kv_heads == 0, "heads must be a multiple of kv_heads");
+    assert!(n * kv_heads * head_dim <= cache.keys(layer).len(), "the prompt is not in the cache");
+    let row_positions = move |t: usize| if unmasked { n } else { t + 1 };
+    if pool.threads() == 1 || n < 2 {
+        for t in 0..n {
+            let row = t * q_width..(t + 1) * q_width;
+            attention(&q[row.clone()], cache, layer, row_positions(t), heads, kv_heads, head_dim, &mut out[row], None);
+        }
+        return;
+    }
+    // Row `t` costs `t + 1` positions, so equal runs of rows would leave the last
+    // thread with most of the work. The pool's ranges run over a zigzag order
+    // (first row, last row, second row, ...), which gives each range a mix of cheap
+    // and dear rows; the rows are put back in order below. Which thread computes a
+    // row changes no bit of it (FR-43).
+    let row_of = move |i: usize| if i % 2 == 0 { i / 2 } else { n - 1 - i / 2 };
+    let (keys, values) = cache.shared(layer);
+    let q = Arc::new(q.to_vec());
+    let job: Job = Arc::new(move |range| {
+        let mut part = vec![0f32; range.len() * q_width];
+        for (slot, i) in range.enumerate() {
+            let t = row_of(i);
+            let out = &mut part[slot * q_width..(slot + 1) * q_width];
+            attention_heads(&q[t * q_width..(t + 1) * q_width], &keys, &values, row_positions(t), 0..heads, heads, kv_heads, head_dim, out, None);
+        }
+        part
+    });
+    let zigzag = pool.run(n, &job);
+    for i in 0..n {
+        let t = row_of(i);
+        out[t * q_width..(t + 1) * q_width].copy_from_slice(&zigzag[i * q_width..(i + 1) * q_width]);
     }
 }
 
@@ -914,5 +1039,89 @@ mod tests {
             .collect();
         per_step.sort_by(f64::total_cmp);
         println!("ms per step over 128 positions: median {:.2}, min {:.2}, max {:.2}", per_step[2], per_step[0], per_step[4]);
+    }
+
+    /// A cache of `positions` random positions for one layer, and a random query row.
+    fn random_attention_case(positions: usize, heads: usize, kv_heads: usize, head_dim: usize, seed: u64) -> (KvCache, Vec<f32>) {
+        let mut state = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            ((state >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+        };
+        let width = kv_heads * head_dim;
+        let mut cache = KvCache::new(1, kv_heads, head_dim, positions + 1);
+        for _ in 0..positions {
+            let k: Vec<f32> = (0..width).map(|_| next()).collect();
+            let v: Vec<f32> = (0..width).map(|_| next()).collect();
+            cache.append(0, &k, &v).unwrap();
+        }
+        let q: Vec<f32> = (0..heads * head_dim * positions.max(1)).map(|_| next()).collect();
+        (cache, q)
+    }
+
+    // FR-43, Spec §4: threaded decode attention equals the single-threaded one exactly at every
+    // count, for the model's shape (9 heads over 3, head dimension 64) and an odd one.
+    #[test]
+    fn pooled_attention_equals_attention_exactly_at_every_count() {
+        for &(heads, kv_heads, head_dim) in &[(9, 3, 64), (6, 2, 4), (4, 4, 3)] {
+            for positions in [1, 2, 8, 300] {
+                let (cache, q) = random_attention_case(positions, heads, kv_heads, head_dim, positions as u64 + heads as u64);
+                let q = &q[..heads * head_dim];
+                let mut want = vec![0.0; heads * head_dim];
+                attention(q, &cache, 0, positions, heads, kv_heads, head_dim, &mut want, None);
+                for threads in [1, 2, 3, 7, 16] {
+                    let pool = Pool::new(threads).unwrap();
+                    for min in [0, usize::MAX] {
+                        let mut got = vec![f32::NAN; heads * head_dim];
+                        attention_pooled(&pool, q, &cache, 0, positions, heads, kv_heads, head_dim, &mut got, min);
+                        assert_eq!(got, want, "threads {threads} positions {positions} heads {heads} min {min}");
+                    }
+                }
+            }
+        }
+    }
+
+    // Spec §3, §4: workers hand back their handles on the cache before a call returns, so the
+    // next append extends it in place and does not copy.
+    #[test]
+    fn workers_do_not_keep_the_cache_after_a_call() {
+        let pool = Pool::new(4).unwrap();
+        let mut out = vec![0.0; 9 * 8];
+        for round in 0..50 {
+            let (mut cache, q) = random_attention_case(40, 9, 3, 8, round);
+            attention_pooled(&pool, &q[..72], &cache, 0, cache.len(), 9, 3, 8, &mut out, 0);
+            assert_eq!(cache.handles(0), 1, "a worker still holds the cache");
+            let mut rows = vec![0.0; 40 * 72];
+            attention_rows_pooled(&pool, &q[..40 * 72], &cache, 0, 40, false, 9, 3, 8, &mut rows);
+            assert_eq!(cache.handles(0), 1, "a worker still holds the cache after the row pass");
+            cache.append(0, &[0.0; 24], &[0.0; 24]).unwrap();
+            assert_eq!(cache.handles(0), 1);
+        }
+    }
+
+    // FR-43, FR-41, Spec §7: threaded prompt attention equals the row-by-row one exactly at every
+    // count, masked and with the unmasked fault.
+    #[test]
+    fn pooled_row_attention_equals_the_row_loop_exactly() {
+        let (heads, kv_heads, head_dim) = (9, 3, 8);
+        let q_width = heads * head_dim;
+        for n in [1, 2, 5, 37] {
+            let (cache, q) = random_attention_case(n, heads, kv_heads, head_dim, 90 + n as u64);
+            for unmasked in [false, true] {
+                let mut want = vec![0.0; n * q_width];
+                for t in 0..n {
+                    let positions = if unmasked { n } else { t + 1 };
+                    attention(&q[t * q_width..(t + 1) * q_width], &cache, 0, positions, heads, kv_heads, head_dim, &mut want[t * q_width..(t + 1) * q_width], None);
+                }
+                for threads in [1, 2, 3, 7, 16] {
+                    let pool = Pool::new(threads).unwrap();
+                    let mut got = vec![f32::NAN; n * q_width];
+                    attention_rows_pooled(&pool, &q[..n * q_width], &cache, 0, n, unmasked, heads, kv_heads, head_dim, &mut got);
+                    assert_eq!(got, want, "threads {threads} n {n} unmasked {unmasked}");
+                }
+            }
+        }
     }
 }
