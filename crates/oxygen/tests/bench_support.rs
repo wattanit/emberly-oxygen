@@ -11,6 +11,9 @@ mod record;
 #[path = "../benches/support/prefill.rs"]
 mod prefill;
 
+#[path = "../benches/support/threads.rs"]
+mod threads;
+
 use record::{rfc3339, row, Conditions, Machine};
 use serde_json::json;
 use stats::{spread, Spread};
@@ -175,4 +178,65 @@ fn fr42_a_prefill_row_names_its_path_and_length() {
     assert_eq!(line["prompt_tokens"], 512);
     assert_eq!(line["results"]["prompt_ms"]["median"], 620.0);
     assert_eq!(line["version"], "0.1.0");
+}
+
+// FR-45, Spec §12: the sweep's counts are 1, 2, 4, 8, 12 and 16, and a count above the machine's
+// available cores is left out; a machine with fewer cores than the largest keeps the rest.
+#[test]
+fn fr45_the_sweep_leaves_out_counts_above_the_cores() {
+    assert_eq!(threads::COUNTS, [1, 2, 4, 8, 12, 16]);
+    assert_eq!(threads::counts_for(16), [1, 2, 4, 8, 12, 16]);
+    assert_eq!(threads::counts_for(12), [1, 2, 4, 8, 12]);
+    assert_eq!(threads::counts_for(6), [1, 2, 4]);
+    assert_eq!(threads::counts_for(1), [1]);
+    assert_eq!(threads::counts_for(64), [1, 2, 4, 8, 12, 16]);
+}
+
+// FR-45, Spec §12: prompt time at 128 and 644 tokens, decode after prompts of 32 and 512 tokens.
+#[test]
+fn fr45_the_sweeps_lengths_and_decode_tokens() {
+    assert_eq!(threads::PROMPT_LENGTHS, [128, 644]);
+    assert_eq!(threads::DECODE_CONTEXTS, [32, 512]);
+    assert_eq!(threads::DECODE_TOKENS, 128);
+}
+
+// FR-44, FR-45, Spec §12: the default is the count with the highest decode speed at 512 tokens, ties
+// within 2% going to the smaller count. (Illustrative numbers: milliseconds per generated token.)
+#[test]
+fn fr44_the_default_is_the_fastest_decode_with_ties_to_the_smaller() {
+    // A clear winner.
+    assert_eq!(threads::choose_default(&[(1, 8.7), (2, 6.1), (4, 5.0), (8, 5.4), (16, 6.0)]), 4);
+    // 8 is within 2% of the best (4.95 * 1.02 = 5.049): the smaller of the near-ties wins.
+    assert_eq!(threads::choose_default(&[(1, 8.7), (4, 5.04), (8, 4.95), (16, 5.5)]), 4);
+    // Just outside 2%: the faster one wins.
+    assert_eq!(threads::choose_default(&[(4, 5.06), (8, 4.95)]), 8);
+    // The order of the rows does not matter.
+    assert_eq!(threads::choose_default(&[(16, 5.5), (8, 4.95), (4, 5.04), (1, 8.7)]), 4);
+    // One count only.
+    assert_eq!(threads::choose_default(&[(1, 8.7)]), 1);
+}
+
+// FR-43, Spec §12: the counts are checked to give identical last logits before any timing: the gap
+// must be exactly 0, because the engine's output does not depend on the count.
+#[test]
+fn fr43_the_sweep_accepts_only_identical_logits() {
+    assert!(threads::logits_identical(&[1.0, 2.0], &[1.0, 2.0]));
+    assert!(!threads::logits_identical(&[1.0, 2.0], &[1.0, 2.000001]));
+    assert!(!threads::logits_identical(&[1.0], &[1.0, 2.0]));
+}
+
+// FR-44, FR-45, FR-9: a thread-sweep row names its count, phase and context length; the group and
+// the metric are in it. Every other group's row also carries its count, so a speed is never
+// recorded without the count that produced it.
+#[test]
+fn fr44_fr45_a_thread_row_names_its_count_phase_and_context() {
+    let spread = Spread { median: 5.1, min: 5.0, max: 5.3 };
+    let line = row(&conditions(), threads::fields(8, "decode", 512), &[("ms_per_token", spread)]);
+    assert_eq!(line["group"], "threads");
+    assert_eq!(line["threads"], 8);
+    assert_eq!(line["phase"], "decode");
+    assert_eq!(line["context_tokens"], 512);
+    assert_eq!(line["results"]["ms_per_token"]["median"], 5.1);
+    assert_eq!(threads::with_threads(json!({"group": "kernels"}), 1)["threads"], 1);
+    assert_eq!(threads::with_threads(json!({"group": "kernels"}), 1)["group"], "kernels");
 }

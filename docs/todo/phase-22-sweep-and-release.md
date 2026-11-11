@@ -10,8 +10,8 @@ Dependencies: none new. Out of scope: SIMD, register blocking, lower-precision w
 
 ## 22.1 The thread sweep group (FR-45, FR-9, S-7)
 
-- [ ] Tests first for the support code: counts, prompts, the equal-to-one-thread check, the row with `threads`.
-- [ ] Then the group: 1, 2, 4, 8, 12, 16 threads; prompt at 128 and 644; decode after 32 and 512.
+- [x] Tests first for the support code: counts, prompts, the equal-to-one-thread check, the row with `threads`.
+- [x] Then the group: 1, 2, 4, 8, 12, 16 threads; prompt at 128 and 644; decode after 32 and 512.
 
 ## 22.2 Default count and version (FR-44)
 

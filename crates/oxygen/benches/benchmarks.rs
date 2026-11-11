@@ -38,9 +38,21 @@
 //! `prefill`, one line per path and length with `"group": "prefill"`. The two
 //! are checked to agree on the last logits first. `cargo bench -- --prefill-only
 //! --dry-run` runs just this group and prints its rows.
+//!
+//! The thread sweep (FR-45) runs the released engine at 1, 2, 4, 8, 12 and 16
+//! threads (counts above the machine's cores are left out), in this process,
+//! and times the prompt alone at 128 and 644 tokens and the generation of 128
+//! tokens after prompts of 32 and 512 tokens, one line per count, phase and
+//! length with `"group": "threads"`. Every count must give the same last
+//! logits as one thread before anything is timed. It also prints the thread
+//! count the sweep picks as the default (FR-44). `cargo bench -- --threads-only
+//! --dry-run` runs just this group. Every row of every group carries `threads`,
+//! the count that produced it (FR-9, FR-44).
 
 #[path = "support/prefill.rs"]
 mod prefill;
+#[path = "support/threads.rs"]
+mod threads;
 
 #[path = "support/record.rs"]
 mod record;
@@ -144,6 +156,10 @@ fn parent() {
         write_rows(&prefill_rows(&conditions), dry_run);
         return;
     }
+    if std::env::args().any(|a| a == "--threads-only") {
+        write_rows(&thread_rows(&conditions), dry_run);
+        return;
+    }
     let workloads = workloads();
     // The prompts must be exactly the lengths Spec §12 names, or the rows
     // would not measure the same work as the series they join.
@@ -181,11 +197,14 @@ fn parent() {
             "prompt_tokens": w.prompt_tokens,
             "new_tokens": w.new_tokens,
         });
-        rows.push(record::row(&conditions, fields, &results));
+        // The count the children ran at (the default), as they reported it.
+        let used = recorded[0]["threads"].as_u64().unwrap_or_else(|| fail("a child did not report its thread count")) as usize;
+        rows.push(record::row(&conditions, threads::with_threads(fields, used), &results));
     }
     rows.extend(kernel_rows(&conditions));
     rows.extend(sampling_rows(&conditions));
     rows.extend(prefill_rows(&conditions));
+    rows.extend(thread_rows(&conditions));
     write_rows(&rows, dry_run);
 }
 
@@ -230,9 +249,81 @@ fn prefill_rows(conditions: &record::Conditions) -> Vec<Value> {
                 .collect();
             let spread = stats::spread(&ms).unwrap_or_else(|| fail("prefill: no usable timings"));
             println!("  {n:>4} tokens, {path:<10} {:>9.1} ms  (min {:.1}, max {:.1})", spread.median, spread.min, spread.max);
-            rows.push(record::row(conditions, prefill::fields(path, n), &[("prompt_ms", spread)]));
+            rows.push(record::row(conditions, threads::with_threads(prefill::fields(path, n), model.threads()), &[("prompt_ms", spread)]));
         }
     }
+    rows
+}
+
+/// The thread sweep (FR-45, Spec §12): the prompt alone at each length and the
+/// generation after each context, at every count the machine can run. Each
+/// timing runs once to warm up and then `RECORDED_RUNS` times. Before anything
+/// is timed, every count must give exactly the last logits one thread gives
+/// (FR-43): a speed is never recorded for an engine that computes something else.
+fn thread_rows(conditions: &record::Conditions) -> Vec<Value> {
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let tokenizer = Tokenizer::load(&model_dir()).unwrap_or_else(|e| fail(&e.to_string()));
+    let long = workloads().into_iter().max_by_key(|w| w.prompt_tokens).unwrap_or_else(|| fail("prompts.json lists no workload"));
+    let base = tokenizer.encode(&long.text).unwrap_or_else(|e| fail(&e.to_string()));
+    let lengths: Vec<usize> = threads::PROMPT_LENGTHS.iter().chain(&threads::DECODE_CONTEXTS).copied().collect();
+    let argmax = |logits: &[f32]| logits.iter().enumerate().fold((0, f32::MIN), |b, (i, &v)| if v > b.1 { (i, v) } else { b }).0 as u32;
+
+    println!("threads: median over {RECORDED_RUNS} runs, counts {:?} of {cores} cores", threads::counts_for(cores));
+    let mut baseline: Vec<(usize, Vec<f32>)> = Vec::new();
+    let mut rows = Vec::new();
+    let mut decode_at_512 = Vec::new();
+    for count in threads::counts_for(cores) {
+        let model = Model::load_with_threads(&model_dir(), count).unwrap_or_else(|e| fail(&e.to_string()));
+        // Identical logits first: the prompt's last logits at every length, and one step after it.
+        for &n in &lengths {
+            let ids = prefill::prompt_ids(&base, n);
+            let mut session = model.session(false);
+            let mut last = session.prefill(&ids, Logits::Last).unwrap_or_else(|e| fail(&e.to_string()));
+            last.extend(session.step(argmax(&last)).unwrap_or_else(|e| fail(&e.to_string())));
+            match baseline.iter().find(|(m, _)| *m == n) {
+                None => baseline.push((n, last)),
+                Some((_, one)) => {
+                    if !threads::logits_identical(one, &last) {
+                        fail(&format!("threads: {count} threads give different logits from one thread at {n} tokens; nothing is recorded"));
+                    }
+                }
+            }
+        }
+        let time = |mut run: Box<dyn FnMut() -> f64 + '_>| -> stats::Spread {
+            run();
+            let values: Vec<f64> = (0..RECORDED_RUNS).map(|_| run()).collect();
+            stats::spread(&values).unwrap_or_else(|| fail("threads: no usable timings"))
+        };
+        for n in threads::PROMPT_LENGTHS {
+            let ids = prefill::prompt_ids(&base, n);
+            let spread = time(Box::new(|| {
+                let start = Instant::now();
+                black_box(model.session(false).prefill(black_box(&ids), Logits::Last).unwrap_or_else(|e| fail(&e.to_string())));
+                start.elapsed().as_secs_f64() * 1000.0
+            }));
+            println!("  {count:>2} threads, prompt {n:>4} tokens {:>9.1} ms  (min {:.1}, max {:.1})", spread.median, spread.min, spread.max);
+            rows.push(record::row(conditions, threads::fields(count, "prompt", n), &[("prompt_ms", spread)]));
+        }
+        for n in threads::DECODE_CONTEXTS {
+            let ids = prefill::prompt_ids(&base, n);
+            let spread = time(Box::new(|| {
+                let mut session = model.session(false);
+                let mut next = argmax(&session.prefill(&ids, Logits::Last).unwrap_or_else(|e| fail(&e.to_string())));
+                let start = Instant::now();
+                for _ in 0..threads::DECODE_TOKENS {
+                    next = argmax(&session.step(black_box(next)).unwrap_or_else(|e| fail(&e.to_string())));
+                }
+                black_box(next);
+                start.elapsed().as_secs_f64() * 1000.0 / threads::DECODE_TOKENS as f64
+            }));
+            println!("  {count:>2} threads, decode after {n:>3} tokens {:>7.3} ms/token ({:.1} tokens/s; min {:.3}, max {:.3})", spread.median, 1000.0 / spread.median, spread.min, spread.max);
+            if n == 512 {
+                decode_at_512.push((count, spread.median));
+            }
+            rows.push(record::row(conditions, threads::fields(count, "decode", n), &[("ms_per_token", spread)]));
+        }
+    }
+    println!("threads: the default by the sweep's rule (highest decode speed at 512 tokens, ties within 2% to the smaller) is {}", threads::choose_default(&decode_at_512));
     rows
 }
 
@@ -334,6 +425,7 @@ fn kernel_rows(conditions: &record::Conditions) -> Vec<Value> {
         let results: Vec<(&str, stats::Spread)> = measured.iter().map(|(n, s)| (n.as_str(), *s)).collect();
         let fields = json!({
             "group": "kernels",
+            "threads": 1,
             "kernel": "matvec",
             "rows": m,
             "cols": k,
@@ -376,6 +468,7 @@ fn sampling_rows(conditions: &record::Conditions) -> Vec<Value> {
         println!("  {name:<16} {:>10.1} us  (min {:.1}, max {:.1})", spread.median / 1000.0, spread.min / 1000.0, spread.max / 1000.0);
         let fields = json!({
             "group": "sampling",
+            "threads": 1,
             "setting": name,
             "vocab": VOCAB,
             "context_tokens": context.len(),
@@ -577,6 +670,7 @@ fn child(w: &Workload) {
         "{}",
         json!({
             "load_ms": load.as_secs_f64() * 1000.0,
+            "threads": model.threads(),
             "prompt_tokens": stats.prompt_tokens,
             "generated_tokens": stats.generated_tokens,
             "time_to_first_token_ms": first.as_secs_f64() * 1000.0,
