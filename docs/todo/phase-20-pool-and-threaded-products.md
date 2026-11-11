@@ -10,15 +10,15 @@ Dependencies: none new. Out of scope: `unsafe`, SIMD intrinsics, tiling, a paral
 
 ## 20.1 Measure threads and safe sharing (FR-43)
 
-- [ ] Hand-over cost to a persistent worker against scoped threads per call, at 1, 2, 4, 8, 16 workers.
-- [ ] The two safe ways to let workers read the key-value cache, at the real shapes.
-- [ ] Product time at each step shape under 1 to 16 threads; the small-product threshold.
-- [ ] Record in §5; take the open item of Specification §19 to the owner.
+- [x] Hand-over cost to a persistent worker against scoped threads per call, at 1, 2, 4, 8, 16 workers.
+- [x] The two safe ways to let workers read the key-value cache, at the real shapes.
+- [x] Product time at each step shape under 1 to 16 threads; the small-product threshold.
+- [x] Record in §5; take the open item of Specification §19 to the owner.
 
 ## 20.2 The pool (FR-43, FR-44)
 
-- [ ] Tests first: each range runs once; 1 runs on the caller and spawns nothing; 0 rejected naming `threads`; workers joined on drop; a worker panic reaches the caller.
-- [ ] Then `pool.rs`.
+- [x] Tests first: each range runs once; 1 runs on the caller and spawns nothing; 0 rejected naming `threads`; workers joined on drop; a worker panic reaches the caller.
+- [x] Then `pool.rs`.
 
 ## 20.3 Threaded `matvec` and `matmul` (FR-43, HC-2)
 

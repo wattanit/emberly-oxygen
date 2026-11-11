@@ -13,6 +13,7 @@ mod generate;
 mod kv_cache;
 mod model;
 mod ops;
+mod pool;
 mod rng;
 mod sampling;
 mod safetensors;

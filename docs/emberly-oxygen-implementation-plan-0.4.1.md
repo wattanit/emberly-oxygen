@@ -122,8 +122,9 @@ Recorded here for the upstream owner; the approved documents are not edited from
 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
+| Task 20.1 (owner's decision, 2026-11-11) | Specification §19 (Open) | Resolved: persistent workers; weights shared as `Arc`; the input copied per call; each worker's output returned over a channel; the cache shared as `Arc<RwLock<..>>` with a read lock per call; no `unsafe` ("unless totally necessary"). Scoped threads per call are rejected: about 8 µs per extra thread, more than most products (plan §5). The Specification's open item moves to its resolved ledger at the next absorption. |
 | Drafting | Requirements §2.1 and Specification §4 | Both cite the profile as "plan 0.4.1 §4"; in the plan it is §5 (the figures are the same). A reference fix for the next absorption; no figure is affected. |
 
 ## 7. Open Questions
 
-- **How the workers read the weights and the key-value cache in safe code** (Specification §19, Open). Resolver: task 20.1 measures, the owner decides.
+None open. The one the release started with (how the workers read the weights and the key-value cache in safe code) was decided by the owner on 2026-11-11 after task 20.1 (§6).
