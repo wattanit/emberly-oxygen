@@ -10,12 +10,12 @@ Dependencies: none new. Out of scope: `unsafe`, SIMD intrinsics, a packed copy o
 
 ## 23.1 Tests for the blocked kernel (FR-46, HC-2)
 
-- [ ] Exact equality to a plain index-order fused sum at the model's shapes, at counts that do not divide the tile, are smaller than it, or are 1, and at lengths below and above the vector width.
-- [ ] Within tolerance of `matrixmultiply`; a 16-partial-sum sum must differ in some bit; a tile-edge test marks every output element.
+- [x] Exact equality to a plain index-order fused sum at the model's shapes, at counts that do not divide the tile, are smaller than it, or are 1, and at lengths below and above the vector width.
+- [x] Within tolerance of `matrixmultiply`; a 16-partial-sum sum must differ in some bit; a tile-edge test marks every output element.
 
 ## 23.2 `matmul_blocked` (FR-46)
 
-- [ ] Input packing into `[k][NR]` panels; 4 × 16 tile with `mul_add`; leftover rows and inputs in the same order; safe code, weights in place.
+- [x] Input packing into `[k][NR]` panels; 4 × 16 tile with `mul_add`; leftover rows and inputs in the same order; safe code, weights in place.
 
 ## 23.3 Measure in the library (FR-46, FR-48)
 
@@ -24,5 +24,5 @@ Dependencies: none new. Out of scope: `unsafe`, SIMD intrinsics, a packed copy o
 
 ## 23.4 Pooled `matmul_blocked` (FR-46, FR-43)
 
-- [ ] Tests first: exactly equal to the single-threaded blocked product at counts 1, 2, 3, 7, 16, at the model's shapes and odd sizes.
-- [ ] Then row ranges of whole tile multiples, packed input shared, small products on the caller.
+- [x] Tests first: exactly equal to the single-threaded blocked product at counts 1, 2, 3, 7, 16, at the model's shapes and odd sizes.
+- [x] Then row ranges of whole tile multiples, packed input shared, small products on the caller.

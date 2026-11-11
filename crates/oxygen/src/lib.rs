@@ -56,6 +56,13 @@ pub mod kernels {
         crate::ops::matmul(weight, input, count, output);
     }
 
+    /// The register-blocked matrix-matrix product the batched prompt pass uses
+    /// from release 0.4.2 (FR-46, Spec §4): the same shapes as [`matmul`], each
+    /// element one index-order sum with fused multiply-adds.
+    pub fn matmul_blocked(weight: &Tensor, input: &[f32], count: usize, output: &mut [f32]) {
+        crate::ops::matmul_blocked(weight, input, count, output);
+    }
+
     /// The partial-sum matrix-vector product with `N` independent sums (FR-25,
     /// Spec §4); the engine's own `matvec` is this at the width `ops::LANES` names. Public so the
     /// tests and the benchmark can try other widths.

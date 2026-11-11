@@ -168,6 +168,158 @@ pub(crate) fn matmul_pooled_min(pool: &Pool, weight: &Tensor, input: &[f32], cou
     }
 }
 
+/// Weight rows per tile of the blocked product (FR-46, Spec §4). Initial; the
+/// profile of plan 0.4.2 §5 found only some tile shapes vectorize, so this is
+/// pinned by measurement and not chosen freely.
+pub(crate) const TILE_ROWS: usize = 4;
+
+/// Input rows per tile of the blocked product, and so the width of a packed
+/// input panel (initial; see [`TILE_ROWS`]).
+pub(crate) const TILE_INPUTS: usize = 16;
+
+/// [`matmul`] in register tiles (FR-46, FR-47, Spec §4): each output element
+/// is one sum over the shared dimension in index order, each product added by
+/// a fused multiply-add (rounded once), so an element's value does not depend
+/// on the tile it falls in, on the tile shape or on how rows are divided among
+/// threads. The result differs from [`matmul`]'s in the last bits (its sums are
+/// 16 partial sums with a separate multiply and add).
+///
+/// Panics as [`matmul`] does.
+pub(crate) fn matmul_blocked(weight: &Tensor, input: &[f32], count: usize, output: &mut [f32]) {
+    let (rows, cols) = blocked_shape(weight, input, count, output);
+    let packed = pack_inputs(input, count, cols);
+    let by_row = blocked_rows(weight, 0..rows, &packed, input, count);
+    transpose_into(&by_row, rows, count, output);
+}
+
+/// Checks a blocked product's sizes (the engine builds every call from the
+/// configuration, so a mismatch is an internal bug, Spec §14) and returns
+/// the weight's rows and columns.
+fn blocked_shape(weight: &Tensor, input: &[f32], count: usize, output: &[f32]) -> (usize, usize) {
+    let &[rows, cols] = weight.shape() else {
+        panic!("matmul needs a 2-D weight, got shape {:?}", weight.shape());
+    };
+    assert_eq!(input.len(), count * cols, "input length must be count times the weight's columns");
+    assert_eq!(output.len(), count * rows, "output length must be count times the weight's rows");
+    (rows, cols)
+}
+
+/// Packs the full panels of [`TILE_INPUTS`] input rows into `[k][TILE_INPUTS]`
+/// order: panel `p`, position `k`, lane `j` holds element `k` of input row
+/// `p * TILE_INPUTS + j`, so the tile reads the inputs it needs for one weight
+/// value as one contiguous run. The leftover inputs (`count mod TILE_INPUTS`)
+/// are not packed; they are summed from `input` directly.
+fn pack_inputs(input: &[f32], count: usize, cols: usize) -> Vec<f32> {
+    let panels = count / TILE_INPUTS;
+    let mut packed = vec![0f32; panels * cols * TILE_INPUTS];
+    for p in 0..panels {
+        for k in 0..cols {
+            for j in 0..TILE_INPUTS {
+                packed[(p * cols + k) * TILE_INPUTS + j] = input[(p * TILE_INPUTS + j) * cols + k];
+            }
+        }
+    }
+    packed
+}
+
+/// One tile: `R` weight rows against one packed panel, every accumulator a sum
+/// over `k` in index order with a fused multiply-add. The shape (4 rows by 16
+/// inputs, and one row for the leftovers) is the one the compiler turns into
+/// vector fused multiply-adds from this safe code (plan 0.4.2 §5).
+#[inline(always)]
+fn tile<const R: usize>(rows: [&[f32]; R], panel: &[f32], cols: usize) -> [[f32; TILE_INPUTS]; R] {
+    let mut acc = [[0f32; TILE_INPUTS]; R];
+    for k in 0..cols {
+        let x: &[f32; TILE_INPUTS] = panel[k * TILE_INPUTS..(k + 1) * TILE_INPUTS].try_into().expect("a panel row");
+        for i in 0..R {
+            let w = rows[i][k];
+            for j in 0..TILE_INPUTS {
+                acc[i][j] = w.mul_add(x[j], acc[i][j]);
+            }
+        }
+    }
+    acc
+}
+
+/// One element by the same sum as the tile's, for the inputs that do not fill a panel.
+#[inline(always)]
+fn fused_dot(row: &[f32], input: &[f32]) -> f32 {
+    let mut sum = 0f32;
+    for (w, x) in row.iter().zip(input) {
+        sum = w.mul_add(*x, sum);
+    }
+    sum
+}
+
+/// The blocked product for the weight rows in `range`, written `[row][input]`
+/// (row-major by weight row, so ranges join by concatenation). Rows are taken
+/// four at a time, then one at a time for what is left; the leftover inputs are
+/// summed singly. Every element is the same index-order fused sum whichever
+/// path computes it, so the grouping changes no bit.
+fn blocked_rows(weight: &Tensor, range: std::ops::Range<usize>, packed: &[f32], input: &[f32], count: usize) -> Vec<f32> {
+    let cols = weight.shape()[1];
+    let panels = count / TILE_INPUTS;
+    let singles = panels * TILE_INPUTS..count;
+    let first = range.start;
+    let mut out = vec![0f32; range.len() * count];
+    let mut i = range.start;
+    while i < range.end {
+        let take = if range.end - i >= TILE_ROWS { TILE_ROWS } else { 1 };
+        for p in 0..panels {
+            let panel = &packed[p * cols * TILE_INPUTS..(p + 1) * cols * TILE_INPUTS];
+            if take == TILE_ROWS {
+                let acc = tile::<TILE_ROWS>(std::array::from_fn(|r| weight.row(i + r)), panel, cols);
+                for (r, lanes) in acc.iter().enumerate() {
+                    let at = (i - first + r) * count + p * TILE_INPUTS;
+                    out[at..at + TILE_INPUTS].copy_from_slice(lanes);
+                }
+            } else {
+                let acc = tile::<1>([weight.row(i)], panel, cols);
+                let at = (i - first) * count + p * TILE_INPUTS;
+                out[at..at + TILE_INPUTS].copy_from_slice(&acc[0]);
+            }
+        }
+        for t in singles.clone() {
+            for r in 0..take {
+                out[(i - first + r) * count + t] = fused_dot(weight.row(i + r), &input[t * cols..(t + 1) * cols]);
+            }
+        }
+        i += take;
+    }
+    out
+}
+
+/// Puts `[row][input]` results into the products' `[input][row]` layout.
+fn transpose_into(by_row: &[f32], rows: usize, count: usize, output: &mut [f32]) {
+    for i in 0..rows {
+        for t in 0..count {
+            output[t * rows + i] = by_row[i * count + t];
+        }
+    }
+}
+
+/// [`matmul_blocked`] with the weight's rows divided among the pool's threads,
+/// in whole tiles where the size allows (FR-46, FR-43). Equal to it bit for bit
+/// at every thread count.
+pub(crate) fn matmul_blocked_pooled(pool: &Pool, weight: &Tensor, input: &[f32], count: usize, output: &mut [f32]) {
+    matmul_blocked_pooled_min(pool, weight, input, count, output, MIN_THREADED_MADDS);
+}
+
+pub(crate) fn matmul_blocked_pooled_min(pool: &Pool, weight: &Tensor, input: &[f32], count: usize, output: &mut [f32], min_madds: usize) {
+    let (rows, cols) = blocked_shape(weight, input, count, output);
+    if !threads_pay(rows, cols, count, pool.threads(), min_madds) {
+        return matmul_blocked(weight, input, count, output);
+    }
+    // The pool divides tile groups, so a range is a whole number of tiles except at
+    // the last row; the packed input is made once and shared with the workers.
+    let groups = rows.div_ceil(TILE_ROWS);
+    let (weight, input, packed) = (weight.clone(), Arc::new(input.to_vec()), Arc::new(pack_inputs(input, count, cols)));
+    let job: Job = Arc::new(move |range| {
+        blocked_rows(&weight, range.start * TILE_ROWS..(range.end * TILE_ROWS).min(rows), &packed, &input, count)
+    });
+    transpose_into(&pool.run(groups, &job), rows, count, output);
+}
+
 /// RMSNorm: `weight * (x / sqrt(mean(x^2) + eps))`. The mean of squares is a
 /// sum in index order divided by the length, and the reciprocal square root
 /// is taken once, then multiplied in, as the reference does in f32.
@@ -775,5 +927,98 @@ mod tests {
         assert!(threads_pay(49152, 576, 1, 2, MIN_THREADED_MADDS), "unembedding pays");
         assert!(threads_pay(576, 576, 4, 8, MIN_THREADED_MADDS), "more inputs make the same weight pay");
         assert!(threads_pay(1, 1, 1, 2, 0), "a zero threshold always threads");
+    }
+
+    /// The blocked product's definition (FR-46): every element one sum in index order, each product
+    /// added with a fused multiply-add. Layout `[count][rows]`, like the products'.
+    fn fused_sum_reference(weight: &Tensor, input: &[f32], count: usize) -> Vec<f32> {
+        let (rows, cols) = (weight.shape()[0], weight.shape()[1]);
+        let mut out = vec![0f32; count * rows];
+        for t in 0..count {
+            for i in 0..rows {
+                let mut sum = 0f32;
+                for k in 0..cols {
+                    sum = weight.row(i)[k].mul_add(input[t * cols + k], sum);
+                }
+                out[t * rows + i] = sum;
+            }
+        }
+        out
+    }
+
+    const BLOCKED_SHAPES: [(usize, usize); 12] = [
+        (192, 576), (576, 576), (1536, 576), (576, 1536), (1, 37), (5, 16), (3, 7), (100, 33), (49, 15),
+        (4, 16), (7, 17), (8, 1),
+    ];
+    const BLOCKED_COUNTS: [usize; 11] = [1, 2, 7, 8, 15, 16, 17, 31, 32, 33, 67];
+
+    // FR-46, Spec §4: the blocked product is exactly the index-order fused sum, at the model's shapes
+    // and at row counts, input counts and lengths that do not divide the tile, are smaller than it, or are 1.
+    #[test]
+    fn blocked_matmul_is_exactly_the_index_order_fused_sum() {
+        for (i, &(rows, cols)) in BLOCKED_SHAPES.iter().enumerate() {
+            let w = weight(rows, cols, 500 + i as u64);
+            for count in BLOCKED_COUNTS {
+                let x = random(600 + i as u64, count * cols);
+                let mut got = vec![f32::NAN; count * rows];
+                matmul_blocked(&w, &x, count, &mut got);
+                assert_eq!(got, fused_sum_reference(&w, &x, count), "shape {rows}x{cols} count {count}");
+            }
+        }
+    }
+
+    // FR-46, Spec §4: a tile edge forgotten would leave elements unwritten; none is.
+    #[test]
+    fn blocked_matmul_writes_every_output_element() {
+        for (rows, cols, count) in [(5, 16, 17), (7, 33, 33), (3, 7, 1), (9, 20, 31), (4, 16, 16)] {
+            let w = weight(rows, cols, 7);
+            let x = random(8, count * cols);
+            let mut got = vec![f32::NAN; count * rows];
+            matmul_blocked(&w, &x, count, &mut got);
+            assert!(got.iter().all(|v| v.is_finite()), "{rows}x{cols} count {count}");
+        }
+    }
+
+    // FR-46, FR-47, HC-2: the blocked product agrees with the test-only linear algebra crate far
+    // inside S-1's tolerance, and is not the 16-partial-sum product's arithmetic: a comparison that
+    // could not see a changed order of additions would be caught here.
+    #[test]
+    fn blocked_matmul_agrees_with_matrixmultiply_and_differs_from_the_partial_sum_loop() {
+        let (rows, cols, count) = (192, 576, 8);
+        let w = weight(rows, cols, 41);
+        let x = random(42, count * cols);
+        let mut blocked = vec![0f32; count * rows];
+        matmul_blocked(&w, &x, count, &mut blocked);
+        for t in 0..count {
+            close(&blocked[t * rows..(t + 1) * rows], &reference(&w, &x[t * cols..(t + 1) * cols]), 1e-4);
+        }
+        let mut sixteen = vec![0f32; count * rows];
+        matmul(&w, &x, count, &mut sixteen);
+        assert_ne!(blocked, sixteen, "a different order of additions must show in some bit");
+        for (a, b) in blocked.iter().zip(&sixteen) {
+            assert!((a - b).abs() < 1e-4, "but only in the last bits: {a} {b}");
+        }
+    }
+
+    // FR-46, FR-43, Spec §4: the pooled blocked product equals the single-threaded one exactly at every
+    // count, so neither the tile nor the division of rows changes a bit.
+    #[test]
+    fn pooled_blocked_matmul_equals_blocked_matmul_exactly_at_every_count() {
+        for threads in [1, 2, 3, 7, 16] {
+            let pool = Pool::new(threads).unwrap();
+            for (i, &(rows, cols)) in BLOCKED_SHAPES.iter().enumerate() {
+                for count in [1, 8, 17, 33] {
+                    let w = weight(rows, cols, 900 + i as u64);
+                    let x = random(950 + i as u64, count * cols);
+                    let mut want = vec![0f32; count * rows];
+                    matmul_blocked(&w, &x, count, &mut want);
+                    for min in [0, usize::MAX] {
+                        let mut got = vec![f32::NAN; count * rows];
+                        matmul_blocked_pooled_min(&pool, &w, &x, count, &mut got, min);
+                        assert_eq!(got, want, "threads {threads} shape {rows}x{cols} count {count} min {min}");
+                    }
+                }
+            }
+        }
     }
 }
