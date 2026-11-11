@@ -140,7 +140,7 @@ Filled in as the phases land.
 
 ## 6. Upstream feedback
 
-Recorded here for the upstream owner; the approved documents are not edited from this plan without the owner's permission. This section is a permanent record.
+Recorded here for the upstream owner; the approved documents are not edited from this plan without the owner's permission. This section is a permanent record. **Absorbed in place into Requirements 0.9 and Specification 0.7 (both still `draft` in their header) with the owner's permission of 2026-11-11, no version bump: every row except the default thread count (Task 22.2), which waits on the owner's decision about the rule.**
 
 | Raised | Upstream item | What and why |
 | --- | --- | --- |
