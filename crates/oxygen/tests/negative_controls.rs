@@ -134,6 +134,22 @@ fn fr43_s1_s2_a_skipped_range_fails_the_logits_and_the_intermediates() {
     assert!(passes(&results, Check::Encode) && passes(&results, Check::Decode), "only the engine's math was broken");
 }
 
+// FR-46, S-1, S-2, HC-4: a blocked product that forgets its last, partial tile fails the gate. The
+// prompt's length is not a multiple of the tile's 16 inputs, so there is a partial tile to forget; with
+// no fault the same prompt passes, so the failure is the fault's.
+#[test]
+fn fr46_s1_s2_an_unfinished_tile_fails_the_logits_and_the_intermediates() {
+    let clean = run(None);
+    for check in [Check::Logits, Check::Top1, Check::Intermediates] {
+        assert!(passes(&clean, check), "{} should pass: {:?}", check.name(), result(&clean, check).verdict);
+    }
+    let results = run(Some(Fault::UnfinishedTile));
+    failure(&results, Check::Logits);
+    let (_, message) = failure(&results, Check::Intermediates);
+    assert!(message.starts_with("layer"), "the embedding is right and a layer is the first wrong tensor: {message}");
+    assert!(passes(&results, Check::Encode) && passes(&results, Check::Decode), "only the engine's math was broken");
+}
+
 // S-1, HC-4: the perturbation is sized against the limit in force. Its size is measured, not assumed: the same
 // prompt is run with and without the fault and the one logit it touches is compared. If S-1 is ever loosened
 // to the perturbation or past it, this fails loudly instead of leaving a control that can no longer fail; if S-1

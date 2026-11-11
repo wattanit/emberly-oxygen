@@ -16,6 +16,9 @@ pub struct Model {
     pub(crate) weights: Weights,
     fault: Option<Fault>,
     pool: Pool,
+    /// Whether `prefill` uses the blocked product (FR-46); always true unless a test or the benchmark
+    /// asks for the 0.4.1 loop with the `bench-kernels` feature (FR-47's drift check).
+    blocked: bool,
 }
 
 /// The thread count the release's sweep chose (FR-44, Spec §12): the count with
@@ -89,7 +92,7 @@ impl Model {
             load_ms = %format_args!("{:.3}", start.elapsed().as_secs_f64() * 1000.0),
             "model loaded"
         );
-        Ok(Model { config, weights, fault: None, pool })
+        Ok(Model { config, weights, fault: None, pool, blocked: true })
     }
 
     /// The number of threads the products use, the caller included (FR-44).
@@ -104,7 +107,7 @@ impl Model {
     /// A model built from parts already in memory, for tests that need a tiny one.
     #[cfg(test)]
     pub(crate) fn from_parts(config: Config, weights: Weights) -> Model {
-        Model { config, weights, fault: None, pool: Pool::new(1).expect("one thread") }
+        Model { config, weights, fault: None, pool: Pool::new(1).expect("one thread"), blocked: true }
     }
 
     /// Makes the forward pass deliberately wrong in one known way, so a test can
@@ -115,7 +118,18 @@ impl Model {
         if fault == Fault::SkippedRows {
             self.pool.skip_last_range();
         }
+        if fault == Fault::UnfinishedTile {
+            self.pool.leave_tiles_unfinished();
+        }
         self.fault = Some(fault);
+    }
+
+    /// Makes `prefill` use the 0.4.1 matrix-matrix product (16 partial sums) instead of the blocked
+    /// one, so the drift check of FR-47 can compare the two on the whole prompt set (Spec §11).
+    /// Only exists with the `bench-kernels` feature, which a normal build never enables.
+    #[cfg(feature = "bench-kernels")]
+    pub fn use_unblocked_prefill(&mut self) {
+        self.blocked = false;
     }
 
     /// Starts an empty sequence. Capture is off unless asked for.
@@ -161,6 +175,7 @@ impl Session<'_> {
             logits,
             self.capture.as_mut(),
             self.model.fault,
+            self.model.blocked,
         )
     }
 

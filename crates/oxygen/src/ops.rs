@@ -87,6 +87,7 @@ fn dot_lanes<const N: usize>(row: &[f32], input: &[f32]) -> f32 {
 ///
 /// Panics if the weight is not 2-D or the lengths disagree (internal bug,
 /// Spec §14).
+#[cfg(any(test, feature = "bench-kernels"))]
 pub(crate) fn matmul(weight: &Tensor, input: &[f32], count: usize, output: &mut [f32]) {
     let &[rows, cols] = weight.shape() else {
         panic!("matmul needs a 2-D weight, got shape {:?}", weight.shape());
@@ -135,10 +136,12 @@ pub(crate) fn matvec_pooled_min(pool: &Pool, weight: &Tensor, input: &[f32], out
 }
 
 /// [`matmul`] with the weight's rows divided among the pool's threads (FR-43).
+#[cfg(any(test, feature = "bench-kernels"))]
 pub(crate) fn matmul_pooled(pool: &Pool, weight: &Tensor, input: &[f32], count: usize, output: &mut [f32]) {
     matmul_pooled_min(pool, weight, input, count, output, MIN_THREADED_MADDS);
 }
 
+#[cfg(any(test, feature = "bench-kernels"))]
 pub(crate) fn matmul_pooled_min(pool: &Pool, weight: &Tensor, input: &[f32], count: usize, output: &mut [f32], min_madds: usize) {
     let &[rows, cols] = weight.shape() else {
         panic!("matmul needs a 2-D weight, got shape {:?}", weight.shape());
@@ -177,11 +180,20 @@ pub(crate) const TILE_ROWS: usize = 4;
 /// input panel (initial; see [`TILE_ROWS`]).
 pub(crate) const TILE_INPUTS: usize = 16;
 
+/// Products summed before the running total takes their sum (FR-46, Spec §4).
+/// One long sequential sum accumulates more rounding than the 16 partial sums
+/// of [`matmul`] did (measured on the real model: worst logit error against the
+/// float64 reference 6.5e-4 against 3.5e-4); adding the sums of chunks of 64
+/// brought it back for about 3% of the kernel's speed (plan 0.4.2 §5). Initial;
+/// tune with use.
+pub(crate) const TILE_DEPTH: usize = 64;
+
 /// [`matmul`] in register tiles (FR-46, FR-47, Spec §4): each output element
-/// is one sum over the shared dimension in index order, each product added by
-/// a fused multiply-add (rounded once), so an element's value does not depend
-/// on the tile it falls in, on the tile shape or on how rows are divided among
-/// threads. The result differs from [`matmul`]'s in the last bits (its sums are
+/// is a sum over the shared dimension in index order, taken in chunks of
+/// [`TILE_DEPTH`] products: each chunk is summed with fused multiply-adds
+/// (rounded once per product) and the chunk sums are added in order. So an
+/// element's value does not depend on the tile it falls in, on the tile shape
+/// or on how rows are divided among threads. The result differs from [`matmul`]'s in the last bits (its sums are
 /// 16 partial sums with a separate multiply and add).
 ///
 /// Panics as [`matmul`] does.
@@ -222,33 +234,49 @@ fn pack_inputs(input: &[f32], count: usize, cols: usize) -> Vec<f32> {
     packed
 }
 
-/// One tile: `R` weight rows against one packed panel, every accumulator a sum
-/// over `k` in index order with a fused multiply-add. The shape (4 rows by 16
-/// inputs, and one row for the leftovers) is the one the compiler turns into
-/// vector fused multiply-adds from this safe code (plan 0.4.2 §5).
+/// One tile: `R` weight rows against one packed panel. Every accumulator is a
+/// sum over one chunk of `k` in index order with a fused multiply-add; the chunk
+/// sums go into the running totals in order. The shape (4 rows by 16 inputs,
+/// and one row for the leftovers) is the one the compiler turns into vector
+/// fused multiply-adds from this safe code (plan 0.4.2 §5).
 #[inline(always)]
 fn tile<const R: usize>(rows: [&[f32]; R], panel: &[f32], cols: usize) -> [[f32; TILE_INPUTS]; R] {
-    let mut acc = [[0f32; TILE_INPUTS]; R];
-    for k in 0..cols {
-        let x: &[f32; TILE_INPUTS] = panel[k * TILE_INPUTS..(k + 1) * TILE_INPUTS].try_into().expect("a panel row");
-        for i in 0..R {
-            let w = rows[i][k];
-            for j in 0..TILE_INPUTS {
-                acc[i][j] = w.mul_add(x[j], acc[i][j]);
+    let mut total = [[0f32; TILE_INPUTS]; R];
+    let mut start = 0;
+    while start < cols {
+        let end = (start + TILE_DEPTH).min(cols);
+        let mut acc = [[0f32; TILE_INPUTS]; R];
+        for k in start..end {
+            let x: &[f32; TILE_INPUTS] = panel[k * TILE_INPUTS..(k + 1) * TILE_INPUTS].try_into().expect("a panel row");
+            for i in 0..R {
+                let w = rows[i][k];
+                for j in 0..TILE_INPUTS {
+                    acc[i][j] = w.mul_add(x[j], acc[i][j]);
+                }
             }
         }
+        for i in 0..R {
+            for j in 0..TILE_INPUTS {
+                total[i][j] += acc[i][j];
+            }
+        }
+        start = end;
     }
-    acc
+    total
 }
 
-/// One element by the same sum as the tile's, for the inputs that do not fill a panel.
+/// One element by the same chunked sum as the tile's, for the inputs that do not fill a panel.
 #[inline(always)]
 fn fused_dot(row: &[f32], input: &[f32]) -> f32 {
-    let mut sum = 0f32;
-    for (w, x) in row.iter().zip(input) {
-        sum = w.mul_add(*x, sum);
+    let mut total = 0f32;
+    for (w, x) in row.chunks(TILE_DEPTH).zip(input.chunks(TILE_DEPTH)) {
+        let mut chunk = 0f32;
+        for (w, x) in w.iter().zip(x) {
+            chunk = w.mul_add(*x, chunk);
+        }
+        total += chunk;
     }
-    sum
+    total
 }
 
 /// The blocked product for the weight rows in `range`, written `[row][input]`
@@ -306,6 +334,18 @@ pub(crate) fn matmul_blocked_pooled(pool: &Pool, weight: &Tensor, input: &[f32],
 }
 
 pub(crate) fn matmul_blocked_pooled_min(pool: &Pool, weight: &Tensor, input: &[f32], count: usize, output: &mut [f32], min_madds: usize) {
+    matmul_blocked_threaded(pool, weight, input, count, output, min_madds);
+    // The negative control (Spec §17): the inputs outside the whole panels are left unwritten.
+    #[cfg(feature = "negative-controls")]
+    if pool.tiles_unfinished() {
+        let rows = weight.shape()[0];
+        for t in count / TILE_INPUTS * TILE_INPUTS..count {
+            output[t * rows..(t + 1) * rows].fill(0.0);
+        }
+    }
+}
+
+fn matmul_blocked_threaded(pool: &Pool, weight: &Tensor, input: &[f32], count: usize, output: &mut [f32], min_madds: usize) {
     let (rows, cols) = blocked_shape(weight, input, count, output);
     if !threads_pay(rows, cols, count, pool.threads(), min_madds) {
         return matmul_blocked(weight, input, count, output);
@@ -929,33 +969,38 @@ mod tests {
         assert!(threads_pay(1, 1, 1, 2, 0), "a zero threshold always threads");
     }
 
-    /// The blocked product's definition (FR-46): every element one sum in index order, each product
-    /// added with a fused multiply-add. Layout `[count][rows]`, like the products'.
+    /// The blocked product's definition (FR-46): every element a sum over the shared dimension in index
+    /// order, taken in chunks of 64 products, each chunk summed with fused multiply-adds and the chunk sums
+    /// added in order. Layout `[count][rows]`, like the products'.
     fn fused_sum_reference(weight: &Tensor, input: &[f32], count: usize) -> Vec<f32> {
         let (rows, cols) = (weight.shape()[0], weight.shape()[1]);
         let mut out = vec![0f32; count * rows];
         for t in 0..count {
             for i in 0..rows {
-                let mut sum = 0f32;
-                for k in 0..cols {
-                    sum = weight.row(i)[k].mul_add(input[t * cols + k], sum);
+                let mut total = 0f32;
+                for start in (0..cols).step_by(64) {
+                    let mut chunk = 0f32;
+                    for k in start..(start + 64).min(cols) {
+                        chunk = weight.row(i)[k].mul_add(input[t * cols + k], chunk);
+                    }
+                    total += chunk;
                 }
-                out[t * rows + i] = sum;
+                out[t * rows + i] = total;
             }
         }
         out
     }
 
-    const BLOCKED_SHAPES: [(usize, usize); 12] = [
+    const BLOCKED_SHAPES: [(usize, usize); 16] = [
         (192, 576), (576, 576), (1536, 576), (576, 1536), (1, 37), (5, 16), (3, 7), (100, 33), (49, 15),
-        (4, 16), (7, 17), (8, 1),
+        (4, 16), (7, 17), (8, 1), (9, 64), (6, 65), (5, 129), (10, 192),
     ];
     const BLOCKED_COUNTS: [usize; 11] = [1, 2, 7, 8, 15, 16, 17, 31, 32, 33, 67];
 
-    // FR-46, Spec §4: the blocked product is exactly the index-order fused sum, at the model's shapes
+    // FR-46, Spec §4: the blocked product is exactly the chunked fused sum, at the model's shapes
     // and at row counts, input counts and lengths that do not divide the tile, are smaller than it, or are 1.
     #[test]
-    fn blocked_matmul_is_exactly_the_index_order_fused_sum() {
+    fn blocked_matmul_is_exactly_the_chunked_fused_sum() {
         for (i, &(rows, cols)) in BLOCKED_SHAPES.iter().enumerate() {
             let w = weight(rows, cols, 500 + i as u64);
             for count in BLOCKED_COUNTS {

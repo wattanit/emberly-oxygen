@@ -14,11 +14,25 @@ use crate::kv_cache::KvCache;
 use std::sync::Arc;
 
 use crate::pool::{Job, Pool};
-use crate::ops::{add_assign, matmul_pooled, matvec_pooled, mul_assign, rms_norm, rope, silu, softmax};
+#[cfg(feature = "bench-kernels")]
+use crate::ops::matmul_pooled;
+use crate::ops::{add_assign, matmul_blocked_pooled, matvec_pooled, mul_assign, rms_norm, rope, silu, softmax};
 use crate::weights::Weights;
 use crate::{Capture, Config, Error, Logits};
 
 use tracing::Level;
+
+/// A batched product: the blocked one (FR-46), or, only where a test or the
+/// benchmark asked for it with the `bench-kernels` feature, the 0.4.1 loop that
+/// FR-47's drift check compares it with.
+fn product(pool: &Pool, blocked: bool, weight: &crate::Tensor, input: &[f32], count: usize, output: &mut [f32]) {
+    #[cfg(feature = "bench-kernels")]
+    if !blocked {
+        return matmul_pooled(pool, weight, input, count, output);
+    }
+    let _ = blocked;
+    matmul_blocked_pooled(pool, weight, input, count, output);
+}
 
 /// Processes `token` at the next position and returns the logits for it.
 ///
@@ -147,6 +161,7 @@ pub(crate) fn prefill(
     logits: Logits,
     mut capture: Option<&mut Capture>,
     fault: Option<Fault>,
+    blocked: bool,
 ) -> Result<Vec<f32>, Error> {
     assert_eq!(cache.len(), 0, "prefill needs an empty cache");
     if tokens.is_empty() {
@@ -197,9 +212,9 @@ pub(crate) fn prefill(
         let mut q = vec![0f32; n * q_width];
         let mut k = vec![0f32; n * kv_width];
         let mut v = vec![0f32; n * kv_width];
-        matmul_pooled(pool, &layer.q_proj, &h, n, &mut q);
-        matmul_pooled(pool, &layer.k_proj, &h, n, &mut k);
-        matmul_pooled(pool, &layer.v_proj, &h, n, &mut v);
+        product(pool, blocked, &layer.q_proj, &h, n, &mut q);
+        product(pool, blocked, &layer.k_proj, &h, n, &mut k);
+        product(pool, blocked, &layer.v_proj, &h, n, &mut v);
         for t in 0..n {
             let (qr, kr) = (&mut q[t * q_width..(t + 1) * q_width], &mut k[t * kv_width..(t + 1) * kv_width]);
             if let Some(f) = fault.filter(|f| f.interleaves_rope()) {
@@ -228,7 +243,7 @@ pub(crate) fn prefill(
             attention_rows_pooled(pool, &q, cache, index, n, unmasked, heads, kv_heads, head_dim, &mut attended);
         }
         let mut projected = vec![0f32; n * hidden];
-        matmul_pooled(pool, &layer.o_proj, &attended, n, &mut projected);
+        product(pool, blocked, &layer.o_proj, &attended, n, &mut projected);
         add_assign(&mut x, &projected);
         let last_row = n * hidden - hidden..;
         let after_attention = if stats { norm(&x[last_row.clone()]) } else { 0.0 };
@@ -239,12 +254,12 @@ pub(crate) fn prefill(
         }
         let mut gate = vec![0f32; n * config.intermediate_size];
         let mut up = vec![0f32; n * config.intermediate_size];
-        matmul_pooled(pool, &layer.gate_proj, &h, n, &mut gate);
-        matmul_pooled(pool, &layer.up_proj, &h, n, &mut up);
+        product(pool, blocked, &layer.gate_proj, &h, n, &mut gate);
+        product(pool, blocked, &layer.up_proj, &h, n, &mut up);
         silu(&mut gate);
         mul_assign(&mut gate, &up);
         let mut down = vec![0f32; n * hidden];
-        matmul_pooled(pool, &layer.down_proj, &gate, n, &mut down);
+        product(pool, blocked, &layer.down_proj, &gate, n, &mut down);
         add_assign(&mut x, &down);
 
         if stats {
@@ -278,7 +293,7 @@ pub(crate) fn prefill(
     let vocab = config.vocab_size;
     let mut out = vec![0f32; rows * vocab];
     if logits == Logits::All {
-        matmul_pooled(pool, &weights.embed_tokens, &normed, rows, &mut out);
+        product(pool, blocked, &weights.embed_tokens, &normed, rows, &mut out);
     } else {
         matvec_pooled(pool, &weights.embed_tokens, &normed, &mut out);
     }
@@ -765,7 +780,9 @@ mod tests {
         assert!(matches!(session.step(1), Err(Error::Rejected(_))));
     }
 
-    // FR-40, Spec §7: `Last` is the last row of `All`, bit for bit, and its capture's final norm is that row only.
+    // FR-40, FR-46, Spec §7: `Last` is the last row of `All` within rounding (its unembedding is a matrix-vector
+    // product with 16 partial sums and `All`'s a blocked product, so since 0.4.2 not bit for bit), and its
+    // capture's final norm is that row only.
     #[test]
     fn last_logits_are_the_last_row_of_all() {
         let model = tiny_model(8);
@@ -774,7 +791,7 @@ mod tests {
         let mut session = model.session(true);
         let last = session.prefill(&tokens, Logits::Last).unwrap();
         assert_eq!(last.len(), 4);
-        assert!(last.iter().zip(&all[2 * 4..]).all(|(p, q)| p.to_bits() == q.to_bits()));
+        close(&last, &all[2 * 4..], 1e-5);
         let capture = session.capture().unwrap();
         assert_eq!(capture.final_norm.len(), 4, "the final norm of the last row only");
         assert_eq!(capture.embedding.len(), 3 * 4, "the embedding and layers cover every row");
