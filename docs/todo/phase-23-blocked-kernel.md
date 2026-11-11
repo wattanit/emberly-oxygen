@@ -19,8 +19,8 @@ Dependencies: none new. Out of scope: `unsafe`, SIMD intrinsics, a packed copy o
 
 ## 23.3 Measure in the library (FR-46, FR-48)
 
-- [ ] Rate of `matmul`, `matmul_blocked` and sgemm at the three shapes, 128 inputs, one thread; tile sweep in the real code; record in §5.
-- [ ] If 4 × 16 is not clearly fastest or the rate is far under 118 to 120, stop and take it to the owner.
+- [x] Rate of `matmul`, `matmul_blocked` and sgemm at the three shapes, 128 inputs, one thread; tile sweep in the real code; record in §5.
+- [x] If 4 × 16 is not clearly fastest or the rate is far under 118 to 120, stop and take it to the owner.
 
 ## 23.4 Pooled `matmul_blocked` (FR-46, FR-43)
 

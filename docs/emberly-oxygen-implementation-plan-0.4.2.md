@@ -101,6 +101,24 @@ The numbers it rests on: one core's multiply-add peak is 111 GFLOP/s (plan 0.4.1
 
 Filled in as the phases land.
 
+- **Tasks 23.1, 23.2 and 23.4 (done, one commit).** `matmul_blocked` and `matmul_blocked_pooled` are in (4 × 16 tile, `mul_add`, inputs packed `[k][16]`, leftover rows one at a time, leftover inputs singly), not yet used by `prefill`. `cargo test --no-fail-fast`: **456 passed, 0 failed** (452 at 0.4.1). The blocked product equals an index-order fused sum written in the test exactly at 12 shapes (the model's four, and odd ones from 1 × 37 to 100 × 33, 8 × 1 and 4 × 16) by 11 input counts (1 to 67, around the tile's width of 16); every output element is written; it agrees with `matrixmultiply` within 1e-4 and differs from the 16-partial-sum product in some bit, by under 1e-4; and the pooled form equals it exactly at 1, 2, 3, 7 and 16 threads. The tests were seen failing against stubs before the code.
+- **Task 23.3 (measured; no stop needed).** A scratchpad program (`blockrate`, release build, not in the repository) timed `matmul`, `matmul_blocked` and `matrixmultiply`'s sgemm through the `bench-kernels` module at the three shapes with 128 inputs on one thread (best of nine, three calls each), the tile constants edited and the library rebuilt for each shape. The rate includes the input packing, the transposed output copy and the allocation, which the profile's kernel did not. GFLOP/s at 1536 × 576, 576 × 1536, 576 × 576:
+
+  | Tile (rows × inputs) | 1536 × 576 | 576 × 1536 | 576 × 576 |
+  | --- | --- | --- | --- |
+  | `matmul` (0.4.1) | 36.2 | 38.1 | 36.4 |
+  | **4 × 16** | **93.5** | **110.9** | **107.4** |
+  | 6 × 8 | 77.5 | 89.4 | 87.0 |
+  | 8 × 16 | 74.6 | 82.7 | 83.7 |
+  | 8 × 8 | 70.4 | 80.0 | 79.6 |
+  | 4 × 32 | 65.8 | 73.3 | 72.2 |
+  | 4 × 8 | 58.3 | 64.2 | 64.2 |
+  | 8 × 4 | 57.9 | 63.9 | 63.5 |
+  | 12 × 4 | 55.5 | 63.6 | 59.2 |
+  | sgemm | 106.5 | 106.6 | 106.3 |
+
+  4 × 16 is the fastest at every shape: 2.6× to 2.9× the 0.4.1 loop, and 88% to 104% of sgemm. It is 79% to 93% of the profile's 118 to 120; the difference is the packing, the transposed copy and the allocation (at 1536 × 576 the output is the largest). Those are candidates for a follow-up inside this release if prefill shows them (not measured). The ordering of the tiles agrees with the profile, and the cliffs of the profile are in the real code too, so the tile stays pinned at 4 × 16. Decision for the tile, by the open item of Specification §19: 4 × 16, as the measurement is not in doubt; the owner can overrule.
+
 ## 6. Upstream feedback
 
 Recorded here for the upstream owner; the approved documents are not edited from this plan without the owner's permission. This section is a permanent record.
