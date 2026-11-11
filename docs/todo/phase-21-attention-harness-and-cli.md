@@ -34,9 +34,9 @@ Dependencies: none new. Out of scope: finer attention splits (only if the sweep 
 
 ## 21.6 `--threads` (FR-44, S-8)
 
-- [ ] Tests first: flag on `generate` and `chat`; count in `-v` and the run summary; 0 rejected naming option and value; output identical at every count and verbosity.
-- [ ] Then the flag.
+- [x] Tests first: flag on `generate` and `chat`; count in `-v` and the run summary; 0 rejected naming option and value; output identical at every count and verbosity.
+- [x] Then the flag.
 
 ## 21.7 The full gate
 
-- [ ] `cargo test --no-fail-fast`, whole summary read; harness table recorded in §5.
+- [x] `cargo test --no-fail-fast`, whole summary read; harness table recorded in §5.

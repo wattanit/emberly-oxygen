@@ -80,6 +80,7 @@ impl Model {
             intermediate_size = c.intermediate_size,
             vocab_size = c.vocab_size,
             context_length = c.context_length,
+            threads = pool.threads(),
             load_ms = %format_args!("{:.3}", start.elapsed().as_secs_f64() * 1000.0),
             "model loaded"
         );
@@ -193,6 +194,7 @@ mod tests {
         ] {
             assert_eq!(event.get(field), Some(value.to_string().as_str()), "{field}");
         }
+        assert_eq!(event.get("threads"), Some(model.threads().to_string().as_str()), "FR-44: the count is in the summary");
         assert!(event.get("load_ms").unwrap().parse::<f64>().unwrap() > 0.0);
         assert!(event.get("dir").unwrap().contains("smollm2-135m"));
 
