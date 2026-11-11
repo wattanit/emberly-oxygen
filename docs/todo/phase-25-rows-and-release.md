@@ -22,11 +22,11 @@ Dependencies: none new. Out of scope: SIMD intrinsics, `unsafe`, lower-precision
 
 ## 25.4 Record the measurements (FR-48)
 
-- [ ] Kernel rows; prefill sweep and workloads against 0.4.1; thread sweep against 0.4.1; decode unchanged; peak memory; where the speed-up stops and why.
+- [x] Kernel rows; prefill sweep and workloads against 0.4.1; thread sweep against 0.4.1; decode unchanged; peak memory; where the speed-up stops and why.
 
 ## 25.5 Release note and README
 
-- [ ] `docs/releases/0.4.2.md`; README status, version note and the equality rule.
+- [x] `docs/releases/0.4.2.md`; README status, version note and the equality rule.
 
 ## 25.6 Settle the SFD
 
