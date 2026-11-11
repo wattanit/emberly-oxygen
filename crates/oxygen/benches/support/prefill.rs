@@ -25,6 +25,18 @@ pub fn logits_gap(a: &[f32], b: &[f32]) -> f64 {
     a.iter().zip(b).map(|(x, y)| (f64::from(*x) - f64::from(*y)).abs()).fold(0.0, f64::max)
 }
 
+/// The largest difference the sweep accepts between its two paths' last logits:
+/// the batched-against-one-token bound of Specification §11, 1e-3 since release
+/// 0.4.2 (the paths sum in a different order, so they differ by about 2e-5 on
+/// these prompts; 0.4.0 and 0.4.1 measured exactly 0 and used 1e-5).
+pub const AGREEMENT_BOUND: f64 = 1e-3;
+
+/// Whether a gap between the two paths' last logits is acceptable. NaN and
+/// infinity (paths of different shapes) never are.
+pub fn agree(gap: f64) -> bool {
+    gap <= AGREEMENT_BOUND
+}
+
 /// The row fields of one path at one prompt length.
 pub fn fields(path: &str, prompt_tokens: usize) -> Value {
     json!({"group": "prefill", "path": path, "prompt_tokens": prompt_tokens})

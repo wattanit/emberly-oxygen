@@ -238,7 +238,7 @@ fn prefill_rows(conditions: &record::Conditions) -> Vec<Value> {
     for n in prefill::LENGTHS {
         let ids = prefill::prompt_ids(&base, n);
         let gap = prefill::logits_gap(&by_steps(&ids), &batched(&ids));
-        if gap > 1e-5 {
+        if !prefill::agree(gap) {
             fail(&format!("prefill: at {n} tokens the two paths differ by {gap:e} in the last logits; nothing is recorded"));
         }
         for (path, run) in [("one_token", &by_steps as &dyn Fn(&[u32]) -> Vec<f32>), ("batched", &batched)] {

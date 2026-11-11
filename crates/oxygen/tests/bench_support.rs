@@ -302,3 +302,17 @@ fn fr48_a_batched_kernel_row_names_its_shape_and_kernels() {
     }
     assert_eq!(batched::KERNELS, ["matmul", "blocked", "matrixmultiply"]);
 }
+
+// FR-41, FR-47, Spec §11, §12: the prefill sweep requires its two paths to agree on the last logits within
+// the batched-against-one-token bound, 1e-3 since 0.4.2 (they sum in a different order, so they differ by
+// about 2e-5 on the benchmark's prompts); a difference of defect size is refused.
+#[test]
+fn fr41_fr47_the_sweeps_agreement_bound_is_the_batched_against_one_token_bound() {
+    assert_eq!(prefill::AGREEMENT_BOUND, 1e-3);
+    assert!(prefill::agree(0.0));
+    assert!(prefill::agree(1.67e-5), "the observed rounding difference passes");
+    assert!(prefill::agree(1e-3), "the bound itself passes");
+    assert!(!prefill::agree(2e-3));
+    assert!(!prefill::agree(f64::INFINITY), "paths of different shapes never agree");
+    assert!(!prefill::agree(f64::NAN));
+}
