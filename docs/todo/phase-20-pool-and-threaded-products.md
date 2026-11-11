@@ -27,5 +27,5 @@ Dependencies: none new. Out of scope: `unsafe`, SIMD intrinsics, tiling, a paral
 
 ## 20.4 `Model::load_with_threads` (FR-44)
 
-- [ ] Tests first: count stored; 0 rejected naming `threads`; runs at 1.
-- [ ] Then the loader and the pool's place in the session.
+- [x] Tests first: count stored; 0 rejected naming `threads`; runs at 1.
+- [x] Then the loader and the pool's place in the session.

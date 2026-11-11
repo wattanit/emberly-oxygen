@@ -11,7 +11,8 @@
 
 use crate::fault::{self, Fault};
 use crate::kv_cache::KvCache;
-use crate::ops::{add_assign, matmul, matvec, mul_assign, rms_norm, rope, silu, softmax};
+use crate::pool::Pool;
+use crate::ops::{add_assign, matmul_pooled, matvec_pooled, mul_assign, rms_norm, rope, silu, softmax};
 use crate::weights::Weights;
 use crate::{Capture, Config, Error, Logits};
 
@@ -26,6 +27,7 @@ use tracing::Level;
 pub(crate) fn step(
     config: &Config,
     weights: &Weights,
+    pool: &Pool,
     cache: &mut KvCache,
     token: u32,
     mut capture: Option<&mut Capture>,
@@ -64,9 +66,9 @@ pub(crate) fn step(
         let mut q = vec![0f32; heads * head_dim];
         let mut k = vec![0f32; kv_heads * head_dim];
         let mut v = vec![0f32; kv_heads * head_dim];
-        matvec(&layer.q_proj, &h, &mut q);
-        matvec(&layer.k_proj, &h, &mut k);
-        matvec(&layer.v_proj, &h, &mut v);
+        matvec_pooled(pool, &layer.q_proj, &h, &mut q);
+        matvec_pooled(pool, &layer.k_proj, &h, &mut k);
+        matvec_pooled(pool, &layer.v_proj, &h, &mut v);
         if let Some(f) = fault.filter(|f| f.interleaves_rope()) {
             fault::rope_interleaved(f, &mut q, position, heads, head_dim, theta);
             fault::rope_interleaved(f, &mut k, position, kv_heads, head_dim, theta);
@@ -80,7 +82,7 @@ pub(crate) fn step(
         let record = stats.then_some(&mut most_attended[..]);
         attention(&q, cache, index, position + 1, heads, kv_heads, head_dim, &mut attended, record);
         let mut projected = vec![0f32; hidden];
-        matvec(&layer.o_proj, &attended, &mut projected);
+        matvec_pooled(pool, &layer.o_proj, &attended, &mut projected);
         add_assign(&mut x, &projected);
         let after_attention = if stats { norm(&x) } else { 0.0 };
 
@@ -88,12 +90,12 @@ pub(crate) fn step(
         rms_norm(&x, layer.mlp_norm.data(), eps, &mut h);
         let mut gate = vec![0f32; config.intermediate_size];
         let mut up = vec![0f32; config.intermediate_size];
-        matvec(&layer.gate_proj, &h, &mut gate);
-        matvec(&layer.up_proj, &h, &mut up);
+        matvec_pooled(pool, &layer.gate_proj, &h, &mut gate);
+        matvec_pooled(pool, &layer.up_proj, &h, &mut up);
         silu(&mut gate);
         mul_assign(&mut gate, &up);
         let mut down = vec![0f32; hidden];
-        matvec(&layer.down_proj, &gate, &mut down);
+        matvec_pooled(pool, &layer.down_proj, &gate, &mut down);
         add_assign(&mut x, &down);
 
         if stats {
@@ -119,7 +121,7 @@ pub(crate) fn step(
         c.final_norm = h.clone();
     }
     let mut logits = vec![0f32; config.vocab_size];
-    matvec(&weights.embed_tokens, &h, &mut logits);
+    matvec_pooled(pool, &weights.embed_tokens, &h, &mut logits);
     fault::perturb_logits(fault, position, &mut logits);
     Ok(logits)
 }
@@ -133,6 +135,7 @@ pub(crate) fn step(
 pub(crate) fn prefill(
     config: &Config,
     weights: &Weights,
+    pool: &Pool,
     cache: &mut KvCache,
     tokens: &[u32],
     logits: Logits,
@@ -188,9 +191,9 @@ pub(crate) fn prefill(
         let mut q = vec![0f32; n * q_width];
         let mut k = vec![0f32; n * kv_width];
         let mut v = vec![0f32; n * kv_width];
-        matmul(&layer.q_proj, &h, n, &mut q);
-        matmul(&layer.k_proj, &h, n, &mut k);
-        matmul(&layer.v_proj, &h, n, &mut v);
+        matmul_pooled(pool, &layer.q_proj, &h, n, &mut q);
+        matmul_pooled(pool, &layer.k_proj, &h, n, &mut k);
+        matmul_pooled(pool, &layer.v_proj, &h, n, &mut v);
         for t in 0..n {
             let (qr, kr) = (&mut q[t * q_width..(t + 1) * q_width], &mut k[t * kv_width..(t + 1) * kv_width]);
             if let Some(f) = fault.filter(|f| f.interleaves_rope()) {
@@ -214,7 +217,7 @@ pub(crate) fn prefill(
             attention(&q[t * q_width..(t + 1) * q_width], cache, index, positions, heads, kv_heads, head_dim, out, record);
         }
         let mut projected = vec![0f32; n * hidden];
-        matmul(&layer.o_proj, &attended, n, &mut projected);
+        matmul_pooled(pool, &layer.o_proj, &attended, n, &mut projected);
         add_assign(&mut x, &projected);
         let last_row = n * hidden - hidden..;
         let after_attention = if stats { norm(&x[last_row.clone()]) } else { 0.0 };
@@ -225,12 +228,12 @@ pub(crate) fn prefill(
         }
         let mut gate = vec![0f32; n * config.intermediate_size];
         let mut up = vec![0f32; n * config.intermediate_size];
-        matmul(&layer.gate_proj, &h, n, &mut gate);
-        matmul(&layer.up_proj, &h, n, &mut up);
+        matmul_pooled(pool, &layer.gate_proj, &h, n, &mut gate);
+        matmul_pooled(pool, &layer.up_proj, &h, n, &mut up);
         silu(&mut gate);
         mul_assign(&mut gate, &up);
         let mut down = vec![0f32; n * hidden];
-        matmul(&layer.down_proj, &gate, n, &mut down);
+        matmul_pooled(pool, &layer.down_proj, &gate, n, &mut down);
         add_assign(&mut x, &down);
 
         if stats {
@@ -264,9 +267,9 @@ pub(crate) fn prefill(
     let vocab = config.vocab_size;
     let mut out = vec![0f32; rows * vocab];
     if logits == Logits::All {
-        matmul(&weights.embed_tokens, &normed, rows, &mut out);
+        matmul_pooled(pool, &weights.embed_tokens, &normed, rows, &mut out);
     } else {
-        matvec(&weights.embed_tokens, &normed, &mut out);
+        matvec_pooled(pool, &weights.embed_tokens, &normed, &mut out);
     }
     for (r, row) in out.chunks_exact_mut(vocab).enumerate() {
         fault::perturb_logits(fault, first + r, row);
@@ -347,6 +350,7 @@ fn norm(x: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ops::matvec;
     use crate::Session;
     use crate::weights::LayerWeights;
     use crate::{Model, Tensor};
