@@ -22,8 +22,8 @@ Dependencies: none new. Out of scope: `unsafe`, SIMD intrinsics, tiling, a paral
 
 ## 20.3 Threaded `matvec` and `matmul` (FR-43, HC-2)
 
-- [ ] Tests first: exactly equal to single-threaded at counts 1, 2, 3, 7, default; the five shapes; one row; fewer rows than workers.
-- [ ] Then contiguous row ranges, the caller taking one, the small-product threshold.
+- [x] Tests first: exactly equal to single-threaded at counts 1, 2, 3, 7, default; the five shapes; one row; fewer rows than workers.
+- [x] Then contiguous row ranges, the caller taking one, the small-product threshold.
 
 ## 20.4 `Model::load_with_threads` (FR-44)
 

@@ -1,11 +1,15 @@
 use crate::Error;
 
-/// A contiguous `f32` array with a row-major shape (Spec §3). Loading is all
-/// it supports for now; operations arrive with the kernels in Phase 4.
+use std::sync::Arc;
+
+/// A contiguous `f32` array with a row-major shape (Spec §3). The data is
+/// shared, so cloning a tensor copies the shape and not the numbers: the
+/// worker threads hold their own handle on a weight (Spec §4, FR-43) without
+/// `unsafe` and without a copy. A tensor is never modified after it is built.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tensor {
     shape: Vec<usize>,
-    data: Vec<f32>,
+    data: Arc<Vec<f32>>,
 }
 
 impl Tensor {
@@ -18,7 +22,7 @@ impl Tensor {
                 reason: format!("shape {shape:?} does not match {} elements", data.len()),
             });
         }
-        Ok(Tensor { shape, data })
+        Ok(Tensor { shape, data: Arc::new(data) })
     }
 
     pub fn shape(&self) -> &[usize] {
