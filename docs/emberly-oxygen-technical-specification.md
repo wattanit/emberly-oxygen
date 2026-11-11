@@ -387,6 +387,32 @@ Acceptance policy: an engine dependency must be general plumbing under HC-1; any
 - **Tokenizer components.** SmolLM2's `tokenizer.json` was read at M3; §6 states what it uses.
 - **Benchmark platform.** The benchmark machine is an Apple M4 Max on macOS 26.3 (Requirements §13), so §12's Linux-or-macOS assumption holds.
 
+### Feedback absorbed in 0.8
+
+From plan 0.4.2 §6 (G-25). Every row addressed to this document, absorbed or rejected:
+
+| Plan row | Disposition |
+| --- | --- |
+| Task 24.4 (owner's decision, 2026-11-12), §4, §11, §17, §18 | Absorbed into §4, §11, §17 and §18: the blocked kernel's chunked sum and why (65% of S-1 and 45% of S-2 with one sequential sum), the retained 0.4.1 product, and the tests. |
+| Task 24.4, §11, §19 | Absorbed into §11 and the resolved ledger: the tile is 4 × 16, both drift bounds are 1e-3 in logits (worst measured 3.53e-4). |
+| Task 25.2 (owner's decision, keep 12) and (the rule's outcome), §2, §9 | Absorbed into §2 and §9: the default is 12 for release 0.4.2 and the count is recommended to stay at or below the machine's performance cores. |
+| Task 25.3, §12 | No text change: §12 already says the sweep's paths must agree within the bound of §11. The sweep's constant follows §11. |
+| Task 24.3, §17 | Absorbed into §17: `Logits::Last` equals the last row of `Logits::All` within 1e-5 since 0.4.2. |
+
+### Feedback absorbed in 0.7
+
+From plan 0.4.1 §6 (G-25). Every row addressed to this document, absorbed or rejected:
+
+| Plan row | Disposition |
+| --- | --- |
+| Task 20.1 (owner's decision, 2026-11-11), §19 | Absorbed into the resolved ledger: persistent workers, weights and cache shared by `Arc`, no `unsafe`. |
+| Task 22.2 (owner's decision, 2026-11-11), §2, §9, §12 | Absorbed into §2, §9 and §12: the default is the sweep's choice under the tie rule that sends ties within 2% to the faster prompt. |
+| Tasks 20.3, 21.1, 21.2, §4 | Absorbed into §4: thresholds (500,000 multiply-adds; 256 positions), the zigzag order of prompt rows, the pool waking no more workers than elements, the serial attention at trace level. |
+| Tasks 20.2, 21.3, §2, §17 | Absorbed into §17: the pool's hand-over and the `SkippedRows` flag as built; the two tests that were not built as separate tests were removed from the text. |
+| Task 22.1, §12 | Absorbed into §12: counts above the cores are left out, each count's last logits are checked identical to one thread's, decode is timed after an untimed prompt. |
+| Review of §4, matrix-matrix product | Absorbed into §4: the paragraph no longer says nothing is threaded. |
+| Drafting, §4 | Absorbed into §4: the profile is cited as plan 0.4.1 §5. |
+
 ### Feedback absorbed in 0.6
 
 From plan 0.4.0 §6 (G-25) and the owner's decision of 2026-11-10. Every row addressed to this document, absorbed or rejected:
