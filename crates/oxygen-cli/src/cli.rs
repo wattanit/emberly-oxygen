@@ -68,8 +68,10 @@ struct GenerateArgs {
     seed: Option<u64>,
 
     /// Threads for the matrix products and the attention, the calling thread included;
-    /// 1 runs everything on it. The default is the number of cores the machine makes
-    /// available. 0 is rejected. The output does not depend on the count.
+    /// 1 runs everything on it. The default is 12, or the cores the machine makes
+    /// available when fewer. Keep it at or below the machine's performance cores:
+    /// efficiency cores slow every divided product to their pace. 0 is rejected.
+    /// The output does not depend on the count.
     #[arg(long, value_name = "N")]
     threads: Option<usize>,
 
@@ -139,8 +141,10 @@ struct ChatArgs {
     seed: Option<u64>,
 
     /// Threads for the matrix products and the attention, the calling thread included;
-    /// 1 runs everything on it. The default is the number of cores the machine makes
-    /// available. 0 is rejected. The output does not depend on the count.
+    /// 1 runs everything on it. The default is 12, or the cores the machine makes
+    /// available when fewer. Keep it at or below the machine's performance cores:
+    /// efficiency cores slow every divided product to their pace. 0 is rejected.
+    /// The output does not depend on the count.
     #[arg(long, value_name = "N")]
     threads: Option<usize>,
 
