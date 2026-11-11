@@ -21,12 +21,19 @@ pub fn counts_for(cores: usize) -> Vec<usize> {
     COUNTS.into_iter().filter(|&n| n <= cores).collect()
 }
 
-/// The default thread count (FR-44): the count with the highest decode speed
-/// at 512 tokens, given as `(count, milliseconds per token)`; counts within 2%
-/// of the best time go to the smallest of them (initial; tune with use).
-pub fn choose_default(decode_at_512: &[(usize, f64)]) -> usize {
-    let best = decode_at_512.iter().map(|&(_, ms)| ms).fold(f64::INFINITY, f64::min);
-    decode_at_512.iter().filter(|&&(_, ms)| ms <= best * 1.02).map(|&(n, _)| n).min().expect("at least one count")
+/// The default thread count (FR-44), from rows of `(count, decode ms per token
+/// at 512 tokens, prompt ms at 644 tokens)`: the count with the highest decode
+/// speed; counts within 2% of the best decode time are ties, and a tie goes to
+/// the faster prompt, then to the smaller count (initial; tune with use).
+pub fn choose_default(rows: &[(usize, f64, f64)]) -> usize {
+    let best = rows.iter().map(|&(_, decode, _)| decode).fold(f64::INFINITY, f64::min);
+    let (count, _) = rows
+        .iter()
+        .filter(|&&(_, decode, _)| decode <= best * 1.02)
+        .map(|&(n, _, prompt)| (n, prompt))
+        .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.cmp(&b.0)))
+        .expect("at least one count");
+    count
 }
 
 /// Whether two last-logit vectors are identical. The sweep requires it of every

@@ -195,14 +195,14 @@ fn fr43_fr44_output_does_not_depend_on_the_thread_count() {
     }
 }
 
-// FR-44, Spec §14: -v reports the thread count in use, the default being the sweep's 4 (fewer on a smaller machine).
+// FR-44, Spec §14: -v reports the thread count in use, the default being the sweep's 8 (fewer on a smaller machine).
 #[test]
 fn fr44_the_run_summary_reports_the_thread_count() {
     let r = generate(&["-v", "--max-new-tokens", "2", "--threads", "3", "Hello"]);
     assert_eq!(r.code, 0, "{}", r.stderr);
     let line = r.stderr.lines().find(|l| l.contains("model loaded")).unwrap_or_else(|| panic!("{}", r.stderr));
     assert!(line.contains(" threads=3"), "{line}");
-    let cores = std::thread::available_parallelism().unwrap().get().min(4);
+    let cores = std::thread::available_parallelism().unwrap().get().min(8);
     let r = generate(&["-v", "--max-new-tokens", "2", "Hello"]);
     let line = r.stderr.lines().find(|l| l.contains("model loaded")).unwrap();
     assert!(line.contains(&format!(" threads={cores}")), "{line}");

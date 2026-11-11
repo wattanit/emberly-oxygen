@@ -200,20 +200,24 @@ fn fr45_the_sweeps_lengths_and_decode_tokens() {
     assert_eq!(threads::DECODE_TOKENS, 128);
 }
 
-// FR-44, FR-45, Spec §12: the default is the count with the highest decode speed at 512 tokens, ties
-// within 2% going to the smaller count. (Illustrative numbers: milliseconds per generated token.)
+// FR-44, FR-45, Spec §12: the default is the count with the highest decode speed at 512 tokens; counts
+// within 2% of the best decode time are ties, and a tie goes to the count with the faster prompt at 644
+// tokens. Rows are `(count, decode ms per token at 512, prompt ms at 644)`; the numbers are illustrative.
 #[test]
-fn fr44_the_default_is_the_fastest_decode_with_ties_to_the_smaller() {
-    // A clear winner.
-    assert_eq!(threads::choose_default(&[(1, 8.7), (2, 6.1), (4, 5.0), (8, 5.4), (16, 6.0)]), 4);
-    // 8 is within 2% of the best (4.95 * 1.02 = 5.049): the smaller of the near-ties wins.
-    assert_eq!(threads::choose_default(&[(1, 8.7), (4, 5.04), (8, 4.95), (16, 5.5)]), 4);
-    // Just outside 2%: the faster one wins.
-    assert_eq!(threads::choose_default(&[(4, 5.06), (8, 4.95)]), 8);
-    // The order of the rows does not matter.
-    assert_eq!(threads::choose_default(&[(16, 5.5), (8, 4.95), (4, 5.04), (1, 8.7)]), 4);
+fn fr44_the_default_is_the_fastest_decode_with_ties_to_the_faster_prompt() {
+    // A clear decode winner, whatever its prompt time.
+    assert_eq!(threads::choose_default(&[(1, 12.1, 4900.0), (2, 8.5, 3400.0), (4, 7.0, 2100.0), (12, 7.6, 880.0)]), 4);
+    // 4 and 8 are within 2% in decode (7.34 * 1.02 > 7.275 and the reverse); 8 has the faster prompt.
+    assert_eq!(threads::choose_default(&[(1, 12.1, 4900.0), (4, 7.340, 2131.0), (8, 7.275, 1034.0), (12, 7.451, 884.0)]), 8);
+    // 12 is outside the 2% band (7.451 > 7.275 * 1.02), so its faster prompt does not count.
+    assert_eq!(threads::choose_default(&[(8, 7.275, 1034.0), (12, 7.451, 884.0)]), 8);
+    // Inside the band the faster prompt wins even at a higher count.
+    assert_eq!(threads::choose_default(&[(8, 7.275, 1034.0), (12, 7.40, 884.0)]), 12);
+    // Equal prompt times go to the smaller count; the order of the rows does not matter.
+    assert_eq!(threads::choose_default(&[(8, 7.0, 900.0), (4, 7.1, 900.0)]), 4);
+    assert_eq!(threads::choose_default(&[(12, 7.40, 884.0), (8, 7.275, 1034.0)]), 12);
     // One count only.
-    assert_eq!(threads::choose_default(&[(1, 8.7)]), 1);
+    assert_eq!(threads::choose_default(&[(1, 8.7, 4900.0)]), 1);
 }
 
 // FR-43, Spec §12: the counts are checked to give identical last logits before any timing: the gap

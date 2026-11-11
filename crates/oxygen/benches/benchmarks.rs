@@ -271,7 +271,7 @@ fn thread_rows(conditions: &record::Conditions) -> Vec<Value> {
     println!("threads: median over {RECORDED_RUNS} runs, counts {:?} of {cores} cores", threads::counts_for(cores));
     let mut baseline: Vec<(usize, Vec<f32>)> = Vec::new();
     let mut rows = Vec::new();
-    let mut decode_at_512 = Vec::new();
+    let (mut decode_at_512, mut prompt_at_644) = (Vec::new(), Vec::new());
     for count in threads::counts_for(cores) {
         let model = Model::load_with_threads(&model_dir(), count).unwrap_or_else(|e| fail(&e.to_string()));
         // Identical logits first: the prompt's last logits at every length, and one step after it.
@@ -302,6 +302,9 @@ fn thread_rows(conditions: &record::Conditions) -> Vec<Value> {
                 start.elapsed().as_secs_f64() * 1000.0
             }));
             println!("  {count:>2} threads, prompt {n:>4} tokens {:>9.1} ms  (min {:.1}, max {:.1})", spread.median, spread.min, spread.max);
+            if n == 644 {
+                prompt_at_644.push(spread.median);
+            }
             rows.push(record::row(conditions, threads::fields(count, "prompt", n), &[("prompt_ms", spread)]));
         }
         for n in threads::DECODE_CONTEXTS {
@@ -323,7 +326,8 @@ fn thread_rows(conditions: &record::Conditions) -> Vec<Value> {
             rows.push(record::row(conditions, threads::fields(count, "decode", n), &[("ms_per_token", spread)]));
         }
     }
-    println!("threads: the default by the sweep's rule (highest decode speed at 512 tokens, ties within 2% to the smaller) is {}", threads::choose_default(&decode_at_512));
+    let candidates: Vec<(usize, f64, f64)> = decode_at_512.iter().zip(&prompt_at_644).map(|(&(n, decode), &prompt)| (n, decode, prompt)).collect();
+    println!("threads: the default by the sweep's rule (highest decode speed at 512 tokens; ties within 2% to the faster prompt at 644 tokens) is {}", threads::choose_default(&candidates));
     rows
 }
 
