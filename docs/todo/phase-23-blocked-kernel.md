@@ -2,7 +2,7 @@
 
 Working checklist for Phase 23 of the [implementation plan](../emberly-oxygen-implementation-plan-0.4.2.md) (first part of milestone M17). Tick items as they land; one task is one commit, tests first (23.3 is a measurement and commits nothing but its §5 record).
 
-Proves: a safe blocked kernel computes exactly the index-order fused sum at every shape, edge and thread count, and it is as fast in the engine as in the profile. Satisfies FR-46, HC-1, HC-2.
+Proves: a safe blocked kernel computes exactly the chunked fused sum at every shape, edge and thread count, and it is as fast in the engine as in the profile. Satisfies FR-46, HC-1, HC-2.
 
 Layout: `crates/oxygen/src/ops.rs`. Behavior: Specification §4, §17.
 
@@ -10,7 +10,7 @@ Dependencies: none new. Out of scope: `unsafe`, SIMD intrinsics, a packed copy o
 
 ## 23.1 Tests for the blocked kernel (FR-46, HC-2)
 
-- [x] Exact equality to a plain index-order fused sum at the model's shapes, at counts that do not divide the tile, are smaller than it, or are 1, and at lengths below and above the vector width.
+- [x] Exact equality to a the chunked fused sum written out in the test at the model's shapes, at counts that do not divide the tile, are smaller than it, or are 1, and at lengths below and above the vector width.
 - [x] Within tolerance of `matrixmultiply`; a 16-partial-sum sum must differ in some bit; a tile-edge test marks every output element.
 
 ## 23.2 `matmul_blocked` (FR-46)

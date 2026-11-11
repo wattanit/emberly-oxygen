@@ -10,27 +10,27 @@ Dependencies: none new. Out of scope: the decode step, the attention, `unsafe`.
 
 ## 24.1 Record the 0.4.1 ids (FR-47, FR-29)
 
-- [ ] The guard tests and the 30-run id listing on the 0.4.1 build, kept in the scratchpad.
+- [x] The guard tests and the 30-run id listing on the 0.4.1 build, kept in the scratchpad.
 
 ## 24.2 `Fault::UnfinishedTile` (HC-4, FR-46)
 
-- [ ] Negative control first: the harness fails on a prompt whose length is not a multiple of the tile's input width; with no fault nothing changes.
-- [ ] Then the fault.
+- [x] Negative control first: the harness fails on a prompt whose length is not a multiple of the tile's input width; with no fault nothing changes.
+- [x] Then the fault.
 
 ## 24.3 `prefill` uses the blocked product (FR-40, FR-41, FR-46)
 
-- [ ] Tests re-stated for the new arithmetic (tolerances for `prefill` against `step`; causal and one-token tests).
-- [ ] Then the projections call `matmul_blocked_pooled`; the unembedding of `Logits::Last` and the decode step keep `matvec`.
+- [x] Tests re-stated for the new arithmetic (tolerances for `prefill` against `step`; causal and one-token tests).
+- [x] Then the projections call `matmul_blocked_pooled`; the unembedding of `Logits::Last` and the decode step keep `matvec`.
 
 ## 24.4 Measure the drift and set the bounds (FR-47, FR-41)
 
-- [ ] Blocked against unblocked, and blocked against one-token, per prompt; record in §5; set the two bounds with the owner; move the open item to §6.
+- [x] Blocked against unblocked, and blocked against one-token, per prompt; record in §5; set the two bounds with the owner; move the open item to §6.
 
 ## 24.5 The tests of Specification §11 and the gate (FR-47, FR-43, S-1 to S-6)
 
-- [ ] Blocked against unblocked, batched against one-token, thread-count independence exactly 0; a faulted run over the bound.
-- [ ] Correctness test: thresholds unchanged, all five faults fail; the guard of 24.1 rerun, each id difference recorded with its near-tie gap.
+- [x] Blocked against unblocked, batched against one-token, thread-count independence exactly 0; a faulted run over the bound.
+- [x] Correctness test: thresholds unchanged, all five faults fail; the guard of 24.1 rerun, each id difference recorded with its near-tie gap.
 
 ## 24.6 The full gate
 
-- [ ] `cargo test --no-fail-fast`, whole summary read; harness table recorded in §5.
+- [x] `cargo test --no-fail-fast`, whole summary read; harness table recorded in §5.
