@@ -5,6 +5,9 @@
 //! different order, so results differ in the last bits; S-1 and S-2 bound
 //! that difference.
 
+use std::sync::Arc;
+
+use crate::pool::{Job, Pool};
 use crate::Tensor;
 
 /// How many independent partial sums the engine's matrix-vector product keeps
@@ -94,6 +97,73 @@ pub(crate) fn matmul(weight: &Tensor, input: &[f32], count: usize, output: &mut 
         let row = weight.row(i);
         for t in 0..count {
             output[t * rows + i] = dot_lanes::<LANES>(row, &input[t * cols..(t + 1) * cols]);
+        }
+    }
+}
+
+/// Below this many multiply-adds (rows × columns × inputs) a product runs on
+/// the calling thread: handing it to workers costs more than it saves. From
+/// the measurements of plan 0.4.1 §5 (task 20.1): a 192×576 or 576×576 product
+/// is not helped by threads, a 1536×576 one is. Initial; tune with use.
+pub(crate) const MIN_THREADED_MADDS: usize = 500_000;
+
+/// Whether a product of this size is divided among the pool's threads.
+pub(crate) fn threads_pay(rows: usize, cols: usize, count: usize, threads: usize, min_madds: usize) -> bool {
+    threads > 1 && rows * cols * count >= min_madds
+}
+
+/// [`matvec`] with the weight's rows divided among the pool's threads
+/// (FR-43). Equal to [`matvec`] bit for bit at every thread count.
+pub(crate) fn matvec_pooled(pool: &Pool, weight: &Tensor, input: &[f32], output: &mut [f32]) {
+    matvec_pooled_min(pool, weight, input, output, MIN_THREADED_MADDS);
+}
+
+pub(crate) fn matvec_pooled_min(pool: &Pool, weight: &Tensor, input: &[f32], output: &mut [f32], min_madds: usize) {
+    let &[rows, cols] = weight.shape() else {
+        panic!("matvec needs a 2-D weight, got shape {:?}", weight.shape());
+    };
+    assert_eq!(input.len(), cols, "input length must equal the weight's columns");
+    assert_eq!(output.len(), rows, "output length must equal the weight's rows");
+    if !threads_pay(rows, cols, 1, pool.threads(), min_madds) {
+        return matvec(weight, input, output);
+    }
+    // Each worker owns whole output elements and calls the same dot product,
+    // so no sum is split and the result does not depend on the thread count.
+    let (weight, input) = (weight.clone(), Arc::new(input.to_vec()));
+    let job: Job = Arc::new(move |range| range.map(|i| dot_lanes::<LANES>(weight.row(i), &input)).collect());
+    output.copy_from_slice(&pool.run(rows, &job));
+}
+
+/// [`matmul`] with the weight's rows divided among the pool's threads (FR-43).
+pub(crate) fn matmul_pooled(pool: &Pool, weight: &Tensor, input: &[f32], count: usize, output: &mut [f32]) {
+    matmul_pooled_min(pool, weight, input, count, output, MIN_THREADED_MADDS);
+}
+
+pub(crate) fn matmul_pooled_min(pool: &Pool, weight: &Tensor, input: &[f32], count: usize, output: &mut [f32], min_madds: usize) {
+    let &[rows, cols] = weight.shape() else {
+        panic!("matmul needs a 2-D weight, got shape {:?}", weight.shape());
+    };
+    assert_eq!(input.len(), count * cols, "input length must be count times the weight's columns");
+    assert_eq!(output.len(), count * rows, "output length must be count times the weight's rows");
+    if !threads_pay(rows, cols, count, pool.threads(), min_madds) {
+        return matmul(weight, input, count, output);
+    }
+    // A worker's range of weight rows gives `count` outputs per row, row by
+    // row; the pool joins the ranges in order and the result is laid out as the
+    // single-threaded product's `[count][rows]`.
+    let (weight, input) = (weight.clone(), Arc::new(input.to_vec()));
+    let job: Job = Arc::new(move |range| {
+        let mut part = Vec::with_capacity(range.len() * count);
+        for i in range {
+            let row = weight.row(i);
+            part.extend((0..count).map(|t| dot_lanes::<LANES>(row, &input[t * cols..(t + 1) * cols])));
+        }
+        part
+    });
+    let by_row = pool.run(rows, &job);
+    for i in 0..rows {
+        for t in 0..count {
+            output[t * rows + i] = by_row[i * count + t];
         }
     }
 }
@@ -650,5 +720,60 @@ mod tests {
                 per_token * positions
             );
         }
+    }
+
+    // FR-43, Spec §4: the threaded products equal the single-threaded ones exactly, at counts
+    // that divide the rows and counts that do not, at the model's shapes and at odd ones.
+    const SHAPES: [(usize, usize); 9] =
+        [(192, 576), (576, 576), (1536, 576), (576, 1536), (1, 37), (5, 16), (3, 7), (100, 33), (49, 15)];
+
+    #[test]
+    fn pooled_matvec_equals_matvec_exactly_at_every_count() {
+        for threads in [1, 2, 3, 7, 16] {
+            let pool = Pool::new(threads).unwrap();
+            for (i, &(rows, cols)) in SHAPES.iter().enumerate() {
+                let w = weight(rows, cols, 100 + i as u64);
+                let x = random(200 + i as u64, cols);
+                let mut want = vec![0.0; rows];
+                matvec(&w, &x, &mut want);
+                for min in [0, MIN_THREADED_MADDS, usize::MAX] {
+                    let mut got = vec![f32::NAN; rows];
+                    matvec_pooled_min(&pool, &w, &x, &mut got, min);
+                    assert_eq!(got, want, "threads {threads} shape {rows}x{cols} min {min}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pooled_matmul_equals_matmul_exactly_at_every_count() {
+        for threads in [1, 2, 3, 7, 16] {
+            let pool = Pool::new(threads).unwrap();
+            for (i, &(rows, cols)) in SHAPES.iter().enumerate() {
+                for count in [1, 3, 8] {
+                    let w = weight(rows, cols, 300 + i as u64);
+                    let x = random(400 + i as u64, count * cols);
+                    let mut want = vec![0.0; count * rows];
+                    matmul(&w, &x, count, &mut want);
+                    for min in [0, usize::MAX] {
+                        let mut got = vec![f32::NAN; count * rows];
+                        matmul_pooled_min(&pool, &w, &x, count, &mut got, min);
+                        assert_eq!(got, want, "threads {threads} shape {rows}x{cols} count {count} min {min}");
+                    }
+                }
+            }
+        }
+    }
+
+    // FR-43, Spec §4: a small product, or a single thread, stays on the calling thread.
+    #[test]
+    fn small_products_and_one_thread_do_not_use_workers() {
+        assert!(!threads_pay(1536, 576, 1, 1, MIN_THREADED_MADDS), "one thread");
+        assert!(!threads_pay(192, 576, 1, 8, MIN_THREADED_MADDS), "key projection is below the threshold");
+        assert!(!threads_pay(576, 576, 1, 8, MIN_THREADED_MADDS), "576x576 is below the threshold");
+        assert!(threads_pay(1536, 576, 1, 8, MIN_THREADED_MADDS), "gate projection pays");
+        assert!(threads_pay(49152, 576, 1, 2, MIN_THREADED_MADDS), "unembedding pays");
+        assert!(threads_pay(576, 576, 4, 8, MIN_THREADED_MADDS), "more inputs make the same weight pay");
+        assert!(threads_pay(1, 1, 1, 2, 0), "a zero threshold always threads");
     }
 }

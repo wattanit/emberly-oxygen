@@ -11,6 +11,9 @@ mod record;
 #[path = "../benches/support/prefill.rs"]
 mod prefill;
 
+#[path = "../benches/support/threads.rs"]
+mod threads;
+
 use record::{rfc3339, row, Conditions, Machine};
 use serde_json::json;
 use stats::{spread, Spread};
@@ -175,4 +178,69 @@ fn fr42_a_prefill_row_names_its_path_and_length() {
     assert_eq!(line["prompt_tokens"], 512);
     assert_eq!(line["results"]["prompt_ms"]["median"], 620.0);
     assert_eq!(line["version"], "0.1.0");
+}
+
+// FR-45, Spec §12: the sweep's counts are 1, 2, 4, 8, 12 and 16, and a count above the machine's
+// available cores is left out; a machine with fewer cores than the largest keeps the rest.
+#[test]
+fn fr45_the_sweep_leaves_out_counts_above_the_cores() {
+    assert_eq!(threads::COUNTS, [1, 2, 4, 8, 12, 16]);
+    assert_eq!(threads::counts_for(16), [1, 2, 4, 8, 12, 16]);
+    assert_eq!(threads::counts_for(12), [1, 2, 4, 8, 12]);
+    assert_eq!(threads::counts_for(6), [1, 2, 4]);
+    assert_eq!(threads::counts_for(1), [1]);
+    assert_eq!(threads::counts_for(64), [1, 2, 4, 8, 12, 16]);
+}
+
+// FR-45, Spec §12: prompt time at 128 and 644 tokens, decode after prompts of 32 and 512 tokens.
+#[test]
+fn fr45_the_sweeps_lengths_and_decode_tokens() {
+    assert_eq!(threads::PROMPT_LENGTHS, [128, 644]);
+    assert_eq!(threads::DECODE_CONTEXTS, [32, 512]);
+    assert_eq!(threads::DECODE_TOKENS, 128);
+}
+
+// FR-44, FR-45, Spec §12: the default is the count with the highest decode speed at 512 tokens; counts
+// within 2% of the best decode time are ties, and a tie goes to the count with the faster prompt at 644
+// tokens. Rows are `(count, decode ms per token at 512, prompt ms at 644)`; the numbers are illustrative.
+#[test]
+fn fr44_the_default_is_the_fastest_decode_with_ties_to_the_faster_prompt() {
+    // A clear decode winner, whatever its prompt time.
+    assert_eq!(threads::choose_default(&[(1, 12.1, 4900.0), (2, 8.5, 3400.0), (4, 7.0, 2100.0), (12, 7.6, 880.0)]), 4);
+    // 4 and 8 are within 2% in decode (7.34 * 1.02 > 7.275 and the reverse); 8 has the faster prompt.
+    assert_eq!(threads::choose_default(&[(1, 12.1, 4900.0), (4, 7.340, 2131.0), (8, 7.275, 1034.0), (12, 7.451, 884.0)]), 8);
+    // 12 is outside the 2% band (7.451 > 7.275 * 1.02), so its faster prompt does not count.
+    assert_eq!(threads::choose_default(&[(8, 7.275, 1034.0), (12, 7.451, 884.0)]), 8);
+    // Inside the band the faster prompt wins even at a higher count.
+    assert_eq!(threads::choose_default(&[(8, 7.275, 1034.0), (12, 7.40, 884.0)]), 12);
+    // Equal prompt times go to the smaller count; the order of the rows does not matter.
+    assert_eq!(threads::choose_default(&[(8, 7.0, 900.0), (4, 7.1, 900.0)]), 4);
+    assert_eq!(threads::choose_default(&[(12, 7.40, 884.0), (8, 7.275, 1034.0)]), 12);
+    // One count only.
+    assert_eq!(threads::choose_default(&[(1, 8.7, 4900.0)]), 1);
+}
+
+// FR-43, Spec §12: the counts are checked to give identical last logits before any timing: the gap
+// must be exactly 0, because the engine's output does not depend on the count.
+#[test]
+fn fr43_the_sweep_accepts_only_identical_logits() {
+    assert!(threads::logits_identical(&[1.0, 2.0], &[1.0, 2.0]));
+    assert!(!threads::logits_identical(&[1.0, 2.0], &[1.0, 2.000001]));
+    assert!(!threads::logits_identical(&[1.0], &[1.0, 2.0]));
+}
+
+// FR-44, FR-45, FR-9: a thread-sweep row names its count, phase and context length; the group and
+// the metric are in it. Every other group's row also carries its count, so a speed is never
+// recorded without the count that produced it.
+#[test]
+fn fr44_fr45_a_thread_row_names_its_count_phase_and_context() {
+    let spread = Spread { median: 5.1, min: 5.0, max: 5.3 };
+    let line = row(&conditions(), threads::fields(8, "decode", 512), &[("ms_per_token", spread)]);
+    assert_eq!(line["group"], "threads");
+    assert_eq!(line["threads"], 8);
+    assert_eq!(line["phase"], "decode");
+    assert_eq!(line["context_tokens"], 512);
+    assert_eq!(line["results"]["ms_per_token"]["median"], 5.1);
+    assert_eq!(threads::with_threads(json!({"group": "kernels"}), 1)["threads"], 1);
+    assert_eq!(threads::with_threads(json!({"group": "kernels"}), 1)["group"], "kernels");
 }

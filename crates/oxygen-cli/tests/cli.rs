@@ -166,3 +166,57 @@ fn the_log_file_takes_the_log() {
     let r = generate(&["--max-new-tokens", "4", "--log-file", "/nonexistent-dir/log.txt", "Hello"]);
     assert_error(&r, &["/nonexistent-dir/log.txt"]);
 }
+
+// FR-44, Spec §9, §14: 0 threads is an error exit naming the option and the value, nothing on standard
+// output, before any computation; the same for chat. A value that is not a whole number is a usage error.
+#[test]
+fn fr44_zero_threads_is_rejected_naming_the_option_and_value() {
+    let r = generate(&["--max-new-tokens", "4", "--threads", "0", "Hello"]);
+    assert_error(&r, &["threads", "0"]);
+    assert!(r.elapsed < Duration::from_secs(5), "took {:?}", r.elapsed);
+    assert_error(&common::chat(&["--threads", "0"], ""), &["threads", "0"]);
+    for bad in ["many", "-1", "2.5"] {
+        let r = generate(&["--max-new-tokens", "4", "--threads", bad, "Hello"]);
+        assert_eq!(r.code, 2, "{bad}: {}", r.stderr);
+        assert!(r.stdout.is_empty());
+    }
+}
+
+// FR-43, FR-44, S-6, Spec §9: the thread count does not change the output: the oracle's continuation at
+// 1, 3 and 16 threads and at the default.
+#[test]
+fn fr43_fr44_output_does_not_depend_on_the_thread_count() {
+    let (prompt, continuation, _, _) = english_short();
+    for threads in ["1", "3", "16"] {
+        let r = generate(&["--max-new-tokens", "32", "--threads", threads, &prompt]);
+        assert_eq!(r.code, 0, "{threads}: {}", r.stderr);
+        assert_eq!(String::from_utf8(r.stdout).unwrap(), continuation, "{threads} threads");
+        assert_eq!(r.stderr, "", "the default level is quiet at {threads} threads");
+    }
+}
+
+// FR-44, Spec §14: -v reports the thread count in use, the default being the sweep's 8 (fewer on a smaller machine).
+#[test]
+fn fr44_the_run_summary_reports_the_thread_count() {
+    let r = generate(&["-v", "--max-new-tokens", "2", "--threads", "3", "Hello"]);
+    assert_eq!(r.code, 0, "{}", r.stderr);
+    let line = r.stderr.lines().find(|l| l.contains("model loaded")).unwrap_or_else(|| panic!("{}", r.stderr));
+    assert!(line.contains(" threads=3"), "{line}");
+    let cores = std::thread::available_parallelism().unwrap().get().min(8);
+    let r = generate(&["-v", "--max-new-tokens", "2", "Hello"]);
+    let line = r.stderr.lines().find(|l| l.contains("model loaded")).unwrap();
+    assert!(line.contains(&format!(" threads={cores}")), "{line}");
+}
+
+// FR-43, FR-44: a greedy chat reply is the same at 1 and 5 threads.
+#[test]
+fn fr43_fr44_a_chat_reply_does_not_depend_on_the_thread_count() {
+    let reply = |threads: &str| {
+        let r = common::chat(&["--temperature", "0", "--max-new-tokens", "12", "--threads", threads], "Hello\n");
+        assert_eq!(r.code, 0, "{threads}: {}", r.stderr);
+        r.stdout
+    };
+    let one = reply("1");
+    assert!(!one.is_empty());
+    assert_eq!(reply("5"), one);
+}

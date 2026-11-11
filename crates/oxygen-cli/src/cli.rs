@@ -67,6 +67,12 @@ struct GenerateArgs {
     #[arg(long, value_name = "N")]
     seed: Option<u64>,
 
+    /// Threads for the matrix products and the attention, the calling thread included;
+    /// 1 runs everything on it. The default is the number of cores the machine makes
+    /// available. 0 is rejected. The output does not depend on the count.
+    #[arg(long, value_name = "N")]
+    threads: Option<usize>,
+
     /// Print run statistics to standard error: model load time, prompt and
     /// generated token counts, time to first token (from receiving the prompt to
     /// choosing the first token, so the first token counts as prompt work) and
@@ -132,6 +138,12 @@ struct ChatArgs {
     #[arg(long, value_name = "N")]
     seed: Option<u64>,
 
+    /// Threads for the matrix products and the attention, the calling thread included;
+    /// 1 runs everything on it. The default is the number of cores the machine makes
+    /// available. 0 is rejected. The output does not depend on the count.
+    #[arg(long, value_name = "N")]
+    threads: Option<usize>,
+
     /// Log more, to standard error: -v run summary and timings, -vv each decode
     /// step, -vvv each layer within each step. By default only warnings and errors.
     #[arg(short, long, action = ArgAction::Count)]
@@ -157,7 +169,7 @@ fn run_generate(args: GenerateArgs) -> Result<(), String> {
     };
 
     let start = Instant::now();
-    let model = Model::load(&args.model).map_err(|e| e.to_string())?;
+    let model = load_model(&args.model, args.threads)?;
     let tokenizer = Tokenizer::load(&args.model).map_err(|e| e.to_string())?;
     let load_time = start.elapsed();
 
@@ -193,7 +205,7 @@ fn run_generate(args: GenerateArgs) -> Result<(), String> {
 
 fn run_chat(args: ChatArgs) -> Result<(), String> {
     init_logging(args.verbose, args.log_file.as_deref())?;
-    let model = Model::load(&args.model).map_err(|e| e.to_string())?;
+    let model = load_model(&args.model, args.threads)?;
     let tokenizer = Tokenizer::load(&args.model).map_err(|e| e.to_string())?;
 
     let mut sampling = Sampling {
@@ -247,6 +259,15 @@ fn run_chat(args: ChatArgs) -> Result<(), String> {
             Err(e) => return Err(e.to_string()),
         }
     }
+}
+
+/// Loads the model with the thread count asked for, or the default one.
+fn load_model(dir: &Path, threads: Option<usize>) -> Result<Model, String> {
+    match threads {
+        Some(n) => Model::load_with_threads(dir, n),
+        None => Model::load(dir),
+    }
+    .map_err(|e| e.to_string())
 }
 
 /// A seed from the system clock, for a sampled run that was not given one.
