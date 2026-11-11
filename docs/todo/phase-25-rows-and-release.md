@@ -14,11 +14,11 @@ Dependencies: none new. Out of scope: SIMD intrinsics, `unsafe`, lower-precision
 
 ## 25.2 Version (FR-44)
 
-- [ ] Bump the workspace version to 0.4.2; clean tree. The default thread count is re-chosen by the rule after 25.3, changed only if the rule picks another.
+- [x] Bump the workspace version to 0.4.2; clean tree. The default thread count is re-chosen by the rule after 25.3, changed only if the rule picks another.
 
 ## 25.3 Test, then benchmark (FR-8, FR-9)
 
-- [ ] `cargo test --no-fail-fast`, then `cargo bench` at the default log level, under `caffeinate`.
+- [x] `cargo test --no-fail-fast`, then `cargo bench` at the default log level, under `caffeinate`.
 
 ## 25.4 Record the measurements (FR-48)
 
