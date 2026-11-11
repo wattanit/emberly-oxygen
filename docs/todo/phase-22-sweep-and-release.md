@@ -20,15 +20,15 @@ Dependencies: none new. Out of scope: SIMD, register blocking, lower-precision w
 
 ## 22.3 Test, then benchmark (FR-8, FR-9)
 
-- [ ] `cargo test --no-fail-fast`, then `cargo bench` at the default log level, under `caffeinate`.
+- [x] `cargo test --no-fail-fast`, then `cargo bench` at the default log level, under `caffeinate`.
 
 ## 22.4 Record the measurements (FR-45)
 
-- [ ] Sweep per count, both workloads against 0.4.0, peak memory, one thread against 0.4.0, where the speed-up stops and why.
+- [x] Sweep per count, both workloads against 0.4.0, peak memory, one thread against 0.4.0, where the speed-up stops and why.
 
 ## 22.5 Release note and README
 
-- [ ] `docs/releases/0.4.1.md`; README status line and version note.
+- [x] `docs/releases/0.4.1.md`; README status line and version note.
 
 ## 22.6 Settle the SFD
 
