@@ -10,7 +10,7 @@ Dependencies: none new. Out of scope: SIMD intrinsics, `unsafe`, lower-precision
 
 ## 25.1 Batched kernel rows (FR-48, HC-2, FR-9)
 
-- [ ] Tests first for the support code; then `matmul`, `matmul_blocked` and sgemm at the three shapes, 128 inputs, one thread; the blocked kernel checked before timing.
+- [x] Tests first for the support code; then `matmul`, `matmul_blocked` and sgemm at the three shapes, 128 inputs, one thread; the blocked kernel checked before timing.
 
 ## 25.2 Version (FR-44)
 

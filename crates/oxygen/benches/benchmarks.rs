@@ -49,6 +49,8 @@
 //! --dry-run` runs just this group. Every row of every group carries `threads`,
 //! the count that produced it (FR-9, FR-44).
 
+#[path = "support/batched.rs"]
+mod batched;
 #[path = "support/prefill.rs"]
 mod prefill;
 #[path = "support/threads.rs"]
@@ -202,6 +204,7 @@ fn parent() {
         rows.push(record::row(&conditions, threads::with_threads(fields, used), &results));
     }
     rows.extend(kernel_rows(&conditions));
+    rows.extend(batched_kernel_rows(&conditions));
     rows.extend(sampling_rows(&conditions));
     rows.extend(prefill_rows(&conditions));
     rows.extend(thread_rows(&conditions));
@@ -328,6 +331,72 @@ fn thread_rows(conditions: &record::Conditions) -> Vec<Value> {
     }
     let candidates: Vec<(usize, f64, f64)> = decode_at_512.iter().zip(&prompt_at_644).map(|(&(n, decode), &prompt)| (n, decode, prompt)).collect();
     println!("threads: the default by the sweep's rule (highest decode speed at 512 tokens; ties within 2% to the faster prompt at 644 tokens) is {}", threads::choose_default(&candidates));
+    rows
+}
+
+/// The batched kernel rows (FR-48, Spec §12): at the three shapes of the batched
+/// products with 128 input rows, single-threaded and in this process, the 0.4.1
+/// `matmul`, the blocked kernel and `matrixmultiply`'s sgemm, as GFLOP/s. The
+/// blocked kernel must equal its definition written out plainly before anything
+/// is timed, and the other two must agree with it within rounding, so a rate is
+/// never recorded for a kernel that computes something else.
+fn batched_kernel_rows(conditions: &record::Conditions) -> Vec<Value> {
+    println!("kernels: matrix-matrix product, {} inputs, median GFLOP/s over {RECORDED_RUNS} runs (single-threaded)", batched::INPUTS);
+    println!("  {:>12} {:>9} {:>9} {:>15}", "shape", "matmul", "blocked", "matrixmultiply");
+    let mut rows = Vec::new();
+    let n = batched::INPUTS;
+    for (seed, (m, k, role)) in batched::SHAPES.into_iter().enumerate() {
+        let weight = Tensor::new(vec![m, k], pseudo_random(m * k, 2 * seed as u64 + 11)).expect("shape matches data");
+        let input = pseudo_random(n * k, 2 * seed as u64 + 12);
+        let mut old = vec![0f32; n * m];
+        let mut blocked = vec![0f32; n * m];
+        let mut baseline = vec![0f32; n * m];
+        let sgemm = |out: &mut [f32]| {
+            // SAFETY: out (n x m) = input (n x k) * weight^T (k x m), the weight being row-major m x k:
+            // every pointer covers exactly the elements those strides reach.
+            unsafe {
+                matrixmultiply::sgemm(
+                    n, k, m, 1.0,
+                    input.as_ptr(), k as isize, 1,
+                    weight.data().as_ptr(), 1, k as isize,
+                    0.0,
+                    out.as_mut_ptr(), m as isize, 1,
+                );
+            }
+        };
+        kernels::matmul_blocked(&weight, &input, n, &mut blocked);
+        if blocked != batched::chunked_reference(weight.data(), m, k, &input, n) {
+            fail(&format!("batched kernels {m}x{k}: the blocked kernel differs from its definition; nothing is recorded"));
+        }
+        kernels::matmul(&weight, &input, n, &mut old);
+        sgemm(&mut baseline);
+        for (what, other) in [("matmul", &old), ("matrixmultiply", &baseline)] {
+            for (i, (a, b)) in blocked.iter().zip(other.iter()).enumerate() {
+                if (a - b).abs() > 1e-3 * (1.0 + b.abs()) {
+                    fail(&format!("batched kernels {m}x{k}: element {i} is {a} in the blocked kernel and {b} in {what}"));
+                }
+            }
+        }
+
+        let flops = batched::flops(m, k, n);
+        let mut measured: Vec<(String, stats::Spread)> = Vec::new();
+        let mut median_gflops = Vec::new();
+        let mut record_kernel = |name: &str, ns: &[f64]| {
+            let gflops: Vec<f64> = ns.iter().map(|t| flops / t).collect();
+            let [ns_name, gflops_name] = record::kernel_metrics(name);
+            let spread = |v: &[f64]| stats::spread(v).unwrap_or_else(|| fail("batched kernels: no usable timings"));
+            median_gflops.push(spread(&gflops).median);
+            measured.push((ns_name, spread(ns)));
+            measured.push((gflops_name, spread(&gflops)));
+        };
+        record_kernel("matmul", &time_calls(|| kernels::matmul(&weight, black_box(&input), n, black_box(&mut old))));
+        record_kernel("blocked", &time_calls(|| kernels::matmul_blocked(&weight, black_box(&input), n, black_box(&mut blocked))));
+        record_kernel("matrixmultiply", &time_calls(|| sgemm(black_box(&mut baseline))));
+        println!("  {:>12} {:>9.2} {:>9.2} {:>15.2}", format!("{m}x{k}"), median_gflops[0], median_gflops[1], median_gflops[2]);
+
+        let results: Vec<(&str, stats::Spread)> = measured.iter().map(|(name, spread)| (name.as_str(), *spread)).collect();
+        rows.push(record::row(conditions, batched::fields(m, k, role), &results));
+    }
     rows
 }
 
